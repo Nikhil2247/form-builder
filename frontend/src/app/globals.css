@@ -1,0 +1,197 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+
+  --radius-lg: var(--radius);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-sm: calc(var(--radius) - 4px);
+}
+
+@layer base {
+  :root {
+    /* Metronic Light Gray Background */
+    --background: oklch(0.975 0 0); /* #F5F8FA approx */
+    --foreground: oklch(0.145 0 0);
+    
+    /* Pure White Cards */
+    --card: oklch(1 0 0);
+    --card-foreground: oklch(0.145 0 0);
+    
+    --popover: oklch(1 0 0);
+    --popover-foreground: oklch(0.145 0 0);
+    
+    /* Current Primary Color Maintained */
+    --primary: oklch(0.145 0 0);
+    --primary-foreground: oklch(0.985 0 0);
+    
+    --secondary: oklch(0.97 0 0);
+    --secondary-foreground: oklch(0.145 0 0);
+    --muted: oklch(0.97 0 0);
+    --muted-foreground: oklch(0.556 0 0);
+    --accent: oklch(0.97 0 0);
+    --accent-foreground: oklch(0.145 0 0);
+    --destructive: oklch(0.637 0.208 25.331);
+    
+    /* Very faint, clean borders */
+    --border: oklch(0.93 0 0); /* #E4E6EF approx */
+    --input: oklch(0.93 0 0);
+    --ring: oklch(0.87 0 0);
+
+    /* Original charts & sidebars */
+    --chart-1: oklch(0.652 0.124 284.594);
+    --chart-2: oklch(0.779 0.097 155.935);
+    --chart-3: oklch(0.858 0.141 81.233);
+    --chart-4: oklch(0.738 0.16 21.742);
+    --chart-5: oklch(0.821 0.072 214.103);
+    --sidebar: oklch(1 0 0); /* White sidebar for Light theme */
+    --sidebar-foreground: oklch(0.145 0 0);
+    --sidebar-primary: oklch(0.145 0 0);
+    --sidebar-primary-foreground: oklch(0.985 0 0);
+    --sidebar-accent: oklch(0.97 0 0);
+    --sidebar-accent-foreground: oklch(0.145 0 0);
+    --sidebar-border: oklch(0.93 0 0);
+    --sidebar-ring: oklch(0.87 0 0);
+    --radius: 0.45rem;
+  }
+
+  .dark {
+    --background: oklch(0.145 0 0);
+    --foreground: oklch(0.985 0 0);
+    --card: oklch(0.21 0.006 285.885);
+    --card-foreground: oklch(0.985 0 0);
+    --popover: oklch(0.21 0.006 285.885);
+    --popover-foreground: oklch(0.985 0 0);
+    --primary: oklch(0.985 0 0);
+    --primary-foreground: oklch(0.145 0 0);
+    --secondary: oklch(0.274 0.005 286.033);
+    --secondary-foreground: oklch(0.985 0 0);
+    --muted: oklch(0.274 0.005 286.033);
+    --muted-foreground: oklch(0.712 0.013 286.067);
+    --accent: oklch(0.274 0.005 286.033);
+    --accent-foreground: oklch(0.985 0 0);
+    --destructive: oklch(0.637 0.208 25.331);
+    --border: oklch(0.274 0.005 286.033);
+    --input: oklch(0.274 0.005 286.033);
+    --ring: oklch(0.37 0.012 285.805);
+    --chart-1: oklch(0.652 0.124 284.594);
+    --chart-2: oklch(0.779 0.097 155.935);
+    --chart-3: oklch(0.858 0.141 81.233);
+    --chart-4: oklch(0.738 0.16 21.742);
+    --chart-5: oklch(0.821 0.072 214.103);
+    --sidebar: oklch(0.21 0.006 285.885);
+    --sidebar-foreground: oklch(0.985 0 0);
+    --sidebar-primary: oklch(0.274 0.005 286.033);
+    --sidebar-primary-foreground: oklch(0.985 0 0);
+    --sidebar-accent: oklch(0.274 0.005 286.033);
+    --sidebar-accent-foreground: oklch(0.985 0 0);
+    --sidebar-border: oklch(0.274 0.005 286.033);
+    --sidebar-ring: oklch(0.37 0.012 285.805);
+  }
+}
+
+@layer base {
+  body {
+    @apply antialiased selection:bg-primary selection:text-primary-foreground bg-background text-foreground;
+  }
+  * {
+    @apply border-border outline-ring/50;
+  }
+  html {
+    @apply font-sans;
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   METRONIC UI — Global density and style overrides
+   ═══════════════════════════════════════════════════════════════════ */
+
+/* ── Card ────────────────────────────────────────────────────────── */
+[data-slot="card"] {
+  background-color: var(--card) !important;
+  border: 1px solid var(--border) !important;
+  box-shadow: 0 0 20px 0 rgba(76,87,125,0.02) !important;
+  border-radius: var(--radius) !important;
+}
+[data-slot="card-header"] {
+  border-bottom: 1px dashed var(--border) !important;
+}
+[data-slot="card-footer"] {
+  border-top: 1px dashed var(--border) !important;
+}
+
+
+/* ── Table ───────────────────────────────────────────────────────── */
+[data-slot="table-wrapper"] {
+  border-radius: var(--radius) !important;
+}
+[data-slot="table-head"] {
+  padding: 0.75rem 1rem !important;
+  font-size: 0.75rem !important;
+  font-weight: 600 !important;
+  text-transform: uppercase !important;
+  letter-spacing: 0.05em !important;
+  color: var(--muted-foreground) !important;
+  border-bottom: 1px dashed var(--border) !important;
+}
+[data-slot="table-cell"] {
+  padding: 0.75rem 1rem !important;
+  font-size: 0.8125rem !important;
+  border-bottom: 1px dashed var(--border) !important;
+}
+[data-slot="table-row"]:hover {
+  background-color: var(--muted) !important;
+}
+
+/* ── Badge ───────────────────────────────────────────────────────── */
+[data-slot="badge"] {
+  padding: 0.15rem 0.45rem !important;
+  font-size: 0.65rem !important;
+  height: auto !important;
+  border: none !important;
+}
+
+/* ── Inputs / Selects ────────────────────────────────────────────── */
+[data-slot="input"], [data-slot="textarea"], [data-slot="select-trigger"] {
+  background-color: #F9F9F9 !important;
+  border: 1px solid var(--border) !important;
+}
+
+/* Base structural styles */
+html, body { height: 100%; }
+
+/* Custom subtle scrollbars */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 9999px; }
+::-webkit-scrollbar-thumb:hover { background: var(--muted-foreground); }

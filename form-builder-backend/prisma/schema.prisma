@@ -1,0 +1,1084 @@
+// ============================================================================
+// PRISMA SCHEMA — FormBuilder NestJS Backend (Multi-Tenant)
+// Database: PostgreSQL 16+
+// ORM:      Prisma 5.x
+// Mode:     Multi-tenant with Organization-scoped data isolation
+//
+// ARCHITECTURE DECISIONS:
+// ─────────────────────────────────────────────────────────────────────────────
+// 1. UUID primary keys (uuid()) — globally unique, safe for distributed
+//    or sharded environments. No sequential ID leakage.
+//
+// 2. JSONB columns for dynamic data (answers, theme, logic rules, question
+//    structure) — avoids hundreds of EAV join tables while keeping deep
+//    queryability via GIN indexes.
+//
+// 3. Form versioning (FormVersion) — immutable snapshot of questions/logic
+//    at the time a form is published. Submissions always point to the exact
+//    version they were filled against. Critical for audit trails and
+//    result accuracy when the creator edits live forms.
+//
+// 4. Multi-tenant design — forms, submissions, and resources are scoped to
+//    an Organization. Users belong to exactly ONE organization via
+//    OrganizationMember. Role-based access (ADMIN, EDITOR, VIEWER) controls
+//    what each member can do within their organization.
+//
+// 5. Platform-level SuperAdmin — a SystemRole enum on the User model allows
+//    platform administrators to manage all organizations, view audit logs,
+//    and perform platform-wide operations.
+//
+// 6. File Storage — MinIO (primary, self-hosted S3-compatible) with an
+//    optional AWS S3 backend. A single StorageProvider enum & storage fields
+//    on every file record means you can switch providers without touching code.
+//
+// 7. Async submission ingestion — API accepts and enqueues; workers persist.
+//    The schema supports PENDING_UPLOAD state + a separate files table to
+//    decouple the fast submission write from the slow file verification step.
+//
+// 8. Daily aggregated analytics — pre-aggregated counters in FormAnalytics
+//    prevent O(n) COUNT(*) queries at dashboard read time.
+//
+// 9. Full Audit Logging — every significant action is recorded in AuditLog
+//    with organization-level segregation. Only SuperAdmins can view audit
+//    logs across organizations.
+//
+// INDEXING PHILOSOPHY:
+// ─────────────────────────────────────────────────────────────────────────────
+//  • Every foreign key has a corresponding @index.
+//  • High-cardinality, frequently-filtered columns (status, submittedAt) have
+//    compound indexes with formId to leverage Index-only scans.
+//  • GIN index on answers JSONB is added via raw SQL in a Prisma migration:
+//    CREATE INDEX idx_form_submissions_answers_gin
+//    ON form_submissions USING GIN (answers jsonb_path_ops);
+//
+// PARTITIONING NOTE (run after >5M submission rows):
+//    ALTER TABLE form_submissions RENAME TO form_submissions_default;
+//    CREATE TABLE form_submissions (..., submitted_at TIMESTAMPTZ NOT NULL)
+//    PARTITION BY RANGE (submitted_at);
+//    -- Example: monthly partition
+//    CREATE TABLE form_submissions_y2026m08 PARTITION OF form_submissions
+//    FOR VALUES FROM ('2026-08-01') TO ('2026-09-01');
+// ============================================================================
+
+generator client {
+  provider      = "prisma-client-js"
+  // binaryTargets ensures the generated client works in Docker (Linux)
+  // as well as on your host machine (native Windows/Mac).
+  binaryTargets = ["native", "rhel-openssl-1.0.x", "debian-openssl-3.0.x"]
+}
+
+datasource db {
+  // In production: point this to PgBouncer for connection pooling.
+  // Example: postgresql://user:pass@pgbouncer:5432/formbuilder?pgbouncer=true&connection_limit=5
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================================================
+// SECTION 1 — ENUMERATIONS
+// ============================================================================
+
+/// Lifecycle state of a Form.
+/// DRAFT     — Invisible to respondents; freely editable without creating versions.
+/// PUBLISHED — Accepts new submissions; any structural edit creates a new FormVersion.
+/// ARCHIVED  — No new submissions accepted; historical data fully preserved.
+/// CLOSED    — System-closed when maxSubmissions limit is hit or expiresAt is past.
+enum FormStatus {
+  DRAFT
+  PUBLISHED
+  ARCHIVED
+  CLOSED
+}
+
+/// All supported question types — keep in sync with src/types/form.ts :: QuestionType.
+enum QuestionType {
+  SHORT_TEXT     // Single-line text input
+  LONG_TEXT      // Multi-line textarea
+  NUMBER         // Numeric only input
+  EMAIL          // Email with RFC 5322 pattern validation
+  PHONE          // Phone number with international prefix support
+  URL            // URL with scheme validation
+  SINGLE_CHOICE  // Radio buttons — exactly one answer
+  MULTI_CHOICE   // Checkboxes — one or more answers
+  DROPDOWN       // Select/combobox — exactly one answer
+  STAR_RATING    // 1–5 star rating widget
+  NPS            // Net Promoter Score 0–10
+  SLIDER         // Numeric slider with configurable min/max/step
+  DATE           // Date picker
+  FILE_UPLOAD    // MinIO (or S3) file upload — see FormSubmissionFile
+  SIGNATURE      // Canvas-drawn signature stored as base64 DataURL in answers
+  MATRIX         // Row × Column grid of radio/checkbox answers
+  SECTION_HEADER // Non-answerable visual divider between question groups
+  REPEATING_SECTION // A section that can be duplicated multiple times by the respondent
+}
+
+/// Conditional logic operators for skip logic and show/hide rules.
+enum LogicOperator {
+  EQUALS
+  NOT_EQUALS
+  CONTAINS
+  GREATER_THAN
+  LESS_THAN
+  IS_FILLED    // True when the target field has any non-empty value
+}
+
+/// Action to take when a LogicRule condition evaluates to true.
+enum LogicAction {
+  SHOW          // Make a hidden question visible
+  HIDE          // Conceal a visible question
+  JUMP_TO_PAGE  // Skip forward or backward to a specific page number
+}
+
+/// Lifecycle state of a form submission record.
+/// Workers update this field after async processing completes.
+enum SubmissionStatus {
+  SUBMITTED    // Successfully ingested and persisted by the worker
+  FLAGGED_SPAM // Detected as bot or spam by the validation/rate-limit layer
+  REJECTED     // Manually rejected by the form owner via admin panel
+  DELETED      // Soft-deleted; hidden from UI but retained for audit purposes
+}
+
+/// Lifecycle state of an uploaded file attached to a submission answer.
+/// Tracks the file through MinIO/S3 → verification → optional quarantine pipeline.
+enum FileUploadStatus {
+  PENDING_UPLOAD // Presigned PUT URL issued; client upload not yet confirmed
+  VERIFIED       // Object confirmed in storage and passed MIME + size checks
+  QUARANTINED    // Flagged as dangerous by ClamAV or content scanner
+  DELETED        // Object removed from MinIO/S3; record kept for audit trail
+}
+
+/// Identifies which object-storage backend holds a given file.
+/// Storing this per-record allows transparent provider migration.
+/// MINIO — Self-hosted MinIO server (default; recommended for local/self-hosted)
+/// S3    — AWS S3 (optional; activate by setting STORAGE_PROVIDER=s3 in env)
+enum StorageProvider {
+  MINIO
+  S3
+}
+
+/// Platform-level role for the User account.
+/// USER        — Standard platform user; access determined by OrgRole.
+/// SUPER_ADMIN — Full platform admin; can manage all organizations, view
+///               all audit logs, suspend orgs, and access platform dashboard.
+enum SystemRole {
+  USER
+  SUPER_ADMIN
+}
+
+/// Organization-level role assigned via OrganizationMember.
+/// ADMIN  — Full org control: CRUD forms, manage members, view all data.
+///          The org creator is automatically assigned ADMIN.
+/// EDITOR — Can create/edit forms and view submissions, but cannot
+///          manage members or delete the organization.
+/// VIEWER — Read-only access to forms and submissions. Can export data.
+enum OrgRole {
+  ADMIN
+  EDITOR
+  VIEWER
+}
+
+/// Status of an organization invitation.
+/// PENDING  — Invite sent, waiting for acceptance.
+/// ACCEPTED — Invite accepted, membership created.
+/// EXPIRED  — Invite token past its expiresAt date.
+/// REVOKED  — Invite manually cancelled by an admin.
+enum InviteStatus {
+  PENDING
+  ACCEPTED
+  EXPIRED
+  REVOKED
+}
+
+// ============================================================================
+// SECTION 2 — ORGANIZATION & MULTI-TENANCY
+// ============================================================================
+
+/// Organization — the tenant entity that owns all forms, submissions,
+/// and resources within its scope.
+///
+/// DATA ISOLATION:
+///  Every query for forms, submissions, analytics, webhooks, and files
+///  includes an organizationId filter. No cross-org data leakage is
+///  possible when all services enforce org-scoped queries.
+///
+/// QUOTAS:
+///  Quota fields (maxForms, maxSubmissionsMonth, maxMembers, storageQuotaBytes)
+///  are ready for future plan-based enforcement. Currently set to generous
+///  defaults. SuperAdmin can manually adjust quotas per org.
+///
+/// STORAGE:
+///  Each org can have its own MinIO bucket or S3 bucket for file isolation.
+///  Falls back to the global MINIO_DEFAULT_BUCKET if not set.
+model Organization {
+  id                  String   @id @default(uuid()) @db.Uuid
+  /// Human-readable organization name shown in dashboards and UI.
+  name                String   @db.VarChar(255)
+  /// URL-safe unique slug for the organization. Used in API routes.
+  slug                String   @unique @db.VarChar(120)
+  /// Optional logo URL for the organization.
+  logoUrl             String?  @map("logo_url") @db.Text
+
+  // ── Quota Fields (future plan support) ──────────────────────────────────────
+  /// Maximum number of forms this org can create. Default: 100 (generous).
+  maxForms            Int      @default(100) @map("max_forms")
+  /// Maximum submissions per calendar month. Default: 10000.
+  maxSubmissionsMonth Int      @default(10000) @map("max_submissions_month")
+  /// Maximum number of members in this org. Default: 50.
+  maxMembers          Int      @default(50) @map("max_members")
+  /// Storage quota in bytes. Default: 5GB.
+  storageQuotaBytes   BigInt   @default(5368709120) @map("storage_quota_bytes")
+  /// Current storage usage in bytes. Updated by file upload workers.
+  storageUsedBytes    BigInt   @default(0) @map("storage_used_bytes")
+
+  // ── Storage Configuration ───────────────────────────────────────────────────
+  /// Org-specific MinIO bucket. NULL = use global MINIO_DEFAULT_BUCKET.
+  minioBucket         String?  @map("minio_bucket") @db.VarChar(100)
+  /// Org-specific AWS S3 bucket. NULL = use global AWS_S3_BUCKET.
+  s3Bucket            String?  @map("s3_bucket") @db.VarChar(100)
+  /// Default storage provider for this org. Inherits from global env if MINIO.
+  defaultStorageProvider StorageProvider @default(MINIO) @map("default_storage_provider")
+
+  // ── Organization Settings (JSONB) ────────────────────────────────────────────
+  /// Flexible settings object for org-level feature flags, preferences, etc.
+  /// Shape can evolve without schema migrations.
+  settings            Json?    @db.JsonB
+
+  // ── Lifecycle ────────────────────────────────────────────────────────────────
+  /// Whether the org is currently active. Inactive orgs cannot create forms or accept submissions.
+  isActive            Boolean  @default(true) @map("is_active")
+  /// When the org was suspended by a SuperAdmin. NULL = not suspended.
+  suspendedAt         DateTime? @map("suspended_at")
+  /// Reason for suspension (filled by SuperAdmin).
+  suspendReason       String?  @map("suspend_reason") @db.Text
+  /// Soft-delete timestamp. NULL = active.
+  deletedAt           DateTime? @map("deleted_at")
+
+  createdAt           DateTime @default(now()) @map("created_at")
+  updatedAt           DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  members             OrganizationMember[]
+  invitations         OrganizationInvitation[]
+  forms               Form[]
+  apiKeys             ApiKey[]
+  auditLogs           AuditLog[]
+  integrationConfigs  IntegrationConfig[]
+
+  @@index([slug])
+  @@index([isActive])
+  @@map("organizations")
+}
+
+/// Joins a User to an Organization with a specific role.
+///
+/// SINGLE-ORG CONSTRAINT:
+///  A user can belong to exactly ONE organization at a time.
+///  This is enforced by the @@unique([userId]) constraint below.
+///  If a user needs to switch orgs, they must leave their current org first.
+///
+/// ROLE HIERARCHY (enforced at guard level, not schema level):
+///  ADMIN > EDITOR > VIEWER
+///  The org creator is automatically assigned ADMIN role.
+model OrganizationMember {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String   @map("organization_id") @db.Uuid
+  userId         String   @map("user_id") @db.Uuid
+  /// The member's role within this organization.
+  role           OrgRole  @default(VIEWER)
+
+  /// When this member joined the organization.
+  joinedAt       DateTime @default(now()) @map("joined_at")
+  /// The user who invited this member. NULL for org creators.
+  invitedById    String?  @map("invited_by_id") @db.Uuid
+
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  invitedBy      User?        @relation("InvitedBy", fields: [invitedById], references: [id])
+
+  // One membership per user per org (standard many-to-many guard)
+  @@unique([organizationId, userId])
+  // SINGLE-ORG ENFORCEMENT: A user can only have one membership total
+  @@unique([userId])
+  @@index([organizationId])
+  @@map("organization_members")
+}
+
+/// Invitation to join an organization.
+///
+/// INVITATION FLOW:
+///  1. Admin creates invitation → generates a unique token → returns invite link.
+///  2. Invitee clicks the link → frontend calls POST /invitations/:token/accept.
+///  3. If the invitee doesn't have an account, they register first, then accept.
+///  4. On acceptance: OrganizationMember is created, invitation status → ACCEPTED.
+///
+/// TOKEN SECURITY:
+///  The token is a 32-byte random hex string. Only the SHA-256 hash is stored
+///  in the database. The raw token is shown once in the invite link URL.
+///  Tokens expire after a configurable period (default: 7 days).
+///
+/// FUTURE: Email integration will send the invite link via SendGrid/Resend
+///  in addition to returning the link in the API response.
+model OrganizationInvitation {
+  id             String       @id @default(uuid()) @db.Uuid
+  organizationId String       @map("organization_id") @db.Uuid
+  /// Email of the person being invited. Used for pre-matching when they register.
+  email          String       @db.VarChar(255)
+  /// Role to assign when the invite is accepted.
+  role           OrgRole      @default(VIEWER)
+  /// SHA-256 hash of the invite token (64 hex chars). Raw token shown once.
+  token          String       @unique @db.VarChar(64)
+  /// Current status of this invitation.
+  status         InviteStatus @default(PENDING)
+
+  /// The admin who created this invitation.
+  invitedById    String       @map("invited_by_id") @db.Uuid
+  /// When this invitation expires. Default: 7 days from creation.
+  expiresAt      DateTime     @map("expires_at")
+  /// When the invite was accepted. NULL if not yet accepted.
+  acceptedAt     DateTime?    @map("accepted_at")
+
+  createdAt      DateTime     @default(now()) @map("created_at")
+
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  invitedBy      User         @relation("InvitationsSent", fields: [invitedById], references: [id])
+
+  @@index([organizationId])
+  @@index([token])
+  @@index([email])
+  @@map("organization_invitations")
+}
+
+// ============================================================================
+// SECTION 3 — USER & AUTH
+// ============================================================================
+
+/// The platform user — can be a form creator, editor, viewer, or platform admin.
+///
+/// MULTI-TENANT DESIGN:
+///  Users are linked to organizations via OrganizationMember (one org per user).
+///  The user's role within the org is stored in OrganizationMember.role.
+///  The user's platform-level role (USER vs SUPER_ADMIN) is stored here.
+///
+/// AUTHENTICATION:
+///  • Password: argon2id hash (time=3, memory=64MB, parallelism=4). Never stored plain.
+///  • Access Token: short-lived JWT (HS256, 15 min TTL).
+///  • Refresh Token: opaque 32-byte random token, stored SHA-256 hashed here,
+///    rotated on every /auth/refresh call to prevent replay attacks.
+///  • Refresh Token is sent in an HttpOnly, Secure, SameSite=Strict cookie.
+///
+/// SOFT DELETE:
+///  Users are soft-deleted (deletedAt) so that submission records remain
+///  attributable to the creator without orphan FK violations.
+model User {
+  id            String     @id @default(uuid()) @db.Uuid
+  email         String     @unique @db.VarChar(255)
+  // argon2id hash. NEVER expose in API responses.
+  passwordHash  String     @map("password_hash") @db.VarChar(255)
+  firstName     String     @map("first_name") @db.VarChar(100)
+  lastName      String     @map("last_name") @db.VarChar(100)
+  avatarUrl     String?    @map("avatar_url") @db.Text
+  emailVerified Boolean    @default(false) @map("email_verified")
+
+  // ── Platform-Level Role ─────────────────────────────────────────────────────
+  /// USER = standard user (org access via OrganizationMember).
+  /// SUPER_ADMIN = platform administrator with global access.
+  systemRole    SystemRole @default(USER) @map("system_role")
+
+  // ── Storage Preferences ────────────────────────────────────────────────────
+  // NULL = inherit global STORAGE_PROVIDER env var (default: MINIO)
+  preferredStorage StorageProvider? @map("preferred_storage")
+
+  // ── MFA ────────────────────────────────────────────────────────────────────
+  mfaEnabled    Boolean    @default(false) @map("mfa_enabled")
+  mfaSecret     String?    @map("mfa_secret") @db.VarChar(255)
+
+  // ── Soft Delete ────────────────────────────────────────────────────────────
+  deletedAt DateTime? @map("deleted_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  memberships         OrganizationMember[]
+  memberInvites       OrganizationMember[] @relation("InvitedBy")
+  invitationsSent     OrganizationInvitation[] @relation("InvitationsSent")
+  createdForms        Form[]          @relation("FormCreator")
+  apiKeys             ApiKey[]
+  refreshTokens       RefreshToken[]
+  passwordResetTokens PasswordResetToken[]
+  submittedForms      FormSubmission[]
+  notifications       Notification[]
+  formComments        FormComment[]
+
+  emailVerificationTokens EmailVerificationToken[]
+
+  @@index([email])
+  @@map("users")
+}
+
+/// Token used for email verification flows.
+model EmailVerificationToken {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  // SHA-256 hex of the raw token (raw token is sent in email)
+  tokenHash String   @unique @map("token_hash") @db.VarChar(64)
+  expiresAt DateTime @map("expires_at")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([tokenHash])
+  @@map("email_verification_tokens")
+}
+
+/// Token used for password reset flows.
+model PasswordResetToken {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  // SHA-256 hex of the raw token (raw token is sent in email)
+  tokenHash String   @unique @map("token_hash") @db.VarChar(64)
+  expiresAt DateTime @map("expires_at")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([tokenHash])
+  @@map("password_reset_tokens")
+}
+
+/// Per-device JWT refresh token record.
+/// SHA-256 hashed before storage — the raw token is shown to the user only once.
+/// On every /auth/refresh request, the old record is revoked and a new one issued.
+model RefreshToken {
+  id        String    @id @default(uuid()) @db.Uuid
+  userId    String    @map("user_id") @db.Uuid
+  // SHA-256 hex of the raw 32-byte random token (64 hex chars).
+  tokenHash String    @unique @map("token_hash") @db.VarChar(64)
+  // Stored to display in "active sessions" admin UI, not for auth decisions.
+  userAgent String?   @map("user_agent") @db.Text
+  ipAddress String?   @map("ip_address") @db.VarChar(45)
+  expiresAt DateTime  @map("expires_at")
+  // NULL = token is still valid. Set to NOW() on logout or rotation.
+  revokedAt DateTime? @map("revoked_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([tokenHash])
+  @@map("refresh_tokens")
+}
+
+/// Machine-to-machine API key for programmatic access (CLI tools, integrations, scripts).
+///
+/// KEY FORMAT: fbk_<base62_32_bytes>
+///  — The "fbk_" prefix helps secrets-scanning tools (GitHub, GitGuardian) detect leaks.
+///  — Only the SHA-256 hex hash is stored here. The raw key is shown once on creation.
+///
+/// MULTI-TENANT: API keys are scoped to an organization. The organizationId
+///  determines which org's data the key can access. Scopes further restrict
+///  what operations are permitted.
+///
+/// SCOPES (comma-separated, enforced at service layer):
+///  forms:read, forms:write, submissions:read, submissions:export
+model ApiKey {
+  id             String    @id @default(uuid()) @db.Uuid
+  userId         String    @map("user_id") @db.Uuid
+  /// The organization this API key is scoped to.
+  organizationId String    @map("organization_id") @db.Uuid
+  // Human-readable label (e.g., "Zapier Integration", "Export Script")
+  name           String    @db.VarChar(100)
+  // SHA-256 hex of the raw key (64 chars). Used for lookup on every API request.
+  keyHash        String    @unique @map("key_hash") @db.VarChar(64)
+  // Comma-separated scope string. Default: read-only.
+  scopes         String    @default("forms:read,submissions:read") @db.VarChar(500)
+  lastUsedAt     DateTime? @map("last_used_at")
+  // NULL = never expires
+  expiresAt      DateTime? @map("expires_at")
+  createdAt      DateTime  @default(now()) @map("created_at")
+
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([organizationId])
+  @@index([keyHash])
+  @@map("api_keys")
+}
+
+// ============================================================================
+// SECTION 4 — FORM CREATION, VERSIONING & CONFIGURATION
+// ============================================================================
+
+/// Central Form entity — the permanent, stable identifier for a form.
+///
+/// MULTI-TENANT: Forms are owned by an Organization, not a User.
+/// The createdById field tracks which user originally created the form,
+/// but all access control is based on organizationId + OrganizationMember role.
+///
+/// The form's actual question/logic/theme content lives in FormVersion snapshots.
+/// The Form model holds only stable metadata and configuration flags.
+///
+/// PUBLISHING WORKFLOW:
+///  1. Creator builds a form in DRAFT status (no versions yet, no submissions).
+///  2. Creator clicks "Publish" → FormVersion 1 is created as an immutable snapshot.
+///  3. Creator edits a PUBLISHED form → a new FormVersion 2 is atomically created.
+///     form.currentVersion = 2. All NEW submissions reference version 2.
+///     All existing submissions continue to reference version 1 (immutable).
+///  4. Creator closes or archives the form via API/UI.
+model Form {
+  id              String     @id @default(uuid()) @db.Uuid
+  /// The organization that owns this form. All access checks use this field.
+  organizationId  String     @map("organization_id") @db.Uuid
+  /// The user who originally created this form. For attribution, not access control.
+  createdById     String     @map("created_by_id") @db.Uuid
+
+  // ── Public URL Slug ────────────────────────────────────────────────────────
+  // Auto-generated as a nanoid(10) at creation. Can be customized to a vanity slug.
+  // Used in the public respondent URL: /fill/{slug}
+  slug        String     @unique @db.VarChar(120)
+
+  title       String     @db.VarChar(255)
+  description String?    @db.Text
+  status      FormStatus @default(DRAFT)
+
+  // ── Layout Mode ────────────────────────────────────────────────────────────
+  // DOCUMENT (default) | CONVERSATIONAL | GRID | PORTAL
+  layoutMode  String     @default("DOCUMENT") @map("layout_mode") @db.VarChar(50)
+
+  // ── Quiz Mode ──────────────────────────────────────────────────────────────
+  // When true, questions carry `points` and `correctAnswer` fields.
+  // The submission worker auto-grades responses and populates quizScore/isPassed.
+  isQuizMode  Boolean    @default(false) @map("is_quiz_mode")
+
+  // ── Access Control ─────────────────────────────────────────────────────────
+  isPasswordProtected Boolean   @default(false) @map("is_password_protected")
+  // argon2id hash of the form access password. NULL when not password-protected.
+  passwordHash        String?   @map("password_hash") @db.VarChar(255)
+  // When true, the respondent must be a logged-in User (useful for internal forms).
+  requireAuth         Boolean   @default(false) @map("require_auth")
+  // When false, duplicate submissions from the same fingerprint are rejected.
+  allowMultiple       Boolean   @default(true) @map("allow_multiple")
+  // System closes the form automatically once this many submissions are received.
+  maxSubmissions      Int?      @map("max_submissions")
+  // UTC datetime after which new submissions are rejected. NULL = never expires.
+  expiresAt           DateTime? @map("expires_at")
+
+  // ── Versioning Pointer ─────────────────────────────────────────────────────
+  // The version number of the most recently published FormVersion.
+  // Atomically incremented on each publish operation.
+  currentVersion      Int       @default(1) @map("current_version")
+
+  // ── Theme Configuration (JSONB) ────────────────────────────────────────────
+  // Full FormTheme object. Matches src/types/form.ts :: FormTheme.
+  // Shape: {
+  //   preset: ThemePreset, primaryColor: string, backgroundColor: string,
+  //   cardColor: string, textColor: string, fontFamily: string,
+  //   borderRadius: 'none'|'sm'|'md'|'lg'|'full',
+  //   cardVariant: 'card'|'elevated'|'glass'|'minimal',
+  //   coverImageUrl?: string, logoUrl?: string
+  // }
+  themeConfig    Json  @map("theme_config") @db.JsonB
+
+  // ── Draft Structure Snapshots ─────────────────────────────────────────────
+  // These fields store the working draft of the form. When published, they are
+  // copied into an immutable FormVersion snapshot.
+  pagesJson     Json? @map("pages_json") @db.JsonB
+  questionsJson Json? @map("questions_json") @db.JsonB
+  logicJson     Json? @map("logic_json") @db.JsonB
+
+  // ── Email Notifications ────────────────────────────────────────────────────
+  // JSON array of email addresses to notify on each new submission.
+  // Example: ["owner@example.com", "team@example.com"]
+  notifyEmails   Json? @map("notify_emails") @db.JsonB
+  // ── Soft Delete ────────────────────────────────────────────────────────────
+  deletedAt DateTime? @map("deleted_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  organization Organization     @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  createdBy    User             @relation("FormCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  versions     FormVersion[]
+  submissions  FormSubmission[]
+  analytics    FormAnalytics[]
+  webhooks     FormWebhook[]
+  comments     FormComment[]
+  drafts       FormDraft[]
+  integrationConfigs IntegrationConfig[]
+
+  @@index([organizationId, status]) // Most common query: list the org's forms by status
+  @@index([slug])                   // Public form page lookup — hot path
+  @@index([createdById])            // Forms created by a specific user
+  @@map("forms")
+}
+
+/// Immutable published snapshot of a Form's questions, pages, logic, and theme.
+///
+/// WHY THIS EXISTS:
+///  A form receiving 50,000 responses may have its questions edited mid-run.
+///  Without versioning, old submissions become uninterpretable when questions are
+///  deleted or reordered. FormVersion captures the EXACT structure at publish time.
+///  Submissions always reference their specific formVersionId, preserving accuracy
+///  forever regardless of future edits.
+///
+/// DATA STORED AS JSONB (matched types from src/types/form.ts):
+///  pagesJson     → FormPage[]      { pageNumber, title, description? }
+///  questionsJson → FormQuestion[]  { id, type, label, options, validation, points, ... }
+///  logicJson     → LogicRule[]     { id, triggerQuestionId, operator, value, action, ... }
+///  themeJson     → FormTheme       { preset, primaryColor, fontFamily, ... }
+model FormVersion {
+  id      String @id @default(uuid()) @db.Uuid
+  formId  String @map("form_id") @db.Uuid
+  // Sequential version number within this form. Starts at 1. Never reused.
+  version Int
+
+  // ── Immutable Structure Snapshots ─────────────────────────────────────────
+  pagesJson     Json @map("pages_json") @db.JsonB
+  questionsJson Json @map("questions_json") @db.JsonB
+  logicJson     Json @map("logic_json") @db.JsonB
+  themeJson     Json @map("theme_json") @db.JsonB
+
+  // When this version was snapshotted and made active.
+  publishedAt DateTime @default(now()) @map("published_at")
+
+  form        Form             @relation(fields: [formId], references: [id], onDelete: Cascade)
+  submissions FormSubmission[]
+
+  @@unique([formId, version]) // Prevents duplicate version numbers within a form
+  @@index([formId])
+  @@map("form_versions")
+}
+
+// ============================================================================
+// SECTION 5 — SUBMISSION ENGINE (HIGH-THROUGHPUT ASYNC PIPELINE)
+// ============================================================================
+
+/// Core submission record — created by background workers, NOT by the API directly.
+///
+/// HIGH-THROUGHPUT DESIGN:
+///  1. API receives POST /fill/{slug}/submit
+///  2. API validates CAPTCHA token + basic DTO shape
+///  3. API pushes payload to BullMQ Redis queue
+///  4. API immediately returns HTTP 202 Accepted { submissionId } (~15ms)
+///  5. Worker dequeues → validates against FormVersion schema → scores quiz
+///     → detects spam → writes this row → updates analytics → fires webhooks
+///
+/// ANSWER PAYLOAD SHAPE (JSONB):
+///  {
+///    "<questionId>": "text value",           // SHORT_TEXT, EMAIL, PHONE, URL, DATE
+///    "<questionId>": 42,                     // NUMBER, SLIDER, NPS, STAR_RATING
+///    "<questionId>": "option_value",         // SINGLE_CHOICE, DROPDOWN
+///    "<questionId>": ["opt_a", "opt_c"],     // MULTI_CHOICE
+///    "<questionId>": { "row1": "col2" },     // MATRIX: { rowValue: colValue }
+///    "<questionId>": "<fileId>",             // FILE_UPLOAD: reference to FormSubmissionFile.id
+///    "<questionId>": "data:image/png;base64,..." // SIGNATURE
+///  }
+///
+/// POST-MIGRATION SQL (add GIN index for deep JSONB answer queries):
+///  CREATE INDEX idx_form_submissions_answers_gin
+///  ON form_submissions USING GIN (answers jsonb_path_ops);
+model FormSubmission {
+  id            String @id @default(uuid()) @db.Uuid
+  formId        String @map("form_id") @db.Uuid
+  // The exact form version this submission was filled against. Never changes.
+  formVersionId String @map("form_version_id") @db.Uuid
+
+  // NULL for anonymous respondents (most common case when requireAuth = false).
+  respondentId  String? @map("respondent_id") @db.Uuid
+
+  // ── Privacy-safe Respondent Metadata ──────────────────────────────────────
+  // Raw IP address is NEVER stored (GDPR compliance).
+  // Instead, a daily-salted SHA-256 hash is stored for duplicate detection.
+  // The daily salt rotates at midnight UTC, preventing long-term IP tracking.
+  respondentIpHash String?  @map("respondent_ip_hash") @db.VarChar(64)
+  userAgent        String?  @map("user_agent") @db.Text
+  // ISO 3166-1 alpha-2 country code resolved by the worker via MaxMind GeoIP.
+  country          String?  @db.VarChar(2)
+  // Time in milliseconds from when the respondent loaded the form to submission click.
+  completionTimeMs Int      @default(0) @map("completion_time_ms")
+
+  // ── Quiz Auto-grading ──────────────────────────────────────────────────────
+  // Populated by the SubmissionProcessorWorker when form.isQuizMode = true.
+  // quizScore    = sum of points for correct answers
+  // maxQuizScore = sum of total possible points across all scored questions
+  // isPassed     = quizScore >= form-level passing threshold (stored in questionsJson)
+  quizScore    Float?   @map("quiz_score")
+  maxQuizScore Float?   @map("max_quiz_score")
+  isPassed     Boolean? @map("is_passed")
+
+  // ── The Answer Payload ─────────────────────────────────────────────────────
+  // See ANSWER PAYLOAD SHAPE in the doc comment above.
+  answers Json @db.JsonB
+
+  status       SubmissionStatus @default(SUBMITTED)
+  // submittedAt = timestamp the API received the request (used in analytics & display).
+  submittedAt  DateTime         @default(now()) @map("submitted_at")
+  // processedAt = when the worker finished writing this record (for queue latency monitoring).
+  processedAt  DateTime?        @map("processed_at")
+
+  // Relations
+  form        Form                 @relation(fields: [formId], references: [id], onDelete: Cascade)
+  formVersion FormVersion          @relation(fields: [formVersionId], references: [id], onDelete: Restrict)
+  respondent  User?                @relation(fields: [respondentId], references: [id], onDelete: SetNull)
+  files       FormSubmissionFile[]
+
+  // ── Critical Performance Indexes ─────────────────────────────────────────
+  @@index([formId, submittedAt(sort: Desc)]) // Dashboard: paginate newest first
+  @@index([formId, status])                  // Filter SUBMITTED vs FLAGGED_SPAM
+  @@index([formVersionId])                   // Version-scoped analytics queries
+  @@index([respondentId])                    // All submissions by a logged-in user
+  @@map("form_submissions")
+}
+
+// ============================================================================
+// SECTION 6 — FILE UPLOADS (MINIO PRIMARY / AWS S3 OPTIONAL)
+// ============================================================================
+
+/// Tracks every file uploaded as a FILE_UPLOAD question answer.
+///
+/// ═══════════════════════════════════════════════════════════════════
+/// MINIO UPLOAD FLOW (PRIMARY — self-hosted, default)
+/// ═══════════════════════════════════════════════════════════════════
+///  Step 1  — Frontend calls POST /v1/storage/presigned-url
+///            Payload: { formId, questionId, fileName, mimeType, sizeBytes }
+///
+///  Step 2  — StorageService validates:
+///            ✓ MIME type is in the allowlist (configurable per question)
+///            ✓ sizeBytes ≤ MAX_FILE_SIZE_MB * 1024 * 1024 (default 25 MB)
+///            Creates a FormSubmissionFile record with status=PENDING_UPLOAD.
+///            Generates a MinIO presigned PUT URL (TTL: 15 min).
+///            Returns: { uploadUrl, objectKey, fileId, expiresAt }
+///
+///  Step 3  — Frontend PUTs the binary file DIRECTLY to MinIO uploadUrl.
+///            NestJS RAM is NOT involved. File bytes never pass through the API.
+///
+///  Step 4  — Frontend includes fileId in the submission answers JSON:
+///            { "<questionId>": "<fileId>" }
+///            Then POSTs the submission. API enqueues and returns 202.
+///
+///  Step 5  — FileVerifierWorker calls MinIO statObject(objectKey):
+///            If found:   status → VERIFIED, verifiedAt = NOW()
+///            If missing: status → DELETED (upload expired or was never completed)
+///
+///  Step 6  — ClamAV daemon scans the MinIO bucket (via inotify or webhook event).
+///            If malware found: status → QUARANTINED, quarantineReason set.
+///            Object moved to a separate quarantine bucket automatically.
+///
+/// OBJECT KEY CONVENTION (same for MinIO and S3):
+///  uploads/{orgId}/{formId}/{submissionId}/{fileId}/{sanitizedOriginalName}
+///  — orgId segment allows per-org lifecycle policies and easy cleanup
+///  — submissionId allows bulk-delete when a submission is purged
+///  — fileId makes keys globally unique even if the same filename is used twice
+model FormSubmissionFile {
+  id           String          @id @default(uuid()) @db.Uuid
+  // FK to FormSubmission. Cascade-delete removes file records when submission is purged.
+  // Nullable because the file record is created when the presigned URL is issued,
+  // BEFORE the submission is actually submitted.
+  submissionId String?         @map("submission_id") @db.Uuid
+  // The FILE_UPLOAD question this file was uploaded for (matches FormQuestion.id).
+  questionId   String          @map("question_id") @db.VarChar(100)
+
+  // ── Storage Backend ────────────────────────────────────────────────────────
+  // Identifies which backend system holds this object. Defaults to MinIO.
+  provider     StorageProvider @default(MINIO)
+  // MinIO bucket name or AWS S3 bucket name where this object is stored.
+  bucket       String          @db.VarChar(100)
+  // The complete object key path (see OBJECT KEY CONVENTION above).
+  objectKey    String          @unique @map("object_key") @db.VarChar(512)
+
+  // ── File Metadata ──────────────────────────────────────────────────────────
+  // Sanitized original filename (special chars replaced with underscores).
+  originalName String          @map("original_name") @db.VarChar(255)
+  mimeType     String          @map("mime_type") @db.VarChar(100)
+  // File size in bytes as BigInt to handle files >2 GB without overflow.
+  sizeBytes    BigInt          @map("size_bytes")
+  // SHA-256 hex checksum computed by worker post-upload. Used for integrity checks
+  // and to detect bit-rot or tampering. NULL until VERIFIED.
+  sha256Hash   String?         @map("sha256_hash") @db.VarChar(64)
+
+  // ── Lifecycle Tracking ─────────────────────────────────────────────────────
+  status           FileUploadStatus @default(PENDING_UPLOAD)
+  // When the presigned PUT URL was issued (not when the binary arrived in storage).
+  issuedAt         DateTime         @default(now()) @map("issued_at")
+  // When the presigned URL expires (issuedAt + PRESIGNED_URL_TTL_SECONDS).
+  expiresAt        DateTime?        @map("expires_at")
+  // Set by FileVerifierWorker when MinIO/S3 statObject confirms the file exists.
+  verifiedAt       DateTime?        @map("verified_at")
+  // Populated by ClamAV/scanner integration. E.g., "Eicar-Test-Signature".
+  quarantineReason String?          @map("quarantine_reason") @db.Text
+
+  submission FormSubmission? @relation(fields: [submissionId], references: [id], onDelete: Cascade)
+
+  @@index([submissionId])
+  @@index([questionId])
+  @@index([status])        // Worker efficiently queries PENDING_UPLOAD files for verification
+  @@map("form_submission_files")
+}
+
+/// Pre-built templates that can be used to quickly create forms.
+model FormTemplate {
+  id          String   @id @default(uuid()) @db.Uuid
+  name        String   @db.VarChar(100)
+  description String?  @db.Text
+  category    String   @db.VarChar(50) // e.g. "survey", "feedback", "registration"
+  thumbnail   String?  @db.Text        // Preview image URL
+  formData    Json     @db.JsonB       // { pages, questions, logic, theme }
+  isPublic    Boolean  @default(true)  // Whether it's available to all orgs
+  usageCount  Int      @default(0)
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  @@map("form_templates")
+}
+
+// ============================================================================
+// SECTION 7 — ANALYTICS (PRE-AGGREGATED DAILY COUNTERS)
+// ============================================================================
+
+/// Daily aggregate metrics for a form.
+///
+/// WHY PRE-AGGREGATE INSTEAD OF COUNTING ON-THE-FLY?
+///  At millions of rows, SELECT COUNT(*) FROM form_submissions WHERE form_id = ?
+///  causes sequential scans even with indexes. Pre-aggregated daily rows (max 365
+///  per form per year) make dashboard charts instant at any scale.
+///
+/// HOW IT IS UPDATED:
+///  The SubmissionProcessorWorker runs an UPSERT after each successful submission:
+///
+///  INSERT INTO form_analytics (id, form_id, date, submissions, avg_completion_ms)
+///  VALUES (gen_random_uuid(), $formId, NOW()::date, 1, $completionMs)
+///  ON CONFLICT (form_id, date) DO UPDATE SET
+///    submissions     = form_analytics.submissions + 1,
+///    avg_completion_ms = (form_analytics.avg_completion_ms + EXCLUDED.avg_completion_ms) / 2;
+model FormAnalytics {
+  id     String   @id @default(uuid()) @db.Uuid
+  formId String   @map("form_id") @db.Uuid
+  // Date only (no time). One row per form per calendar day (UTC).
+  date   DateTime @db.Date
+
+  // ── Daily Counters ─────────────────────────────────────────────────────────
+  views           Int @default(0)               // Public form URL page loads
+  starts          Int @default(0)               // First field interaction recorded
+  submissions     Int @default(0)               // Successfully persisted submissions
+  // Running average of completionTimeMs for all submissions on this date.
+  avgCompletionMs Int @default(0) @map("avg_completion_ms")
+
+  form Form @relation(fields: [formId], references: [id], onDelete: Cascade)
+
+  @@unique([formId, date]) // Enforces exactly one row per form per day for safe UPSERT
+  @@index([formId, date])
+  @@map("form_analytics")
+}
+
+// ============================================================================
+// SECTION 8 — WEBHOOKS & DELIVERY LOGS
+// ============================================================================
+
+/// Webhook endpoint registered for a form.
+model FormWebhook {
+  id        String   @id @default(uuid()) @db.Uuid
+  formId    String   @map("form_id") @db.Uuid
+  // The HTTPS endpoint that will receive POST requests.
+  url       String   @db.Text
+  // 32-byte random hex secret. Stored encrypted at rest. Shown only once at creation.
+  secret    String   @db.VarChar(255)
+  // Human-readable label shown in the UI.
+  name      String   @db.VarChar(100)
+  isActive  Boolean  @default(true) @map("is_active")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  form       Form              @relation(fields: [formId], references: [id], onDelete: Cascade)
+  deliveries WebhookDelivery[]
+
+  @@index([formId, isActive])
+  @@map("form_webhooks")
+}
+
+/// Immutable log of each webhook delivery attempt.
+model WebhookDelivery {
+  id           String   @id @default(uuid()) @db.Uuid
+  webhookId    String   @map("webhook_id") @db.Uuid
+  submissionId String   @map("submission_id") @db.Uuid
+  statusCode   Int?     @map("status_code")
+  responseBody String?  @map("response_body") @db.Text
+  attempt      Int      @default(1)
+  success      Boolean  @default(false)
+  deliveredAt  DateTime @default(now()) @map("delivered_at")
+
+  webhook FormWebhook @relation(fields: [webhookId], references: [id], onDelete: Cascade)
+
+  @@index([webhookId])
+  @@index([submissionId])
+  @@map("webhook_deliveries")
+}
+
+// ============================================================================
+// SECTION 9 — AUDIT LOGGING
+// ============================================================================
+
+/// Immutable audit log entry for tracking user actions within an organization.
+///
+/// DESIGN:
+///  Every significant mutation (create, update, delete, invite, role change, etc.)
+///  is logged with the actor, action, resource, and a metadata JSONB blob for
+///  additional context (old/new values, etc.).
+///
+/// ACCESS:
+///  Only SUPER_ADMIN can view audit logs. Logs are segregated by organizationId
+///  so the SuperAdmin can filter by org for investigation.
+///
+/// RETENTION:
+///  Audit logs are append-only and never deleted. Consider partitioning by
+///  createdAt after the table exceeds 10M rows.
+model AuditLog {
+  id             String   @id @default(uuid()) @db.Uuid
+  /// The organization this action occurred within.
+  organizationId String   @map("organization_id") @db.Uuid
+  /// The user who performed the action. NULL for system-triggered events.
+  userId         String?  @map("user_id") @db.Uuid
+  /// Dot-notation action name. Examples:
+  ///  "form.created", "form.published", "form.deleted",
+  ///  "member.invited", "member.removed", "member.role_changed",
+  ///  "org.settings_updated", "org.suspended", "submission.rejected"
+  action         String   @db.VarChar(100)
+  /// The type of resource affected. Examples: "form", "member", "org", "submission"
+  resource       String   @db.VarChar(50)
+  /// The ID of the affected resource. NULL for org-level actions.
+  resourceId     String?  @map("resource_id") @db.VarChar(100)
+  /// Additional context as JSONB. Examples:
+  ///  { "oldRole": "VIEWER", "newRole": "EDITOR" }
+  ///  { "formTitle": "Customer Survey" }
+  ///  { "invitedEmail": "user@example.com" }
+  metadata       Json?    @db.JsonB
+  /// IP address of the actor at the time of the action.
+  ipAddress      String?  @map("ip_address") @db.VarChar(45)
+
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, createdAt(sort: Desc)])
+  @@index([userId])
+  @@index([action])
+  @@map("audit_logs")
+}
+
+// ============================================================================
+// SECTION 10 — COLLABORATION (FORM COMMENTS)
+// ============================================================================
+
+/// Threaded comments on a form for team collaboration.
+///
+/// Team members can leave comments on forms for discussion, review requests,
+/// or general notes. Comments support threading via parentId.
+/// Admins/editors can mark comments as resolved.
+model FormComment {
+  id         String   @id @default(uuid()) @db.Uuid
+  formId     String   @map("form_id") @db.Uuid
+  userId     String   @map("user_id") @db.Uuid
+  /// The comment text content.
+  content    String   @db.Text
+  /// Parent comment ID for threaded replies. NULL for top-level comments.
+  parentId   String?  @map("parent_id") @db.Uuid
+  /// Whether this comment thread has been resolved.
+  resolved   Boolean  @default(false)
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  form       Form         @relation(fields: [formId], references: [id], onDelete: Cascade)
+  user       User         @relation(fields: [userId], references: [id])
+  parent     FormComment? @relation("CommentThread", fields: [parentId], references: [id])
+  replies    FormComment[] @relation("CommentThread")
+
+  @@index([formId])
+  @@index([userId])
+  @@map("form_comments")
+}
+
+// ============================================================================
+// SECTION 11 — IN-APP NOTIFICATIONS
+// ============================================================================
+
+/// In-app notification for a user.
+///
+/// Notifications are created by various system events:
+///  - New submission received (for form creators)
+///  - Member joined organization
+///  - Invitation accepted
+///  - Form published
+///  - Quota limit approaching
+///  - etc.
+///
+/// The metadata JSONB blob contains event-specific context for deep linking
+/// in the frontend (e.g., formId, submissionId, orgId).
+model Notification {
+  id         String   @id @default(uuid()) @db.Uuid
+  userId     String   @map("user_id") @db.Uuid
+  /// Notification type for filtering and icon selection.
+  /// Examples: "new_submission", "member_joined", "form_published", "quota_warning"
+  type       String   @db.VarChar(50)
+  /// Short title displayed in the notification dropdown.
+  title      String   @db.VarChar(255)
+  /// Optional longer description.
+  body       String?  @db.Text
+  /// Event-specific context for deep linking.
+  /// Example: { "formId": "uuid", "submissionId": "uuid" }
+  metadata   Json?    @db.JsonB
+  /// Whether the user has seen/read this notification.
+  isRead     Boolean  @default(false) @map("is_read")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, isRead])
+  @@index([userId, createdAt(sort: Desc)])
+  @@map("notifications")
+}
+
+// ============================================================================
+// SECTION 12 — INTEGRATIONS & SYNC
+// ============================================================================
+
+/// Bi-directional sync configurations (Airtable, Notion, Webhooks, etc.)
+model IntegrationConfig {
+  id              String   @id @default(uuid()) @db.Uuid
+  organizationId  String   @map("organization_id") @db.Uuid
+  formId          String?  @map("form_id") @db.Uuid // null = org-wide integration
+  provider        String   @db.VarChar(50) // e.g. "airtable", "notion"
+  credentials     Json     @db.JsonB // Encrypted OAuth tokens/keys
+  syncRules       Json     @db.JsonB // Field mappings and directions
+  isActive        Boolean  @default(true) @map("is_active")
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  organization    Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  form            Form?        @relation(fields: [formId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+  @@index([formId])
+  @@map("integration_configs")
+}
+
+// ============================================================================
+// SECTION 13 — PARTIAL SUBMISSIONS (DRAFTS)
+// ============================================================================
+
+/// Partial submission recovery (saves progress via browser fingerprint or session ID)
+model FormDraft {
+  id          String   @id @default(uuid()) @db.Uuid
+  formId      String   @map("form_id") @db.Uuid
+  fingerprint String   @db.VarChar(128)
+  answers     Json     @db.JsonB
+  lastFieldId String?  @map("last_field_id") @db.VarChar(100)
+  progress    Float    @default(0)
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  form        Form     @relation(fields: [formId], references: [id], onDelete: Cascade)
+
+  @@unique([formId, fingerprint])
+  @@index([formId, updatedAt])
+  @@map("form_drafts")
+}
