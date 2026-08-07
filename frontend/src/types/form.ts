@@ -99,6 +99,38 @@ export interface FormPage {
   description?: string;
 }
 
+export type FormLayoutMode = 'DOCUMENT' | 'CONVERSATIONAL' | 'GRID' | 'PORTAL';
+
+/**
+ * Form-level settings.
+ *
+ * Every field here maps to a real column on `Form`. They all existed in the
+ * schema and in the API DTOs, but the builder had no UI for any of them and
+ * never sent them, so an org could not close a form, cap responses, restrict it
+ * to signed-in users, or get notified of a submission — the columns just sat at
+ * their defaults forever.
+ *
+ * `password` is deliberately absent: it is write-only, never read back from the
+ * API (only `isPasswordProtected` is), and is carried separately so it is not
+ * held in memory for the lifetime of the editing session.
+ */
+export interface FormSettings {
+  /** Public URL segment: /f/{slug}. Unique across the whole platform. */
+  slug: string;
+  layoutMode: FormLayoutMode;
+  /** Respondent must be a signed-in user. */
+  requireAuth: boolean;
+  /** When false, one response per respondent fingerprint. */
+  allowMultiple: boolean;
+  /** Form auto-closes after this many responses. null = unlimited. */
+  maxSubmissions: number | null;
+  /** ISO datetime after which responses are rejected. null = never. */
+  expiresAt: string | null;
+  isPasswordProtected: boolean;
+  /** Addresses notified on each new response. */
+  notifyEmails: string[];
+}
+
 /**
  * The form as the builder and runner work with it.
  *
@@ -179,7 +211,8 @@ export interface Form {
   pagesJson: FormPage[];
   questionsJson: FormQuestion[];
   logicJson: LogicRule[];
-  notifyEmails: string | null;
+  /** JSONB array column. Was typed `string | null`, which it never is. */
+  notifyEmails: string[] | null;
   deletedAt: string | null;
   createdAt: string;
   updatedAt: string;

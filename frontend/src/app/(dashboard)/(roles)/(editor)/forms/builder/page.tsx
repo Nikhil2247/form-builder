@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import {
   DndContext,
@@ -42,6 +42,7 @@ import {
   UploadCloud,
 } from 'lucide-react';
 import { toast } from 'sonner';
+import { AlertTriangle, RefreshCw } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
@@ -60,17 +61,21 @@ import { EnterpriseNavbar } from '@/components/builder/EnterpriseNavbar';
 import { LeftTreePanel } from '@/components/builder/LeftTreePanel';
 import { EnterpriseFieldCard } from '@/components/builder/EnterpriseFieldCard';
 import { FormRunner } from '@/components/builder/FormRunner';
-import { ThemeCustomizer } from '@/components/builder/ThemeCustomizer';
+import { FormThemeScope } from '@/components/builder/FormThemeScope';
 import { LogicBuilder } from '@/components/builder/LogicBuilder';
+import { FormSettingsPanel } from '@/components/builder/FormSettingsPanel';
 import { fetchApi, unwrap } from '@/lib/api';
 import { useOrgId } from '@/hooks/use-auth';
+import { useFormAutosave } from '@/hooks/use-form-autosave';
 import {
   selectFormConfig,
   useBuilderMeta,
   useBuilderStore,
+  useFormConfigAdapter,
+  useFormSnapshot,
   useQuestionOrder,
 } from '@/store/builder-store';
-import type { FormConfig, QuestionType } from '@/types/form';
+import type { FormConfig, FormLayoutMode, QuestionType } from '@/types/form';
 
 const COMMAND_ITEMS: { type: QuestionType; label: string; keywords: string; icon: React.ElementType }[] =
   [
@@ -93,9 +98,6 @@ const COMMAND_ITEMS: { type: QuestionType; label: string; keywords: string; icon
     { type: 'SECTION_HEADER', label: 'Section header', keywords: 'section header banner title', icon: HeadingIcon },
   ];
 
-/** Draft is written this long after the last edit. */
-const AUTOSAVE_DELAY_MS = 1500;
-
 function FormBuilderInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -113,18 +115,14 @@ function FormBuilderInner() {
   const addQuestion = useBuilderStore((s) => s.addQuestion);
   const moveQuestion = useBuilderStore((s) => s.moveQuestion);
   const addPage = useBuilderStore((s) => s.addPage);
-  const selectQuestion = useBuilderStore((s) => s.selectQuestion);
   const setActiveView = useBuilderStore((s) => s.setActiveView);
-  const markSaved = useBuilderStore((s) => s.markSaved);
   const markPublished = useBuilderStore((s) => s.markPublished);
 
   const [isPreviewOpen, setIsPreviewOpen] = useState(false);
-  const [isThemeOpen, setIsThemeOpen] = useState(false);
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isPaletteOpen, setIsPaletteOpen] = useState(false);
   const [isLeftPanelOpen, setIsLeftPanelOpen] = useState(false);
-  const [isSaving, setIsSaving] = useState(false);
   const [isPublishing, setIsPublishing] = useState(false);
-  const [lastSavedAt, setLastSavedAt] = useState<Date | null>(null);
   const [draggingId, setDraggingId] = useState<string | null>(null);
 
   // `formId` lives in a ref as well as the URL because autosave fires from a
@@ -144,6 +142,16 @@ function FormBuilderInner() {
       }
       if (!orgId) return;
 
+      // The first autosave of a new form creates it and rewrites the URL to
+      // carry the new id. That changes `routeFormId`, which re-runs this
+      // effect — and re-fetching would overwrite the live editor with the
+      // server's copy, discarding everything typed since that request left and
+      // yanking the cursor out of whatever field it was in. We already hold
+      // this exact form; there is nothing to load.
+      if (formIdRef.current === routeFormId && useBuilderStore.getState().id === routeFormId) {
+        return;
+      }
+
       setLoading(true);
       try {
         const data = unwrap<any>(await fetchApi(`/organizations/${orgId}/forms/${routeFormId}`));
@@ -162,18 +170,33 @@ function FormBuilderInner() {
             pages: form.pagesJson ?? [],
             questions: form.questionsJson ?? [],
             logic: form.logicJson ?? [],
+            slug: form.slug ?? undefined,
             createdAt: form.createdAt,
             updatedAt: form.updatedAt,
           } as FormConfig,
           {
             status: form.status ?? 'DRAFT',
-            slug: form.slug ?? null,
+            updatedAt: form.updatedAt ?? null,
             // The draft columns are written on save, a FormVersion only on
             // publish. A newer updatedAt means the live version is stale.
             hasUnpublishedChanges:
               form.status === 'PUBLISHED' &&
               !!lastPublishedAt &&
               new Date(form.updatedAt).getTime() > new Date(lastPublishedAt).getTime(),
+            settings: {
+              slug: form.slug ?? '',
+              layoutMode: (form.layoutMode ?? 'DOCUMENT') as FormLayoutMode,
+              requireAuth: !!form.requireAuth,
+              // The column defaults to true, so `?? true` rather than `!!` —
+              // a missing field must not silently switch duplicate blocking on.
+              allowMultiple: form.allowMultiple ?? true,
+              maxSubmissions: form.maxSubmissions ?? null,
+              expiresAt: form.expiresAt ?? null,
+              isPasswordProtected: !!form.isPasswordProtected,
+              notifyEmails: Array.isArray(form.notifyEmails)
+                ? form.notifyEmails.filter((e: unknown): e is string => typeof e === 'string')
+                : [],
+            },
           },
         );
         formIdRef.current = form.id;
@@ -194,75 +217,31 @@ function FormBuilderInner() {
   // a different form briefly rendered the old one's questions.
   useEffect(() => () => reset(), [reset]);
 
-  // ── Save ──────────────────────────────────────────────────────────────────
-  const save = useCallback(
-    async (opts: { silent?: boolean } = {}): Promise<string | null> => {
-      if (!orgId) return null;
-
-      const form = selectFormConfig(useBuilderStore.getState());
-      const body = JSON.stringify({
-        title: form.title,
-        description: form.description,
-        isQuizMode: form.isQuizMode,
-        themeConfig: form.theme,
-        pages: form.pages,
-        questions: form.questions,
-        logic: form.logic,
-      });
-
-      setIsSaving(true);
-      try {
-        let id = formIdRef.current;
-
-        if (id) {
-          await fetchApi(`/organizations/${orgId}/forms/${id}`, { method: 'PUT', body });
-        } else {
-          const created = unwrap<any>(
-            await fetchApi(`/organizations/${orgId}/forms`, { method: 'POST', body }),
-          );
-          const form = created?.form ?? created;
-          id = form.id;
-          formIdRef.current = id;
-          // `replace`, not `push` — the empty-builder URL is not somewhere the
-          // back button should return to.
-          router.replace(`/forms/builder?id=${id}`);
-        }
-
-        markSaved();
-        setLastSavedAt(new Date());
-        if (!opts.silent) toast.success('Draft saved');
-        return id;
-      } catch (error: any) {
-        toast.error(error?.message ?? 'Could not save this form');
-        return null;
-      } finally {
-        setIsSaving(false);
-      }
-    },
-    [orgId, router, markSaved],
-  );
-
   // ── Autosave ──────────────────────────────────────────────────────────────
-  // Subscribes outside React so an edit does not re-render the page component
-  // just to reschedule a timer.
-  useEffect(() => {
-    let timer: ReturnType<typeof setTimeout> | undefined;
+  // The whole save path — debounce, coalescing, retry, offline, conflict and
+  // flush-on-exit — lives in the hook. This component only supplies the id and
+  // reacts to the resulting status.
+  const autosave = useFormAutosave({
+    orgId,
+    formIdRef,
+    enabled: !meta.isLoading,
+    onCreated: useCallback(
+      (id: string) => {
+        // `replace`, not `push` — the empty-builder URL is not somewhere the
+        // back button should return to.
+        router.replace(`/forms/builder?id=${id}`);
+      },
+      [router],
+    ),
+  });
 
-    const unsubscribe = useBuilderStore.subscribe((state, previous) => {
-      if (state.revision === previous.revision) return;
-      // Only autosave forms that already exist; creating one implicitly on the
-      // first keystroke would litter the list with abandoned drafts.
-      if (!formIdRef.current || !state.isDirty) return;
+  const { saveNow, status: saveStatus } = autosave;
 
-      clearTimeout(timer);
-      timer = setTimeout(() => void save({ silent: true }), AUTOSAVE_DELAY_MS);
-    });
-
-    return () => {
-      clearTimeout(timer);
-      unsubscribe();
-    };
-  }, [save]);
+  const saveManually = useCallback(async () => {
+    const id = await saveNow();
+    if (id) toast.success('Draft saved');
+    return id;
+  }, [saveNow]);
 
   // ── Publish ───────────────────────────────────────────────────────────────
   const publish = useCallback(async () => {
@@ -275,8 +254,13 @@ function FormBuilderInner() {
     setIsPublishing(true);
     try {
       // Persist first so the published snapshot matches what is on screen.
-      const id = await save({ silent: true });
-      if (!id) return;
+      // `saveNow` returns the existing id unchanged when there is nothing
+      // pending, so a republish with no edits still works.
+      const id = await saveNow({ silent: true });
+      if (!id) {
+        toast.error('Your latest changes could not be saved, so nothing was published.');
+        return;
+      }
 
       const form = selectFormConfig(useBuilderStore.getState());
       await fetchApi(`/organizations/${orgId}/forms/${id}/publish`, {
@@ -297,18 +281,26 @@ function FormBuilderInner() {
     } finally {
       setIsPublishing(false);
     }
-  }, [orgId, save, markPublished]);
+  }, [orgId, saveNow, markPublished]);
 
   // ── Unsaved-changes guard ─────────────────────────────────────────────────
+  // Autosave already flushes on `pagehide`, so this is the narrow case that
+  // flush cannot cover: work that is still queued *and* the last attempt to
+  // write it failed. Prompting whenever `isDirty` was true — as this used to —
+  // meant a confirm dialog during the ordinary 1.2s debounce, on a form that
+  // was about to save itself perfectly well.
   useEffect(() => {
-    if (!meta.isDirty) return;
+    const atRisk =
+      saveStatus === 'error' || saveStatus === 'conflict' || saveStatus === 'offline';
+    if (!atRisk) return;
+
     const handler = (e: BeforeUnloadEvent) => {
       e.preventDefault();
       e.returnValue = '';
     };
     window.addEventListener('beforeunload', handler);
     return () => window.removeEventListener('beforeunload', handler);
-  }, [meta.isDirty]);
+  }, [saveStatus]);
 
   // ── Keyboard ──────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -327,7 +319,7 @@ function FormBuilderInner() {
       // Cmd/Ctrl+S works from anywhere, including inside a field.
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 's') {
         e.preventDefault();
-        void save();
+        void saveManually();
         return;
       }
       if (isTypingTarget(e.target)) return;
@@ -340,7 +332,7 @@ function FormBuilderInner() {
 
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [save]);
+  }, [saveManually]);
 
   // ── Drag and drop ─────────────────────────────────────────────────────────
   const sensors = useSensors(
@@ -366,26 +358,6 @@ function FormBuilderInner() {
     setDraggingId(String(event.active.id));
   }, []);
 
-  // ── Adapters for the panels that still take (form, setForm) ───────────────
-  const formSnapshot = useMemo(
-    () => selectFormConfig(useBuilderStore.getState()),
-    // Recomputed whenever the document changes; these panels are not on the
-    // typing hot path, so a whole-document snapshot is fine here.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [meta.isDirty, meta.activeView, isThemeOpen, isPreviewOpen, order.length],
-  );
-
-  const setFormAdapter = useCallback<React.Dispatch<React.SetStateAction<FormConfig>>>((action) => {
-    const state = useBuilderStore.getState();
-    const current = selectFormConfig(state);
-    const next = typeof action === 'function' ? action(current) : action;
-
-    if (next.theme !== current.theme) state.setTheme(next.theme);
-    if (next.logic !== current.logic) state.setLogic(next.logic);
-    if (next.title !== current.title) state.setTitle(next.title);
-    if (next.description !== current.description) state.setDescription(next.description);
-  }, []);
-
   if (meta.isLoading) {
     return (
       <div className="flex h-screen items-center justify-center gap-3 bg-background" role="status">
@@ -401,19 +373,40 @@ function FormBuilderInner() {
         formTitle={meta.title}
         onTitleChange={setTitle}
         onPreview={() => setIsPreviewOpen(true)}
-        onOpenTheme={() => setIsThemeOpen(true)}
-        onOpenLogic={() => setActiveView(meta.activeView === 'LOGIC' ? 'BUILDER' : 'LOGIC')}
-        hasUnsavedChanges={meta.isDirty}
-        onSaveChanges={() => void save()}
+        onOpenSettings={() => setIsSettingsOpen(true)}
+        activeView={meta.activeView}
+        onChangeView={setActiveView}
+        logicRuleCount={meta.logicRuleCount}
+        onSaveChanges={() => void saveManually()}
         onToggleLeftPanel={() => setIsLeftPanelOpen(true)}
         onPublish={() => void publish()}
         isPublishing={isPublishing}
-        isSaving={isSaving}
+        saveStatus={autosave.status}
+        saveError={autosave.errorMessage}
         status={meta.status}
         hasUnpublishedChanges={meta.hasUnpublishedChanges}
         publicUrl={meta.slug ? `/f/${meta.slug}` : null}
-        lastSavedAt={lastSavedAt}
+        lastSavedAt={autosave.lastSavedAt}
       />
+
+      {/* A conflict stops autosave dead: another session owns the newer copy,
+          and writing over it would destroy their work silently. */}
+      {autosave.status === 'conflict' && (
+        <div
+          role="alert"
+          className="flex flex-wrap items-center gap-3 border-b border-destructive/30 bg-destructive/10 px-4 py-2.5 text-sm"
+        >
+          <AlertTriangle className="size-4 shrink-0 text-destructive" />
+          <span className="flex-1 text-destructive">
+            {autosave.errorMessage ??
+              'This form was changed somewhere else. Your recent edits have not been saved.'}
+          </span>
+          <Button size="sm" variant="outline" onClick={autosave.reloadFromServer} className="gap-1.5">
+            <RefreshCw className="size-3.5" />
+            Reload the latest version
+          </Button>
+        </div>
+      )}
 
       <div className="relative flex flex-1 overflow-hidden">
         {isLeftPanelOpen && (
@@ -441,7 +434,7 @@ function FormBuilderInner() {
 
         <main id="main-content" className="relative flex-1 overflow-y-auto bg-muted/25">
           {meta.activeView === 'LOGIC' ? (
-            <LogicBuilder form={formSnapshot} setForm={setFormAdapter} />
+            <LogicBuilderPanel />
           ) : (
             <div className="mx-auto max-w-3xl space-y-5 p-4 pb-24 sm:p-6 lg:p-8">
               <Card className="space-y-3 p-5">
@@ -525,30 +518,26 @@ function FormBuilderInner() {
         title="Preview"
         description="Interactive preview — nothing submitted here is saved."
       >
-        {isPreviewOpen && (
-          <FormRunner
-            form={formSnapshot}
-            onSubmitResponse={() => {
-              toast.success('Preview submission — no data was stored.');
-            }}
-          />
-        )}
+        {isPreviewOpen && <PreviewPanel />}
       </Modal>
 
-      {/* ── Theme ───────────────────────────────────────────────────────── */}
+      {/* ── Settings ────────────────────────────────────────────────────── */}
+      {/* `md` (32rem), not the previous `xl` (56rem). The tabs are a column of
+          label/control rows, not a dashboard — at 56rem every row was a short
+          label stranded beside a control against the far edge. */}
       <Modal
-        open={isThemeOpen}
-        onOpenChange={setIsThemeOpen}
-        size="lg"
-        title="Theme and styling"
-        description="Applies to the public form your respondents see."
+        open={isSettingsOpen}
+        onOpenChange={setIsSettingsOpen}
+        size="md"
+        title="Form settings"
+        description="Design, access, limits and notifications. Saved automatically."
         footer={
-          <Button size="sm" onClick={() => setIsThemeOpen(false)}>
+          <Button size="sm" onClick={() => setIsSettingsOpen(false)}>
             Done
           </Button>
         }
       >
-        {isThemeOpen && <ThemeCustomizer form={formSnapshot} setForm={setFormAdapter} />}
+        {isSettingsOpen && <FormSettingsPanel />}
       </Modal>
 
       {/* ── Field palette ───────────────────────────────────────────────── */}
@@ -588,6 +577,65 @@ function FormBuilderInner() {
         </CommandList>
       </CommandDialog>
     </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Panels
+//
+// Each of these subscribes to the whole document itself rather than receiving
+// it as a prop from the page.
+//
+// That is deliberate. The page used to build the snapshot with:
+//
+//   useMemo(() => selectFormConfig(store.getState()),
+//           [meta.isDirty, meta.activeView, isThemeOpen, isPreviewOpen, order.length])
+//
+// `isDirty` flips false → true on the first edit of a session and then stays
+// true until an autosave completes, so after that first edit none of the deps
+// moved for a theme tweak or a logic-rule change. The panels kept re-rendering
+// the *original* snapshot: adding a logic rule appeared to do nothing at all,
+// and colour changes only showed up when an autosave happened to reset
+// `isDirty` and unstick the memo.
+//
+// `useFormSnapshot` is memoised on the store's monotonic `revision`, so it is
+// correct by construction. Keeping it inside these small components (mounted
+// only while their panel is open) means the canvas and the page component are
+// still not re-rendered by it.
+// ─────────────────────────────────────────────────────────────────────────────
+
+function LogicBuilderPanel() {
+  const form = useFormSnapshot();
+  const setForm = useFormConfigAdapter();
+  return <LogicBuilder form={form} setForm={setForm} />;
+}
+
+/**
+ * The preview is themed, because the point of a preview is to show what the
+ * respondent gets. It renders inside a dialog, so the scope must not paint its
+ * own page background over the dialog's surface.
+ */
+function PreviewPanel() {
+  const form = useFormSnapshot();
+  const layoutMode = useBuilderStore((s) => s.settings.layoutMode);
+
+  return (
+    <FormThemeScope
+      theme={form.theme}
+      paintBackground={false}
+      className="rounded-lg p-4"
+      // Painted here rather than by the scope so the dialog's own padding and
+      // radius stay visible around it.
+      style={{ backgroundColor: form.theme?.backgroundColor }}
+    >
+      <FormRunner
+        form={form}
+        layoutMode={layoutMode === 'PORTAL' ? 'DOCUMENT' : layoutMode}
+        onSubmitResponse={() => {
+          toast.success('Preview submission — no data was stored.');
+        }}
+      />
+    </FormThemeScope>
   );
 }
 

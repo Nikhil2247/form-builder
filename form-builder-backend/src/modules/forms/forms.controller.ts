@@ -111,8 +111,10 @@ export class FormsController {
     @OrgId() orgId: string,
     @Param('formId') formId: string,
     @Body() dto: UpdateFormDto,
+    @Req() req: Request,
   ) {
-    return this.formsService.updateForm(orgId, formId, dto);
+    const userId = (req.user as any).sub;
+    return this.formsService.updateForm(orgId, formId, dto, userId);
   }
 
   @Delete(':formId')

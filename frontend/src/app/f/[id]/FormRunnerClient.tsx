@@ -2,11 +2,15 @@
 
 import React, { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { FormRunner } from '@/components/builder/FormRunner';
-import { FormConfig } from '@/types/form';
+import { FormRunner, type RunnerLayoutMode } from '@/components/builder/FormRunner';
+import { FormThemeScope, cardVariantClass } from '@/components/builder/FormThemeScope';
+import { FormConfig, FormTheme } from '@/types/form';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useSearchParams } from 'next/navigation';
 import { API_BASE_URL } from '@/lib/config';
+import { cn } from '@/lib/utils';
+import { LogIn } from 'lucide-react';
+import { formFontVariables } from './fonts';
 
 /**
  * Single source of truth for the API origin.
@@ -143,13 +147,60 @@ export function FormRunnerClient({ slug, initialData }: { slug: string, initialD
     theme: actualFormConfig.theme ?? legacyVersion?.themeJson ?? actualFormConfig.themeConfig ?? {},
   };
 
+  const theme: FormTheme = parsedForm.theme ?? {};
+
+  // PORTAL has no renderer; anything unrecognised falls back to the plain
+  // document layout rather than rendering nothing.
+  const layoutMode: RunnerLayoutMode = (['DOCUMENT', 'CONVERSATIONAL', 'GRID'] as const).includes(
+    actualFormConfig.layoutMode,
+  )
+    ? actualFormConfig.layoutMode
+    : 'DOCUMENT';
+
+  const orgLogo = theme.logoUrl || actualFormConfig.organization?.logoUrl || null;
+
   return (
-    <div className="animate-in fade-in slide-in-from-bottom-4 duration-500 max-w-3xl mx-auto p-4 sm:p-8">
-      <FormRunner 
-        form={parsedForm as any} 
-        initialAnswers={prefilledAnswers} 
+    <FormThemeScope
+      theme={theme}
+      className={cn('min-h-screen', formFontVariables)}
+    >
+      <div className="animate-in fade-in slide-in-from-bottom-4 duration-500 mx-auto w-full max-w-3xl px-4 py-8 sm:px-6 sm:py-12">
+      {/* `requireAuth` is enforced at ingest: the API rejects a submission with
+          no user attached. Saying so up front beats letting someone fill in
+          twenty questions and then bounce off a 403 they cannot act on. */}
+      {actualFormConfig.requireAuth && (
+        <div
+          role="status"
+          className="mb-6 flex flex-wrap items-center gap-3 rounded-[var(--radius)] border border-border bg-card p-4 text-sm"
+        >
+          <LogIn className="size-4 shrink-0 text-muted-foreground" />
+          <span className="flex-1 text-muted-foreground">
+            This form only accepts responses from signed-in users.
+          </span>
+          <a
+            href={`/login?next=${encodeURIComponent(`/f/${slug}`)}`}
+            className="font-semibold text-primary underline underline-offset-4"
+          >
+            Sign in
+          </a>
+        </div>
+      )}
+
+      <FormRunner
+        form={parsedForm as any}
+        initialAnswers={prefilledAnswers}
         onProgressSave={handleProgressSave}
-        layoutMode={actualFormConfig.layoutMode || 'DOCUMENT'}
+        layoutMode={layoutMode}
+        requiresPassword={!!actualFormConfig.isPasswordProtected}
+        header={
+          <FormHeader
+            title={parsedForm.title}
+            description={parsedForm.description}
+            coverImageUrl={theme.coverImageUrl}
+            logoUrl={orgLogo}
+            cardVariant={theme.cardVariant}
+          />
+        }
         onSubmitResponse={async (submission) => {
           const res = await fetch(`${API_BASE_URL}/forms/${actualFormConfig.id}/submit`, {
             method: 'POST',
@@ -193,6 +244,67 @@ export function FormRunnerClient({ slug, initialData }: { slug: string, initialD
           }
         }}
       />
+      </div>
+    </FormThemeScope>
+  );
+}
+
+/**
+ * The form's masthead.
+ *
+ * `coverImageUrl` and `logoUrl` were editable in the theme panel, saved,
+ * published and returned by the public endpoint — and never rendered anywhere,
+ * so setting a cover image did nothing at all.
+ */
+function FormHeader({
+  title,
+  description,
+  coverImageUrl,
+  logoUrl,
+  cardVariant,
+}: {
+  title: string;
+  description?: string;
+  coverImageUrl?: string;
+  logoUrl?: string | null;
+  cardVariant?: FormTheme['cardVariant'];
+}) {
+  return (
+    <div
+      className={cn(
+        'overflow-hidden rounded-[var(--radius)] bg-card',
+        cardVariantClass(cardVariant),
+      )}
+    >
+      {coverImageUrl && (
+        // A plain <img>, not next/image: the URL is author-supplied and can
+        // point at any host, which the image optimiser refuses to load unless
+        // that host is in next.config's allowlist.
+        // eslint-disable-next-line @next/next/no-img-element
+        <img
+          src={coverImageUrl}
+          alt=""
+          className="h-40 w-full object-cover sm:h-52"
+          loading="eager"
+        />
+      )}
+
+      <div className={cn('space-y-2 p-6', logoUrl && 'pt-0')}>
+        {logoUrl && (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            src={logoUrl}
+            alt=""
+            className={cn(
+              'h-12 w-auto object-contain',
+              // Overlaps the cover, the way a brand mark normally sits.
+              coverImageUrl ? '-mt-9 rounded-lg bg-card p-1.5 shadow-sm' : 'mt-6',
+            )}
+          />
+        )}
+        <h1 className="text-2xl font-bold text-foreground">{title}</h1>
+        {description && <p className="text-sm text-muted-foreground">{description}</p>}
+      </div>
     </div>
   );
 }

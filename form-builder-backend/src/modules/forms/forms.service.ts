@@ -4,6 +4,7 @@ import {
   NotFoundException,
   ForbiddenException,
   BadRequestException,
+  ConflictException,
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../common/prisma/prisma.service';
@@ -25,6 +26,11 @@ import {
   formDetailSelect,
   submissionGridSelect,
 } from '../../common/prisma/selects';
+import {
+  normalizeFormStructure,
+  normalizeNotifyEmails,
+  normalizeTheme,
+} from './form-structure';
 
 /**
  * Escape a value for CSV, defending against CSV injection.
@@ -77,6 +83,14 @@ export class FormsService {
       });
     }
 
+    // Repaired and bounded before it ever reaches JSONB. See form-structure.ts
+    // for why this is not a nested DTO.
+    const structure = normalizeFormStructure({
+      pages: dto.pages,
+      questions: dto.questions,
+      logic: dto.logic,
+    });
+
     const form = await this.prisma.writer.form.create({
       data: {
         organizationId: orgId,
@@ -89,16 +103,17 @@ export class FormsService {
         passwordHash,
         requireAuth: dto.requireAuth,
         allowMultiple: dto.allowMultiple,
-        maxSubmissions: dto.maxSubmissions,
+        maxSubmissions: dto.maxSubmissions ?? null,
         expiresAt: dto.expiresAt ? new Date(dto.expiresAt) : null,
-        themeConfig: dto.themeConfig || {},
-        notifyEmails: dto.notifyEmails || [],
-        pagesJson: dto.pages || [],
-        questionsJson: dto.questions || [],
-        logicJson: dto.logic || [],
+        themeConfig: normalizeTheme(dto.themeConfig),
+        notifyEmails: normalizeNotifyEmails(dto.notifyEmails),
+        pagesJson: structure.pages,
+        questionsJson: structure.questions,
+        logicJson: structure.logic,
         layoutMode: dto.layoutMode || 'DOCUMENT',
         status: 'DRAFT',
       },
+      select: formDetailSelect,
     });
 
     // Audit log
@@ -308,16 +323,19 @@ Respond ONLY with a valid JSON object matching this structure:
   async getFormById(orgId: string, formId: string) {
     const form = await this.prisma.reader.form.findFirst({
       where: { id: formId, organizationId: orgId, deletedAt: null },
-      include: {
+      // An explicit select, not `include`. `include` returns every scalar on
+      // the model — which on Form means `passwordHash`, the argon2 hash of the
+      // form's access password, handed to anyone with VIEWER on the org and to
+      // anything that could read the response. `formDetailSelect` is the
+      // reviewed field list; the version stub is added for the builder, which
+      // needs the last publish timestamp to tell whether the live form is
+      // behind the draft.
+      select: {
+        ...formDetailSelect,
         versions: {
-          orderBy: { version: 'desc' },
+          orderBy: { version: 'desc' as const },
           take: 1,
-        },
-        createdBy: {
-          select: { id: true, firstName: true, lastName: true, email: true },
-        },
-        _count: {
-          select: { submissions: true },
+          select: { id: true, version: true, publishedAt: true },
         },
       },
     });
@@ -328,15 +346,53 @@ Respond ONLY with a valid JSON object matching this structure:
 
   /**
    * Update form fields within an organization.
+   *
+   * This is the builder's autosave endpoint: it runs every couple of seconds
+   * while someone is editing, with the entire form definition in the body.
+   * Three things follow from that, and all three were previously wrong.
+   *
+   * 1. `undefined` and `null` are different instructions. A key the client did
+   *    not send means "leave this alone"; a key sent as `null` means "clear
+   *    it". The old implementation assigned `expiresAt: dto.expiresAt ? new
+   *    Date(...) : null` unconditionally, so every single autosave from the
+   *    builder — which never sent `expiresAt` — wiped the form's closing date.
+   *    Setting a form to close on Friday and then editing a question label
+   *    quietly reopened it forever.
+   *
+   * 2. Concurrent editors must not silently overwrite each other. See
+   *    `expectedUpdatedAt` on UpdateFormDto.
+   *
+   * 3. Whatever lands in the JSON columns becomes the schema that grades and
+   *    stores every future response, so it is normalised first rather than
+   *    written through verbatim.
    */
-  async updateForm(orgId: string, formId: string, dto: UpdateFormDto) {
+  async updateForm(orgId: string, formId: string, dto: UpdateFormDto, userId?: string) {
     const form = await this.prisma.reader.form.findFirst({
       where: { id: formId, organizationId: orgId, deletedAt: null },
     });
     if (!form) throw new NotFoundException('Form not found');
 
+    // ── Optimistic concurrency ───────────────────────────────────────────────
+    // Second-resolution comparison: `updatedAt` round-trips through JSON as an
+    // ISO string, and Postgres timestamps carry microseconds that do not
+    // survive it. Comparing exact epoch milliseconds would 409 on every save.
+    if (dto.expectedUpdatedAt) {
+      const expected = new Date(dto.expectedUpdatedAt).getTime();
+      const actual = form.updatedAt.getTime();
+      if (Number.isFinite(expected) && Math.abs(actual - expected) > 1_000) {
+        throw new ConflictException(
+          'This form was changed somewhere else after you opened it. ' +
+            'Reload to get the latest version — saving now would overwrite those changes.',
+        );
+      }
+    }
+
+    // ── Password ─────────────────────────────────────────────────────────────
+    // Turning protection off must actually drop the hash. Leaving it behind
+    // meant re-enabling the toggle silently restored a password nobody
+    // remembered setting, and the form became unopenable.
     let passwordHash = form.passwordHash;
-    if (dto.isPasswordProtected && dto.password) {
+    if (dto.password) {
       passwordHash = await argon2.hash(dto.password, {
         type: argon2.argon2id,
         timeCost: 3,
@@ -344,33 +400,142 @@ Respond ONLY with a valid JSON object matching this structure:
         parallelism: 4,
       });
     }
+    if (dto.isPasswordProtected === false) {
+      passwordHash = null;
+    }
 
-    const updated = await this.prisma.writer.form.update({
-      where: { id: formId },
-      data: {
-        title: dto.title,
-        description: dto.description,
-        slug: dto.slug,
-        isQuizMode: dto.isQuizMode,
-        isPasswordProtected: dto.isPasswordProtected,
-        passwordHash,
-        requireAuth: dto.requireAuth,
-        allowMultiple: dto.allowMultiple,
-        maxSubmissions: dto.maxSubmissions,
+    // Protection cannot be on without a password to check — the public form
+    // would demand one that nothing could ever satisfy. Rather than reject the
+    // save (this arrives from autosave the instant the toggle is flipped, well
+    // before the author has typed anything) the flag is simply held back until
+    // a password exists. The settings panel says as much next to the field.
+    const isPasswordProtected =
+      dto.isPasswordProtected === undefined
+        ? undefined
+        : dto.isPasswordProtected && !!passwordHash;
+
+    // ── Structure ────────────────────────────────────────────────────────────
+    // Cross-part checks run against the definition that will exist *after* this
+    // write, so the currently persisted parts are supplied for anything the
+    // client left out.
+    const touchesStructure =
+      dto.pages !== undefined || dto.questions !== undefined || dto.logic !== undefined;
+
+    const structure = touchesStructure
+      ? normalizeFormStructure(
+          { pages: dto.pages, questions: dto.questions, logic: dto.logic },
+          {
+            pages: form.pagesJson,
+            questions: form.questionsJson,
+            logic: form.logicJson,
+          },
+        )
+      : null;
+
+    const data: Prisma.FormUpdateInput = {
+      ...(dto.title !== undefined && { title: dto.title }),
+      ...(dto.description !== undefined && { description: dto.description }),
+      ...(dto.slug !== undefined && { slug: dto.slug }),
+      ...(dto.isQuizMode !== undefined && { isQuizMode: dto.isQuizMode }),
+      ...(isPasswordProtected !== undefined && { isPasswordProtected }),
+      ...(passwordHash !== form.passwordHash && { passwordHash }),
+      ...(dto.requireAuth !== undefined && { requireAuth: dto.requireAuth }),
+      ...(dto.allowMultiple !== undefined && { allowMultiple: dto.allowMultiple }),
+      ...(dto.maxSubmissions !== undefined && { maxSubmissions: dto.maxSubmissions ?? null }),
+      ...(dto.expiresAt !== undefined && {
         expiresAt: dto.expiresAt ? new Date(dto.expiresAt) : null,
-        themeConfig: dto.themeConfig,
-        notifyEmails: dto.notifyEmails,
-        pagesJson: dto.pages,
-        questionsJson: dto.questions,
-        logicJson: dto.logic,
-        ...(dto.layoutMode && { layoutMode: dto.layoutMode }),
-      },
-    });
+      }),
+      ...(dto.themeConfig !== undefined && { themeConfig: normalizeTheme(dto.themeConfig) }),
+      ...(dto.notifyEmails !== undefined && {
+        notifyEmails: normalizeNotifyEmails(dto.notifyEmails),
+      }),
+      ...(structure && {
+        pagesJson: structure.pages,
+        questionsJson: structure.questions,
+        logicJson: structure.logic,
+      }),
+      ...(dto.layoutMode !== undefined && { layoutMode: dto.layoutMode }),
+    };
+
+    let updated;
+    try {
+      if (dto.expectedUpdatedAt) {
+        // The check above compares against a value read a moment ago, which
+        // leaves a window for another writer to land in between. Making the
+        // write itself conditional on the row still carrying the `updatedAt` we
+        // read closes it: whoever gets there second matches zero rows.
+        //
+        // The condition uses the *server's* Date, not the client's ISO string,
+        // so the microsecond truncation that forces the coarse comparison above
+        // is not a problem here.
+        const { count } = await this.prisma.writer.form.updateMany({
+          where: { id: formId, updatedAt: form.updatedAt },
+          data,
+        });
+
+        if (count === 0) {
+          throw new ConflictException(
+            'This form was changed somewhere else while you were saving. ' +
+              'Reload to get the latest version.',
+          );
+        }
+
+        updated = await this.prisma.writer.form.findUniqueOrThrow({
+          where: { id: formId },
+          select: formDetailSelect,
+        });
+      } else {
+        // Selected, not returned wholesale — the default payload carries
+        // `passwordHash`, and this response goes back to the browser on every
+        // autosave. See getFormById.
+        updated = await this.prisma.writer.form.update({
+          where: { id: formId },
+          data,
+          select: formDetailSelect,
+        });
+      }
+    } catch (err: any) {
+      // The slug is unique across the whole platform, so a clash here is a
+      // user-correctable input error, not a server fault.
+      if (err?.code === 'P2002') {
+        throw new ConflictException('That public link is already taken. Try a different one.');
+      }
+      throw err;
+    }
 
     // Invalidate under BOTH the old and new slug — a slug change would
     // otherwise leave the form reachable at its previous public URL.
     await this.invalidatePublicFormCache(form.slug, updated.slug);
     await this.invalidateIngestPolicy(formId);
+
+    // Autosave fires every couple of seconds, so this logs on *changed values*,
+    // not on the presence of a key — the builder sends every settings field on
+    // every write, and keying off presence would bury the audit trail under a
+    // record per keystroke. Only access and availability are tracked; those are
+    // the ones anyone ever needs to reconstruct after the fact.
+    const changedSettings = (
+      [
+        ['slug', form.slug, updated.slug],
+        ['isPasswordProtected', form.isPasswordProtected, updated.isPasswordProtected],
+        ['requireAuth', form.requireAuth, updated.requireAuth],
+        ['allowMultiple', form.allowMultiple, updated.allowMultiple],
+        ['maxSubmissions', form.maxSubmissions, updated.maxSubmissions],
+        ['expiresAt', form.expiresAt?.getTime() ?? null, updated.expiresAt?.getTime() ?? null],
+      ] as const
+    )
+      .filter(([, before, after]) => before !== after)
+      .map(([key]) => key);
+
+    if (changedSettings.length > 0) {
+      this.audit.log({
+        organizationId: orgId,
+        userId,
+        action: 'form.settings_updated',
+        resource: 'form',
+        resourceId: formId,
+        metadata: { formTitle: updated.title, changed: changedSettings },
+      });
+    }
 
     return updated;
   }
@@ -472,8 +637,20 @@ Respond ONLY with a valid JSON object matching this structure:
           });
           if (!form) throw new NotFoundException('Form not found');
 
-          const questions = questionsJson ?? form.questionsJson ?? [];
-          if (!Array.isArray(questions) || questions.length === 0) {
+          // A FormVersion is immutable and is the schema every response is
+          // graded against forever, so it gets the same normalisation the draft
+          // does — a snapshot is the worst possible place to discover a
+          // duplicate question id or a dangling logic rule.
+          const structure = normalizeFormStructure(
+            { pages: pagesJson, questions: questionsJson, logic: logicJson },
+            {
+              pages: form.pagesJson,
+              questions: form.questionsJson,
+              logic: form.logicJson,
+            },
+          );
+
+          if (structure.questions.length === 0) {
             throw new BadRequestException(
               'Cannot publish a form with no questions. Add at least one field first.',
             );
@@ -491,10 +668,10 @@ Respond ONLY with a valid JSON object matching this structure:
             data: {
               formId,
               version: nextVersion,
-              pagesJson: pagesJson ?? form.pagesJson ?? [],
-              questionsJson: questions,
-              logicJson: logicJson ?? form.logicJson ?? [],
-              themeJson: themeJson ?? form.themeConfig ?? {},
+              pagesJson: structure.pages,
+              questionsJson: structure.questions,
+              logicJson: structure.logic,
+              themeJson: themeJson ? normalizeTheme(themeJson) : (form.themeConfig ?? {}),
             },
           });
 
@@ -753,7 +930,19 @@ Respond ONLY with a valid JSON object matching this structure:
       },
     });
 
-    if (!form || form.status !== 'PUBLISHED' || form.versions.length === 0) {
+    if (!form || form.versions.length === 0) {
+      throw new NotFoundException('Form not found or not published');
+    }
+
+    // CLOSED is not "missing". A form reaches it by hitting its own response
+    // cap or by the author closing it — both of which mean the link was right
+    // and the respondent simply arrived too late. Collapsing it into the 404
+    // told them their link was wrong, so they went and asked for it again.
+    if (form.status === 'CLOSED') {
+      throw new ForbiddenException('This form is no longer accepting responses.');
+    }
+
+    if (form.status !== 'PUBLISHED') {
       throw new NotFoundException('Form not found or not published');
     }
 
@@ -763,7 +952,7 @@ Respond ONLY with a valid JSON object matching this structure:
     }
 
     if (form.expiresAt && form.expiresAt < new Date()) {
-      throw new ForbiddenException('This form has expired');
+      throw new ForbiddenException('This form has closed and is no longer accepting responses.');
     }
 
     // Serve the version the Form actually points at, not simply the newest row.

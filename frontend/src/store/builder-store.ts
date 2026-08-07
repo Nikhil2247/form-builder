@@ -1,11 +1,13 @@
 'use client';
 
+import { useCallback } from 'react';
 import { create } from 'zustand';
 import { useShallow } from 'zustand/react/shallow';
 import type {
   FormConfig,
   FormPage,
   FormQuestion,
+  FormSettings,
   FormTheme,
   LogicRule,
   QuestionType,
@@ -52,20 +54,45 @@ export interface BuilderState {
   order: string[];
   /** Questions keyed by id. Editing one entry touches nothing else. */
   byId: Record<string, FormQuestion>;
+  /** Form-level settings (access, limits, notifications). */
+  settings: FormSettings;
+  /**
+   * A password typed in the settings panel, waiting to be sent. Write-only —
+   * the API never returns it — and cleared as soon as a save succeeds so it is
+   * not retained for the rest of the session.
+   */
+  pendingPassword: string | null;
 
   // ── Editor session ────────────────────────────────────────────────────────
   selectedQuestionId: string | null;
   activeView: 'BUILDER' | 'LOGIC';
   status: 'DRAFT' | 'PUBLISHED' | 'CLOSED' | 'ARCHIVED';
-  slug: string | null;
   isDirty: boolean;
   hasUnpublishedChanges: boolean;
   isLoading: boolean;
-  /** Monotonic counter bumped on every content change; drives autosave. */
+  /**
+   * Monotonic counter bumped on every content change; drives autosave.
+   *
+   * Never reset — not even by `load` or `reset`. Selectors memoise against it,
+   * so a counter that can go backwards would hand back a snapshot of a
+   * different document.
+   */
   revision: number;
+  /** The highest revision known to be persisted. `revision > savedRevision` ⇒ unsaved work. */
+  savedRevision: number;
+  /** `updatedAt` of the last server response, for optimistic-concurrency checks. */
+  baseUpdatedAt: string | null;
 
   // ── Actions ───────────────────────────────────────────────────────────────
-  load: (form: FormConfig, meta?: { status?: BuilderState['status']; slug?: string | null; hasUnpublishedChanges?: boolean }) => void;
+  load: (
+    form: FormConfig,
+    meta?: {
+      status?: BuilderState['status'];
+      hasUnpublishedChanges?: boolean;
+      settings?: Partial<FormSettings>;
+      updatedAt?: string | null;
+    },
+  ) => void;
   reset: () => void;
   setLoading: (loading: boolean) => void;
 
@@ -73,6 +100,8 @@ export interface BuilderState {
   setDescription: (description: string) => void;
   setQuizMode: (enabled: boolean) => void;
   setTheme: (theme: FormTheme | ((current: FormTheme) => FormTheme)) => void;
+  patchSettings: (patch: Partial<FormSettings>) => void;
+  setPendingPassword: (password: string | null) => void;
 
   addQuestion: (type: QuestionType, afterId?: string | null) => string;
   /** Partial update — merges into the existing question. */
@@ -93,7 +122,15 @@ export interface BuilderState {
 
   selectQuestion: (id: string | null) => void;
   setActiveView: (view: 'BUILDER' | 'LOGIC') => void;
-  markSaved: () => void;
+  /**
+   * Record a successful save.
+   *
+   * Takes the revision that was *sent*, not the current one: a save takes
+   * hundreds of milliseconds and the user keeps typing through it. Clearing
+   * `isDirty` unconditionally on completion marks those in-flight keystrokes as
+   * persisted and they are silently lost until the next unrelated edit.
+   */
+  markSaved: (savedRevision: number, meta?: { id?: string; slug?: string; updatedAt?: string | null }) => void;
   markPublished: () => void;
 }
 
@@ -106,6 +143,17 @@ export const DEFAULT_THEME: FormTheme = {
   fontFamily: 'Inter',
   borderRadius: 'md',
   cardVariant: 'card',
+};
+
+export const DEFAULT_SETTINGS: FormSettings = {
+  slug: '',
+  layoutMode: 'DOCUMENT',
+  requireAuth: false,
+  allowMultiple: true,
+  maxSubmissions: null,
+  expiresAt: null,
+  isPasswordProtected: false,
+  notifyEmails: [],
 };
 
 const CHOICE_TYPES: QuestionType[] = ['SINGLE_CHOICE', 'MULTI_CHOICE', 'DROPDOWN'];
@@ -182,19 +230,22 @@ function emptyState() {
     logic: [] as LogicRule[],
     order: [] as string[],
     byId: {} as Record<string, FormQuestion>,
+    settings: { ...DEFAULT_SETTINGS },
+    pendingPassword: null,
     selectedQuestionId: null,
     activeView: 'BUILDER' as const,
     status: 'DRAFT' as const,
-    slug: null,
     isDirty: false,
     hasUnpublishedChanges: false,
     isLoading: true,
-    revision: 0,
+    baseUpdatedAt: null,
   };
 }
 
 export const useBuilderStore = create<BuilderState>()((set, get) => ({
   ...emptyState(),
+  revision: 0,
+  savedRevision: 0,
 
   load: (form, meta) => {
     const order: string[] = [];
@@ -213,7 +264,19 @@ export const useBuilderStore = create<BuilderState>()((set, get) => ({
       (p): p is FormPage => !!p && typeof p === 'object' && !Array.isArray(p),
     );
 
-    set({
+    // Logic rules that point at questions this form no longer contains can
+    // never fire, but a HIDE rule with a dangling target still hid a live field
+    // in the runner. Drop them at the door rather than round-tripping them.
+    const logic = (Array.isArray(form.logic) ? form.logic : []).filter(
+      (r): r is LogicRule =>
+        !!r &&
+        typeof r === 'object' &&
+        !!r.id &&
+        !!byId[r.triggerQuestionId] &&
+        (r.action === 'JUMP_TO_PAGE' || !r.targetQuestionId || !!byId[r.targetQuestionId]),
+    );
+
+    set((s) => ({
       id: form.id ?? '',
       title: form.title || 'Untitled form',
       description: form.description ?? '',
@@ -223,20 +286,31 @@ export const useBuilderStore = create<BuilderState>()((set, get) => ({
           ? { ...DEFAULT_THEME, ...form.theme }
           : { ...DEFAULT_THEME },
       pages: pages.length ? pages : [{ pageNumber: 1, title: 'Page 1', description: '' }],
-      logic: (Array.isArray(form.logic) ? form.logic : []).filter(Boolean),
+      logic,
       order,
       byId,
+      settings: { ...DEFAULT_SETTINGS, slug: form.slug ?? '', ...(meta?.settings ?? {}) },
+      pendingPassword: null,
       selectedQuestionId: order[0] ?? null,
       status: meta?.status ?? (form.status as BuilderState['status']) ?? 'DRAFT',
-      slug: meta?.slug ?? form.slug ?? null,
       hasUnpublishedChanges: meta?.hasUnpublishedChanges ?? false,
       isDirty: false,
       isLoading: false,
-      revision: 0,
-    });
+      baseUpdatedAt: meta?.updatedAt ?? form.updatedAt ?? null,
+      // Monotonic. Selectors cache against this, so it must never repeat a
+      // value it has already handed out for different content.
+      revision: s.revision + 1,
+      savedRevision: s.revision + 1,
+    }));
   },
 
-  reset: () => set({ ...emptyState(), isLoading: false }),
+  reset: () =>
+    set((s) => ({
+      ...emptyState(),
+      isLoading: false,
+      revision: s.revision + 1,
+      savedRevision: s.revision + 1,
+    })),
   setLoading: (isLoading) => set({ isLoading }),
 
   setTitle: (title) => set((s) => ({ title, isDirty: true, revision: s.revision + 1 })),
@@ -249,6 +323,12 @@ export const useBuilderStore = create<BuilderState>()((set, get) => ({
       isDirty: true,
       revision: s.revision + 1,
     })),
+
+  patchSettings: (patch) =>
+    set((s) => ({ settings: { ...s.settings, ...patch }, isDirty: true, revision: s.revision + 1 })),
+
+  setPendingPassword: (pendingPassword) =>
+    set((s) => ({ pendingPassword, isDirty: true, revision: s.revision + 1 })),
 
   addQuestion: (type, afterId) => {
     const question = createQuestion(type);
@@ -403,15 +483,33 @@ export const useBuilderStore = create<BuilderState>()((set, get) => ({
   selectQuestion: (selectedQuestionId) => set({ selectedQuestionId }),
   setActiveView: (activeView) => set({ activeView }),
 
-  markSaved: () =>
+  markSaved: (savedRevision, meta) =>
     set((s) => ({
-      isDirty: false,
+      // A save that started at revision 7 says nothing about revision 8, which
+      // the user produced while the request was in flight.
+      savedRevision: Math.max(s.savedRevision, savedRevision),
+      isDirty: s.revision > savedRevision,
       // Saving writes the draft columns but not a FormVersion, so a published
       // form now differs from what respondents see.
       hasUnpublishedChanges: s.status === 'PUBLISHED' ? true : s.hasUnpublishedChanges,
+      ...(meta?.id && meta.id !== s.id ? { id: meta.id } : {}),
+      // Only when it actually moved: the server echoes the slug on every save,
+      // and rebuilding `settings` each time would churn its identity and
+      // re-render every settings subscriber a couple of times a second.
+      ...(meta?.slug && meta.slug !== s.settings.slug
+        ? { settings: { ...s.settings, slug: meta.slug } }
+        : {}),
+      ...(meta?.updatedAt !== undefined ? { baseUpdatedAt: meta.updatedAt } : {}),
+      // The password has reached the server; there is no reason to keep it.
+      pendingPassword: null,
     })),
 
-  markPublished: () => set({ status: 'PUBLISHED', hasUnpublishedChanges: false, isDirty: false }),
+  markPublished: () =>
+    set((s) => ({
+      status: 'PUBLISHED',
+      hasUnpublishedChanges: false,
+      isDirty: s.revision > s.savedRevision,
+    })),
 }));
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -435,19 +533,75 @@ export function useQuestionCount(): number {
   return useBuilderStore((s) => s.order.length);
 }
 
-/** Lightweight summaries for the outline panel — no option or validation data. */
-export function useQuestionOutline() {
-  return useBuilderStore(
-    useShallow((s) =>
-      s.order.map((id) => ({
-        id,
-        label: s.byId[id]?.label ?? '',
-        type: s.byId[id]?.type,
-        pageNumber: s.byId[id]?.pageNumber ?? 1,
-        required: s.byId[id]?.validation?.required ?? false,
-      })),
-    ),
-  );
+export interface QuestionOutlineRow {
+  id: string;
+  label: string;
+  type: QuestionType | undefined;
+  pageNumber: number;
+  required: boolean;
+}
+
+/**
+ * Lightweight summaries for the outline panel — no option or validation data.
+ *
+ * ── Why this is memoised by hand ───────────────────────────────────────────
+ * This selector previously read:
+ *
+ *     useBuilderStore(useShallow((s) => s.order.map((id) => ({ id, ... }))))
+ *
+ * which crashed the builder outright with "Maximum update depth exceeded"
+ * whenever a form containing at least one question was opened.
+ *
+ * `useShallow` compares exactly one level deep. The value here is an array
+ * whose *elements* are freshly allocated objects, so element-wise `Object.is`
+ * is false on every single call and the comparison can never report equality.
+ * zustand feeds the selector's result to `useSyncExternalStore`, which
+ * re-renders whenever the snapshot's identity differs from the last one — so
+ * the component rendered, produced a new array, was told the snapshot changed,
+ * rendered again, forever, until React tripped its nested-update limit.
+ *
+ * An empty form was unaffected, because `[]` and `[]` *are* shallow-equal.
+ * That is precisely why the crash only appeared when editing a saved form and
+ * never when creating a new one.
+ *
+ * The cache below compares the derived rows field by field and returns the
+ * previous array by identity when nothing a row displays has changed, which is
+ * both a correct `getSnapshot` and cheaper than the broken version.
+ */
+let outlineCache: QuestionOutlineRow[] = [];
+
+export function selectQuestionOutline(s: BuilderState): QuestionOutlineRow[] {
+  const next: QuestionOutlineRow[] = s.order.map((id) => {
+    const q = s.byId[id];
+    return {
+      id,
+      label: q?.label ?? '',
+      type: q?.type,
+      pageNumber: q?.pageNumber ?? 1,
+      required: q?.validation?.required ?? false,
+    };
+  });
+
+  const unchanged =
+    next.length === outlineCache.length &&
+    next.every((row, i) => {
+      const prev = outlineCache[i];
+      return (
+        prev.id === row.id &&
+        prev.label === row.label &&
+        prev.type === row.type &&
+        prev.pageNumber === row.pageNumber &&
+        prev.required === row.required
+      );
+    });
+
+  if (unchanged) return outlineCache;
+  outlineCache = next;
+  return next;
+}
+
+export function useQuestionOutline(): QuestionOutlineRow[] {
+  return useBuilderStore(selectQuestionOutline);
 }
 
 /** Editor chrome state, as one shallow-compared object. */
@@ -457,14 +611,20 @@ export function useBuilderMeta() {
       id: s.id,
       title: s.title,
       status: s.status,
-      slug: s.slug,
+      slug: s.settings.slug,
       isDirty: s.isDirty,
       hasUnpublishedChanges: s.hasUnpublishedChanges,
       isLoading: s.isLoading,
       activeView: s.activeView,
       questionCount: s.order.length,
+      logicRuleCount: s.logic.length,
     })),
   );
+}
+
+/** Form-level settings. Shallow-compared — every field is a primitive bar one. */
+export function useFormSettings(): FormSettings {
+  return useBuilderStore((s) => s.settings);
 }
 
 /**
@@ -482,13 +642,131 @@ export function selectFormConfig(state: BuilderState): FormConfig {
     questions: state.order.map((id) => state.byId[id]).filter(Boolean),
     logic: state.logic,
     status: state.status,
-    slug: state.slug ?? undefined,
+    slug: state.settings.slug || undefined,
+    layoutMode: state.settings.layoutMode,
+    requireAuth: state.settings.requireAuth,
+    isPasswordProtected: state.settings.isPasswordProtected,
     createdAt: '',
-    updatedAt: '',
+    updatedAt: state.baseUpdatedAt ?? '',
   };
 }
 
 /** Snapshot outside React (event handlers, autosave timers). */
 export function getFormConfig(): FormConfig {
   return selectFormConfig(useBuilderStore.getState());
+}
+
+/**
+ * The whole document, for the panels that render it (theme, logic, preview).
+ *
+ * Memoised on `revision`, which is why that counter is monotonic. The previous
+ * approach — a `useMemo` on the page component keyed on
+ * `[meta.isDirty, meta.activeView, isThemeOpen, isPreviewOpen, order.length]` —
+ * looked plausible but latched: `isDirty` goes false → true on the *first* edit
+ * and then stays true, so every subsequent theme tweak or logic-rule edit
+ * recomputed nothing and the panel redrew stale data. Adding a logic rule
+ * appeared to do nothing at all until an autosave happened to flip `isDirty`
+ * back to false and unstick the memo.
+ *
+ * Subscribe to this from a small wrapper component, never from the page — it
+ * allocates the entire document and would put the canvas back on the
+ * re-render-per-keystroke path the store exists to avoid.
+ */
+let snapshotCache: { revision: number; value: FormConfig } | null = null;
+
+export function selectFormSnapshot(s: BuilderState): FormConfig {
+  if (snapshotCache && snapshotCache.revision === s.revision) return snapshotCache.value;
+  const value = selectFormConfig(s);
+  snapshotCache = { revision: s.revision, value };
+  return value;
+}
+
+export function useFormSnapshot(): FormConfig {
+  return useBuilderStore(selectFormSnapshot);
+}
+
+/**
+ * Bridges panels that still take React's `(form, setForm)` shape onto the
+ * store's granular actions.
+ *
+ * Comparison is by reference, which is exactly right for immutable updates: a
+ * panel doing `setForm(prev => ({ ...prev, theme: { ...prev.theme, x } }))`
+ * produces a new `theme` object and leaves every other key identical, so only
+ * `setTheme` fires and only theme subscribers re-render.
+ */
+export function useFormConfigAdapter(): (
+  action: FormConfig | ((current: FormConfig) => FormConfig),
+) => void {
+  return useCallback((action) => {
+    const state = useBuilderStore.getState();
+    const current = selectFormConfig(state);
+    const next = typeof action === 'function' ? action(current) : action;
+
+    if (next.theme !== current.theme) state.setTheme(next.theme);
+    if (next.logic !== current.logic) state.setLogic(next.logic);
+    if (next.title !== current.title) state.setTitle(next.title);
+    if (next.description !== current.description) state.setDescription(next.description);
+    if (next.isQuizMode !== current.isQuizMode) state.setQuizMode(!!next.isQuizMode);
+  }, []);
+}
+
+/**
+ * The request body for POST/PUT /organizations/:orgId/forms.
+ *
+ * Assembled in one place so the create path, the update path and autosave can
+ * never disagree about what a form consists of. Before this existed the builder
+ * sent only title/description/isQuizMode/theme/pages/questions/logic — every
+ * access, limit and notification setting was silently dropped on every save.
+ *
+ * Keys must match CreateFormDto exactly: the API's global ValidationPipe runs
+ * with `forbidNonWhitelisted`, so one stray property fails the whole request.
+ */
+export interface FormSavePayload {
+  title: string;
+  description: string;
+  isQuizMode: boolean;
+  themeConfig: FormTheme;
+  pages: FormPage[];
+  questions: FormQuestion[];
+  logic: LogicRule[];
+  slug?: string;
+  layoutMode: string;
+  requireAuth: boolean;
+  allowMultiple: boolean;
+  /** `null` clears the cap. Omitting the key would leave a stale one in place. */
+  maxSubmissions: number | null;
+  expiresAt: string | null;
+  isPasswordProtected: boolean;
+  password?: string;
+  notifyEmails: string[];
+  expectedUpdatedAt?: string;
+}
+
+export function selectSavePayload(state: BuilderState): FormSavePayload {
+  const { settings } = state;
+
+  return {
+    title: state.title.trim() || 'Untitled form',
+    description: state.description,
+    isQuizMode: state.isQuizMode,
+    themeConfig: state.theme,
+    pages: state.pages,
+    questions: state.order.map((id) => state.byId[id]).filter(Boolean),
+    logic: state.logic,
+    // An empty slug means "keep whatever the server generated"; sending `''`
+    // would fail @MaxLength/@IsString or, worse, claim the empty slug.
+    ...(settings.slug ? { slug: settings.slug } : {}),
+    layoutMode: settings.layoutMode,
+    requireAuth: settings.requireAuth,
+    allowMultiple: settings.allowMultiple,
+    // Sent explicitly as `null` rather than omitted, so that clearing a cap or
+    // an expiry actually clears it server-side. An absent key means "leave
+    // alone", which is not what an emptied input should mean.
+    maxSubmissions: settings.maxSubmissions,
+    expiresAt: settings.expiresAt,
+    isPasswordProtected: settings.isPasswordProtected,
+    ...(state.pendingPassword ? { password: state.pendingPassword } : {}),
+    notifyEmails: settings.notifyEmails,
+    ...(state.baseUpdatedAt ? { expectedUpdatedAt: state.baseUpdatedAt } : {}),
+  };
 }

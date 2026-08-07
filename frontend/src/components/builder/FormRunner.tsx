@@ -10,7 +10,8 @@ import { Card } from '@/components/ui/card';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Label } from '@/components/ui/label';
-import { generateId } from '@/lib/utils';
+import { cn, generateId } from '@/lib/utils';
+import { cardVariantClass } from './FormThemeScope';
 import {
   CheckCircle2,
   AlertCircle,
@@ -175,25 +176,49 @@ function SignaturePadWrapper({ value, onChange }: { value: string; onChange: (v:
   );
 }
 
+export type RunnerLayoutMode = 'DOCUMENT' | 'CONVERSATIONAL' | 'GRID';
+
 interface FormRunnerProps {
   form: FormConfig;
   onSubmitResponse?: (submission: FormSubmission) => Promise<void> | void;
   onBackToBuilder?: () => void;
   initialAnswers?: Record<string, any>;
   onProgressSave?: (answers: Record<string, any>) => void;
-  layoutMode?: 'DOCUMENT' | 'CONVERSATIONAL';
+  layoutMode?: RunnerLayoutMode;
+  /**
+   * The form requires an access password. The runner collects it and hands it
+   * back on submit — previously nothing anywhere in the runner asked for one,
+   * so a password-protected form rejected every submission with a 403 the
+   * respondent had no way to satisfy.
+   */
+  requiresPassword?: boolean;
+  /** Rendered above the questions — cover image, logo, title. */
+  header?: React.ReactNode;
 }
 
-export function FormRunner({ form, onSubmitResponse, onBackToBuilder, initialAnswers = {}, onProgressSave, layoutMode = 'DOCUMENT' }: FormRunnerProps) {
+export function FormRunner({
+  form,
+  onSubmitResponse,
+  onBackToBuilder,
+  initialAnswers = {},
+  onProgressSave,
+  layoutMode = 'DOCUMENT',
+  requiresPassword = false,
+  header,
+}: FormRunnerProps) {
   const [currentPage, setCurrentPage] = useState<number>(1);
   const [answers, setAnswers] = useState<Record<string, any>>(initialAnswers);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [isSubmitted, setIsSubmitted] = useState<boolean>(false);
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
   const [submitError, setSubmitError] = useState<string>('');
+  const [formPassword, setFormPassword] = useState<string>('');
   const [quizScore, setQuizScore] = useState<number>(0);
   const [totalMarks, setTotalMarks] = useState<number>(0);
   const [startTime] = useState<number>(Date.now());
+
+  const cardClass = cardVariantClass(form.theme?.cardVariant);
+  const isGrid = layoutMode === 'GRID';
 
   useEffect(() => {
     if (onProgressSave) {
@@ -297,6 +322,14 @@ export function FormRunner({ form, onSubmitResponse, onBackToBuilder, initialAns
       }
     });
 
+    // Checked on the final step only — that is when it is sent, and blocking
+    // page 1 on a password field that is not on screen yet is a dead end.
+    const lastPage =
+      layoutMode === 'CONVERSATIONAL' ? getVisibleQuestions().length : form.pages?.length || 1;
+    if (requiresPassword && currentPage >= lastPage && !formPassword.trim()) {
+      newErrors._password = 'Enter the access password for this form.';
+    }
+
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
   };
@@ -359,6 +392,12 @@ export function FormRunner({ form, onSubmitResponse, onBackToBuilder, initialAns
       maxQuizScore: maxScore > 0 ? maxScore : undefined
     };
 
+    // Carried out-of-band rather than as an answer: it is a gate on the form,
+    // not a response to it, and must never be stored with the answers.
+    if (requiresPassword) {
+      (newSubmission as any).formPassword = formPassword;
+    }
+
     setIsSubmitting(true);
     setSubmitError('');
 
@@ -381,7 +420,7 @@ export function FormRunner({ form, onSubmitResponse, onBackToBuilder, initialAns
 
   if (isSubmitted) {
     return (
-      <div className="p-8 text-center space-y-6 font-sans max-w-md mx-auto">
+      <div className="p-8 text-center space-y-6 max-w-md mx-auto">
         <div className="w-16 h-16 rounded-full bg-primary/10 text-primary flex items-center justify-center mx-auto shadow-sm">
           <CheckCircle2 size={36} />
         </div>
@@ -418,12 +457,12 @@ export function FormRunner({ form, onSubmitResponse, onBackToBuilder, initialAns
     );
   }
 
-  const renderQuestions = layoutMode === 'CONVERSATIONAL' 
+  const renderQuestions = layoutMode === 'CONVERSATIONAL'
     ? [getVisibleQuestions()[currentPage - 1]].filter(Boolean)
     : form.questions.filter((q) => (q.pageNumber || 1) === currentPage).filter(isQuestionVisible);
 
   return (
-    <div className="space-y-6 font-sans">
+    <div className="space-y-6">
       {/* Progress Bar */}
       {totalPages > 1 && (
         <div className="space-y-2">
@@ -441,19 +480,27 @@ export function FormRunner({ form, onSubmitResponse, onBackToBuilder, initialAns
       )}
 
       {/* Form Header Banner Card (Hide in conversational mode to save space, or show once) */}
-      {(layoutMode === 'DOCUMENT' || currentPage === 1) && (
-        <Card className="p-6 shadow-sm border-border bg-card space-y-2">
-          <h1 className="text-2xl font-bold text-foreground">{form.title}</h1>
-          {form.description && <p className="text-sm text-muted-foreground">{form.description}</p>}
-        </Card>
-      )}
+      {(layoutMode !== 'CONVERSATIONAL' || currentPage === 1) &&
+        (header ?? (
+          <Card className={cn('p-6 bg-card space-y-2', cardClass)}>
+            <h1 className="text-2xl font-bold text-foreground">{form.title}</h1>
+            {form.description && <p className="text-sm text-muted-foreground">{form.description}</p>}
+          </Card>
+        ))}
 
       {/* Questions List */}
       <form onSubmit={handleSubmit} className="space-y-6">
+        {/* GRID lays two questions per row on wide screens, honouring each
+            question's own `colSpan` — a field the builder has always written
+            and nothing has ever read. */}
+        <div className={cn(isGrid ? 'grid grid-cols-1 gap-6 md:grid-cols-2' : 'space-y-6')}>
         {renderQuestions.map((q) => {
             if (q.type === 'SECTION_HEADER') {
               return (
-                <div key={q.id} className="pt-4 pb-2 border-b border-border space-y-1">
+                <div
+                  key={q.id}
+                  className={cn('pt-4 pb-2 border-b border-border space-y-1', isGrid && 'md:col-span-2')}
+                >
                   <h3 className="text-lg font-bold text-foreground">{q.label}</h3>
                   {q.description && <p className="text-sm text-muted-foreground">{q.description}</p>}
                 </div>
@@ -463,7 +510,15 @@ export function FormRunner({ form, onSubmitResponse, onBackToBuilder, initialAns
             const errorMsg = errors[q.id];
 
             return (
-              <Card key={q.id} className={`p-6 shadow-sm border-border bg-card space-y-4 ${errorMsg ? 'border-destructive ring-1 ring-destructive' : ''}`}>
+              <Card
+                key={q.id}
+                className={cn(
+                  'p-6 bg-card space-y-4',
+                  cardClass,
+                  isGrid && (q.colSpan ?? 2) === 2 && 'md:col-span-2',
+                  errorMsg && 'border-destructive ring-1 ring-destructive',
+                )}
+              >
                 <div className="flex items-start justify-between gap-4">
                   <Label className="text-base font-semibold text-foreground leading-snug">
                     {q.label}
@@ -726,6 +781,46 @@ export function FormRunner({ form, onSubmitResponse, onBackToBuilder, initialAns
               </Card>
             );
           })}
+        </div>
+
+        {/* Access password — asked for on the final step only, since that is
+            when it is checked. */}
+        {requiresPassword && currentPage >= totalPages && (
+          <Card className={cn('p-6 bg-card space-y-3', cardClass)}>
+            <Label htmlFor="form-access-password" className="text-base font-semibold text-foreground">
+              Access password <span className="ml-1 text-destructive">*</span>
+            </Label>
+            <p className="text-sm text-muted-foreground">
+              This form is password protected. Enter the password you were given to submit your
+              response.
+            </p>
+            <Input
+              id="form-access-password"
+              type="password"
+              autoComplete="off"
+              value={formPassword}
+              onChange={(e) => {
+                setFormPassword(e.target.value);
+                if (errors._password) {
+                  setErrors((prev) => {
+                    const next = { ...prev };
+                    delete next._password;
+                    return next;
+                  });
+                }
+              }}
+              placeholder="Enter password"
+              aria-invalid={!!errors._password}
+              className="bg-background max-w-sm"
+            />
+            {errors._password && (
+              <div className="flex items-center gap-2 text-sm font-semibold text-destructive">
+                <AlertCircle size={14} />
+                <span>{errors._password}</span>
+              </div>
+            )}
+          </Card>
+        )}
 
         <div className="flex items-center justify-between pt-6 border-t border-border">
           {currentPage > 1 ? (

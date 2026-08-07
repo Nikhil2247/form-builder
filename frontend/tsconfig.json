@@ -30,5 +30,6 @@
     ".next/dev/types/**/*.ts",
     "**/*.mts"
   ],
-  "exclude": ["node_modules"]
+  "//exclude": "Unit tests run on Bun's runner and import `bun:test`, whose types are not part of the app's dependency tree. They are typechecked by `bun test` itself; including them here would fail `next build`.",
+  "exclude": ["node_modules", "**/*.test.ts", "**/*.test.tsx"]
 }
