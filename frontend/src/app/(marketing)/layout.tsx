@@ -21,9 +21,9 @@ export default function MarketingLayout({
           </Link>
           
           <nav className="hidden md:flex items-center gap-6 text-sm font-medium text-muted-foreground">
-            <Link href="#features" className="hover:text-foreground transition-colors">Features</Link>
-            <Link href="#templates" className="hover:text-foreground transition-colors">Templates</Link>
-            <Link href="#pricing" className="hover:text-foreground transition-colors">Pricing</Link>
+            <Link href="/features" className="hover:text-foreground transition-colors">Features</Link>
+            <Link href="/form-templates" className="hover:text-foreground transition-colors">Templates</Link>
+            <Link href="/pricing" className="hover:text-foreground transition-colors">Pricing</Link>
           </nav>
           
           <div className="flex items-center gap-4">
@@ -59,9 +59,9 @@ export default function MarketingLayout({
           <div className="grid grid-cols-2 md:grid-cols-3 gap-8 text-sm">
             <div className="flex flex-col gap-3">
               <span className="font-semibold text-foreground">Product</span>
-              <Link href="#features" className="text-muted-foreground hover:text-foreground">Features</Link>
-              <Link href="#templates" className="text-muted-foreground hover:text-foreground">Templates</Link>
-              <Link href="#pricing" className="text-muted-foreground hover:text-foreground">Pricing</Link>
+              <Link href="/features" className="text-muted-foreground hover:text-foreground">Features</Link>
+              <Link href="/form-templates" className="text-muted-foreground hover:text-foreground">Templates</Link>
+              <Link href="/pricing" className="text-muted-foreground hover:text-foreground">Pricing</Link>
             </div>
             <div className="flex flex-col gap-3">
               <span className="font-semibold text-foreground">Company</span>

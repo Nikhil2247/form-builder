@@ -10,6 +10,13 @@ import {
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
+import {
+  Pagination,
+  PaginationContent,
+  PaginationItem,
+  PaginationNext,
+  PaginationPrevious,
+} from '@/components/ui/pagination';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useForm } from '@/hooks/use-forms';
@@ -21,8 +28,9 @@ export default function FormDetailPage() {
   const router = useRouter();
   const formId = params.formId as string;
 
+  const [page, setPage] = useState(1);
   const { data: form, isLoading: formLoading } = useForm(formId);
-  const { data: submissionsData, isLoading: subsLoading } = useFormSubmissions(formId);
+  const { data: submissionsData, isLoading: subsLoading } = useFormSubmissions(formId, page, 50);
 
   const submissions = submissionsData?.submissions ?? [];
   const totalSubmissions = submissionsData?.pagination?.total ?? submissionsData?.total ?? 0;
@@ -110,7 +118,7 @@ export default function FormDetailPage() {
 
         {/* Responses Tab */}
         <TabsContent value="responses">
-          <Card className="rounded-xl border border-border overflow-hidden">
+          <div className="rounded-xl border border-border overflow-hidden">
             <div className="flex items-center justify-between p-4 border-b border-border">
               <h2 className="text-sm font-semibold text-foreground">All Responses</h2>
               <Button variant="outline" size="sm" className="gap-2">
@@ -158,7 +166,38 @@ export default function FormDetailPage() {
                 ))}
               </div>
             )}
-          </Card>
+            
+            {!subsLoading && submissions.length > 0 && (
+              <div className="p-4 border-t border-border">
+                {(() => {
+                  const totalPages = Math.ceil(totalSubmissions / 50);
+                  return (
+                    <Pagination>
+                      <PaginationContent>
+                        <PaginationItem>
+                          <PaginationPrevious 
+                            href="#" 
+                            onClick={(e) => { e.preventDefault(); setPage(Math.max(1, page - 1)); }} 
+                            className={page === 1 ? 'pointer-events-none opacity-50' : ''} 
+                          />
+                        </PaginationItem>
+                        <PaginationItem>
+                          <span className="text-sm font-medium mx-2">Page {page} of {totalPages || 1}</span>
+                        </PaginationItem>
+                        <PaginationItem>
+                          <PaginationNext 
+                            href="#" 
+                            onClick={(e) => { e.preventDefault(); setPage(Math.min(totalPages, page + 1)); }} 
+                            className={page === totalPages || totalPages === 0 ? 'pointer-events-none opacity-50' : ''} 
+                          />
+                        </PaginationItem>
+                      </PaginationContent>
+                    </Pagination>
+                  );
+                })()}
+              </div>
+            )}
+          </div>
         </TabsContent>
 
         {/* Share Tab */}

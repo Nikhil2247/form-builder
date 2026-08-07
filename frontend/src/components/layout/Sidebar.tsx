@@ -23,8 +23,13 @@ export function Sidebar() {
   const { isCollapsed, isOpen, setCollapsed, close } = useSidebarStore();
   const { data: session } = useUser();
 
-  const userRole = session?.activeOrganization?.role ?? session?.user?.systemRole;
-  const navigation = useFilteredNavigation(userRole);
+  const systemRole = session?.user?.systemRole;
+  const orgRole = session?.activeOrganization?.role;
+  
+  // If user is a Super Admin, strictly limit their view to Super Admin routes
+  // to prevent cluttering the sidebar with organization-specific links.
+  const activeRoles = systemRole === 'SUPER_ADMIN' ? [systemRole] : [systemRole, orgRole];
+  const navigation = useFilteredNavigation(activeRoles);
 
   const user = session?.user;
   const displayName = user ? `${user.firstName} ${user.lastName}`.trim() || user.email : 'User';

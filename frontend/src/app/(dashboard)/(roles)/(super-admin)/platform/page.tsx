@@ -35,16 +35,14 @@ export default function PlatformOverviewPage() {
       label: 'Total Forms',
       value: data?.stats?.totalForms ?? data?.totalForms ?? '—',
       icon: FileBox,
-      href: '/forms',
-      color: 'bg-card border-border hover:border-primary/50',
+      color: 'bg-card border-border',
       iconColor: 'text-primary',
     },
     {
       label: 'Total Submissions',
       value: data?.stats?.totalSubmissions ?? data?.totalSubmissions ?? '—',
       icon: BarChart2,
-      href: '/analytics',
-      color: 'bg-card border-border hover:border-primary/50',
+      color: 'bg-card border-border',
       iconColor: 'text-primary',
     },
   ];
@@ -75,28 +73,38 @@ export default function PlatformOverviewPage() {
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         {stats.map((stat) => {
           const Icon = stat.icon;
-          return (
-            <Link key={stat.label} href={stat.href}>
-              <Card className={`group rounded-xl border p-5 shadow-sm transition-all hover:shadow-md hover:-translate-y-0.5 cursor-pointer ${stat.color}`}>
-                <div className="flex items-center justify-between">
-                  <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">{stat.label}</span>
-                  <Icon size={16} className={stat.iconColor} />
-                </div>
-                <div className="mt-4">
-                  {isLoading ? (
-                    <Skeleton className="h-8 w-20 rounded" />
-                  ) : (
-                    <span className="text-3xl font-black text-foreground">
-                      {typeof stat.value === 'number' ? stat.value.toLocaleString() : stat.value}
-                    </span>
-                  )}
-                </div>
+          const CardContent = (
+            <Card className={`group rounded-xl border p-5 shadow-sm transition-all ${stat.href ? 'hover:shadow-md hover:-translate-y-0.5 cursor-pointer' : ''} ${stat.color}`}>
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">{stat.label}</span>
+                <Icon size={16} className={stat.iconColor} />
+              </div>
+              <div className="mt-4">
+                {isLoading ? (
+                  <Skeleton className="h-8 w-20 rounded" />
+                ) : (
+                  <span className="text-3xl font-black text-foreground">
+                    {typeof stat.value === 'number' ? stat.value.toLocaleString() : stat.value}
+                  </span>
+                )}
+              </div>
+              {stat.href && (
                 <div className="mt-2 flex items-center gap-1 text-xs text-muted-foreground group-hover:text-foreground transition-colors">
                   View all <ChevronRight size={12} />
                 </div>
-              </Card>
-            </Link>
+              )}
+            </Card>
           );
+
+          if (stat.href) {
+            return (
+              <Link key={stat.label} href={stat.href}>
+                {CardContent}
+              </Link>
+            );
+          }
+
+          return <div key={stat.label}>{CardContent}</div>;
         })}
       </div>
 

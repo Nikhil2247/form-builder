@@ -7,7 +7,6 @@ import {
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Card } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import {
@@ -28,6 +27,13 @@ import {
 } from '@/hooks/use-organization';
 import { useUser } from '@/hooks/use-auth';
 import { formatDistanceToNow } from 'date-fns';
+import {
+  Pagination,
+  PaginationContent,
+  PaginationItem,
+  PaginationNext,
+  PaginationPrevious,
+} from '@/components/ui/pagination';
 
 const ROLE_BADGE: Record<string, string> = {
   ADMIN: 'bg-blue-500/10 text-blue-600 border-blue-500/20',
@@ -46,8 +52,11 @@ export default function TeamPage() {
   const orgId = session?.activeOrganization?.id;
   const currentUserId = session?.user?.id;
 
-  const { data: membersData, isLoading: membersLoading } = useOrganizationMembers(orgId);
-  const { data: invitesData, isLoading: invitesLoading } = useOrganizationInvites(orgId);
+  const [membersPage, setMembersPage] = useState(1);
+  const [invitesPage, setInvitesPage] = useState(1);
+
+  const { data: membersData, isLoading: membersLoading } = useOrganizationMembers(orgId, membersPage, 20);
+  const { data: invitesData, isLoading: invitesLoading } = useOrganizationInvites(orgId, invitesPage, 20);
   const inviteMember = useInviteMember(orgId);
   const revokeInvite = useRevokeInvite(orgId);
   const updateRole = useUpdateMemberRole(orgId);
@@ -59,7 +68,10 @@ export default function TeamPage() {
   const [removeTarget, setRemoveTarget] = useState<any>(null);
 
   const members = Array.isArray(membersData) ? membersData : (membersData as any)?.members ?? membersData ?? [];
+  const membersTotal = (membersData as any)?.pagination?.total ?? members.length;
+
   const invites = Array.isArray(invitesData) ? invitesData : (invitesData as any)?.invitations ?? (invitesData as any)?.invites ?? invitesData ?? [];
+  const invitesTotal = (invitesData as any)?.pagination?.total ?? invites.length;
 
   async function handleInvite() {
     if (!inviteEmail.trim()) return;
@@ -87,16 +99,16 @@ export default function TeamPage() {
       <Tabs defaultValue="members" className="space-y-4">
         <TabsList className="bg-muted/50 rounded-xl p-1">
           <TabsTrigger value="members" className="rounded-lg">
-            <Users size={14} className="mr-1.5" /> Members ({members.length})
+            <Users size={14} className="mr-1.5" /> Members ({membersTotal})
           </TabsTrigger>
           <TabsTrigger value="invitations" className="rounded-lg">
-            <Mail size={14} className="mr-1.5" /> Invitations ({invites.length})
+            <Mail size={14} className="mr-1.5" /> Invitations ({invitesTotal})
           </TabsTrigger>
         </TabsList>
 
         {/* Members Tab */}
         <TabsContent value="members">
-          <Card className="rounded-xl border border-border overflow-hidden">
+          <div className="rounded-xl border border-border overflow-hidden">
             <div className="p-4 border-b border-border">
               <h2 className="text-sm font-semibold text-foreground">Organization Members</h2>
             </div>
@@ -167,12 +179,43 @@ export default function TeamPage() {
                 })
               )}
             </div>
-          </Card>
+
+            {!membersLoading && members.length > 0 && (
+              <div className="p-4 border-t border-border">
+                {(() => {
+                  const totalPages = Math.ceil(membersTotal / 20);
+                  return (
+                    <Pagination>
+                      <PaginationContent>
+                        <PaginationItem>
+                          <PaginationPrevious 
+                            href="#" 
+                            onClick={(e) => { e.preventDefault(); setMembersPage(Math.max(1, membersPage - 1)); }} 
+                            className={membersPage === 1 ? 'pointer-events-none opacity-50' : ''} 
+                          />
+                        </PaginationItem>
+                        <PaginationItem>
+                          <span className="text-sm font-medium mx-2">Page {membersPage} of {totalPages || 1}</span>
+                        </PaginationItem>
+                        <PaginationItem>
+                          <PaginationNext 
+                            href="#" 
+                            onClick={(e) => { e.preventDefault(); setMembersPage(Math.min(totalPages, membersPage + 1)); }} 
+                            className={membersPage === totalPages || totalPages === 0 ? 'pointer-events-none opacity-50' : ''} 
+                          />
+                        </PaginationItem>
+                      </PaginationContent>
+                    </Pagination>
+                  );
+                })()}
+              </div>
+            )}
+          </div>
         </TabsContent>
 
         {/* Invitations Tab */}
         <TabsContent value="invitations">
-          <Card className="rounded-xl border border-border overflow-hidden">
+          <div className="rounded-xl border border-border overflow-hidden">
             <div className="p-4 border-b border-border">
               <h2 className="text-sm font-semibold text-foreground">Pending Invitations</h2>
             </div>
@@ -223,7 +266,38 @@ export default function TeamPage() {
                 })
               )}
             </div>
-          </Card>
+
+            {!invitesLoading && invites.length > 0 && (
+              <div className="p-4 border-t border-border">
+                {(() => {
+                  const totalPages = Math.ceil(invitesTotal / 20);
+                  return (
+                    <Pagination>
+                      <PaginationContent>
+                        <PaginationItem>
+                          <PaginationPrevious 
+                            href="#" 
+                            onClick={(e) => { e.preventDefault(); setInvitesPage(Math.max(1, invitesPage - 1)); }} 
+                            className={invitesPage === 1 ? 'pointer-events-none opacity-50' : ''} 
+                          />
+                        </PaginationItem>
+                        <PaginationItem>
+                          <span className="text-sm font-medium mx-2">Page {invitesPage} of {totalPages || 1}</span>
+                        </PaginationItem>
+                        <PaginationItem>
+                          <PaginationNext 
+                            href="#" 
+                            onClick={(e) => { e.preventDefault(); setInvitesPage(Math.min(totalPages, invitesPage + 1)); }} 
+                            className={invitesPage === totalPages || totalPages === 0 ? 'pointer-events-none opacity-50' : ''} 
+                          />
+                        </PaginationItem>
+                      </PaginationContent>
+                    </Pagination>
+                  );
+                })()}
+              </div>
+            )}
+          </div>
         </TabsContent>
       </Tabs>
 

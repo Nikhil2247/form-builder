@@ -46,31 +46,31 @@ export const platformNav: NavGroup = {
       title: 'Dashboard',
       href: '/dashboard',
       icon: LayoutDashboard,
-      roles: [ROLES.VIEWER, ROLES.EDITOR, ROLES.ADMIN, ROLES.SUPER_ADMIN],
+      roles: [ROLES.VIEWER, ROLES.EDITOR, ROLES.ADMIN],
     },
     {
       title: 'My Forms',
       href: '/forms',
       icon: FileBox,
-      roles: [ROLES.VIEWER, ROLES.EDITOR, ROLES.ADMIN, ROLES.SUPER_ADMIN],
+      roles: [ROLES.VIEWER, ROLES.EDITOR, ROLES.ADMIN],
     },
     {
       title: 'Submissions',
       href: '/submissions',
       icon: Inbox,
-      roles: [ROLES.VIEWER, ROLES.EDITOR, ROLES.ADMIN, ROLES.SUPER_ADMIN],
+      roles: [ROLES.VIEWER, ROLES.EDITOR, ROLES.ADMIN],
     },
     {
       title: 'Analytics',
       href: '/analytics',
       icon: BarChart2,
-      roles: [ROLES.VIEWER, ROLES.EDITOR, ROLES.ADMIN, ROLES.SUPER_ADMIN],
+      roles: [ROLES.VIEWER, ROLES.EDITOR, ROLES.ADMIN],
     },
     {
       title: 'Templates',
       href: '/templates',
       icon: BookTemplate,
-      roles: [ROLES.VIEWER, ROLES.EDITOR, ROLES.ADMIN, ROLES.SUPER_ADMIN],
+      roles: [ROLES.VIEWER, ROLES.EDITOR, ROLES.ADMIN],
     },
   ],
 };
@@ -85,19 +85,19 @@ export const builderNav: NavGroup = {
       title: 'Form Builder',
       href: '/forms/builder',
       icon: Layers,
-      roles: [ROLES.EDITOR, ROLES.ADMIN, ROLES.SUPER_ADMIN],
+      roles: [ROLES.EDITOR, ROLES.ADMIN],
     },
     {
       title: 'Integrations',
       href: '/integrations',
       icon: Webhook,
-      roles: [ROLES.EDITOR, ROLES.ADMIN, ROLES.SUPER_ADMIN],
+      roles: [ROLES.EDITOR, ROLES.ADMIN],
     },
     {
       title: 'Trash',
       href: '/trash',
       icon: Trash2,
-      roles: [ROLES.EDITOR, ROLES.ADMIN, ROLES.SUPER_ADMIN],
+      roles: [ROLES.EDITOR, ROLES.ADMIN],
     },
   ],
 };
@@ -112,31 +112,31 @@ export const organizationNav: NavGroup = {
       title: 'Team',
       href: '/team',
       icon: Users,
-      roles: [ROLES.ADMIN, ROLES.SUPER_ADMIN],
+      roles: [ROLES.ADMIN],
     },
     {
       title: 'Settings',
       href: '/settings',
       icon: Settings,
-      roles: [ROLES.ADMIN, ROLES.SUPER_ADMIN],
+      roles: [ROLES.ADMIN],
       children: [
         {
           title: 'Profile',
           href: '/settings',
           icon: User,
-          roles: [ROLES.ADMIN, ROLES.SUPER_ADMIN],
+          roles: [ROLES.ADMIN],
         },
         {
           title: 'Organization',
           href: '/settings/organization',
           icon: Building2,
-          roles: [ROLES.ADMIN, ROLES.SUPER_ADMIN],
+          roles: [ROLES.ADMIN],
         },
         {
           title: 'Billing',
           href: '/settings/billing',
           icon: CreditCard,
-          roles: [ROLES.ADMIN, ROLES.SUPER_ADMIN],
+          roles: [ROLES.ADMIN],
         },
       ],
     },
@@ -144,7 +144,7 @@ export const organizationNav: NavGroup = {
       title: 'Audit Logs',
       href: '/org-audit',
       icon: ClipboardList,
-      roles: [ROLES.ADMIN, ROLES.SUPER_ADMIN],
+      roles: [ROLES.ADMIN],
     },
   ],
 };
@@ -214,19 +214,20 @@ export const allNavGroups: NavGroup[] = [
 
 /**
  * Filter navigation groups and items based on user role.
- * Items not accessible to the user's role are hidden.
+ * Items not accessible to the user's roles are hidden.
  */
-export function filterNavForRole(groups: NavGroup[], userRole: Role | string | undefined): NavGroup[] {
-  if (!userRole) return [];
+export function filterNavForRole(groups: NavGroup[], userRoles: (Role | string | undefined)[]): NavGroup[] {
+  const validRoles = userRoles.filter(Boolean) as Role[];
+  if (validRoles.length === 0) return [];
 
   return groups
     .map((group) => ({
       ...group,
       items: group.items
-        .filter((item) => item.roles.includes(userRole as Role))
+        .filter((item) => item.roles.some((r) => validRoles.includes(r)))
         .map((item) => ({
           ...item,
-          children: item.children?.filter((child) => child.roles.includes(userRole as Role)),
+          children: item.children?.filter((child) => child.roles.some((r) => validRoles.includes(r))),
         })),
     }))
     .filter((group) => group.items.length > 0);

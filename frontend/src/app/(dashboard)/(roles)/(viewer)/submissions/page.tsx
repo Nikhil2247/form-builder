@@ -2,7 +2,6 @@
 
 import React, { useState } from 'react';
 import { Database, Download, Search, Filter } from 'lucide-react';
-import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
@@ -15,6 +14,13 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { toast } from 'sonner';
+import {
+  Pagination,
+  PaginationContent,
+  PaginationItem,
+  PaginationNext,
+  PaginationPrevious,
+} from '@/components/ui/pagination';
 
 import { useOrgSubmissions } from '@/hooks/use-submissions';
 import { useUser } from '@/hooks/use-auth';
@@ -22,12 +28,13 @@ import { SubmissionDetailsDialog } from '@/components/SubmissionDetailsDialog';
 
 export default function SubmissionsPage() {
   const [search, setSearch] = useState('');
+  const [page, setPage] = useState(1);
   const [selectedSubmission, setSelectedSubmission] = useState<any>(null);
   
   const { data: session } = useUser();
   const orgId = session?.activeOrganization?.id;
 
-  const { data: submissionsData, isLoading } = useOrgSubmissions(1, 50);
+  const { data: submissionsData, isLoading } = useOrgSubmissions(page, 50);
 
   const handleExport = () => {
     toast.success('Export feature coming soon!');
@@ -118,6 +125,38 @@ export default function SubmissionsPage() {
             )}
           </TableBody>
         </Table>
+
+        {!isLoading && submissionsData?.submissions?.length > 0 && (
+          <div className="pt-2">
+            {(() => {
+              const totalItems = submissionsData?.pagination?.total ?? submissionsData.submissions.length;
+              const totalPages = Math.ceil(totalItems / 50);
+              return (
+                <Pagination>
+                  <PaginationContent>
+                    <PaginationItem>
+                      <PaginationPrevious 
+                        href="#" 
+                        onClick={(e) => { e.preventDefault(); setPage(Math.max(1, page - 1)); }} 
+                        className={page === 1 ? 'pointer-events-none opacity-50' : ''} 
+                      />
+                    </PaginationItem>
+                    <PaginationItem>
+                      <span className="text-sm font-medium mx-2">Page {page} of {totalPages || 1}</span>
+                    </PaginationItem>
+                    <PaginationItem>
+                      <PaginationNext 
+                        href="#" 
+                        onClick={(e) => { e.preventDefault(); setPage(Math.min(totalPages, page + 1)); }} 
+                        className={page === totalPages || totalPages === 0 ? 'pointer-events-none opacity-50' : ''} 
+                      />
+                    </PaginationItem>
+                  </PaginationContent>
+                </Pagination>
+              );
+            })()}
+          </div>
+        )}
       </div>
 
       <SubmissionDetailsDialog

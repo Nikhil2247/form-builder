@@ -24,26 +24,28 @@ export function useUpdateOrganization(orgId?: string) {
   });
 }
 
-export function useOrganizationMembers(orgId?: string) {
+export function useOrganizationMembers(orgId?: string, page = 1, limit = 20) {
   return useQuery({
-    queryKey: ['organizations', orgId, 'members'],
-    queryFn: () => fetchApi(`/organizations/${orgId}/members`).then(res => {
-      const d = res.data ?? res;
-      // Backend returns { members, pagination } - return the members array
-      return d?.members ?? d ?? [];
-    }),
+    queryKey: ['organizations', orgId, 'members', page, limit],
+    queryFn: () => {
+      const params = new URLSearchParams();
+      params.append('page', String(page));
+      params.append('limit', String(limit));
+      return fetchApi(`/organizations/${orgId}/members?${params.toString()}`).then(res => res.data ?? res);
+    },
     enabled: !!orgId,
   });
 }
 
-export function useOrganizationInvites(orgId?: string) {
+export function useOrganizationInvites(orgId?: string, page = 1, limit = 20) {
   return useQuery({
-    queryKey: ['organizations', orgId, 'invites'],
-    queryFn: () => fetchApi(`/organizations/${orgId}/invitations`).then(res => {
-      const d = res.data ?? res;
-      // Backend returns { invitations, pagination } 
-      return d?.invitations ?? d?.invites ?? d ?? [];
-    }),
+    queryKey: ['organizations', orgId, 'invites', page, limit],
+    queryFn: () => {
+      const params = new URLSearchParams();
+      params.append('page', String(page));
+      params.append('limit', String(limit));
+      return fetchApi(`/organizations/${orgId}/invitations?${params.toString()}`).then(res => res.data ?? res);
+    },
     enabled: !!orgId,
   });
 }

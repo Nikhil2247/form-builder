@@ -20,16 +20,26 @@ import { useForms } from '@/hooks/use-forms';
 import { useTemplates } from '@/hooks/use-templates';
 import { useUser } from '@/hooks/use-auth';
 import { formatDistanceToNow, format } from 'date-fns';
+import {
+  Pagination,
+  PaginationContent,
+  PaginationItem,
+  PaginationNext,
+  PaginationPrevious,
+} from '@/components/ui/pagination';
+import { useState } from 'react';
 
 export default function FormSubmissionDashboard() {
+  const [page, setPage] = useState(1);
   const { data: session } = useUser();
-  const orgId = session?.activeOrganization?.id;
+  const orgRole = session?.activeOrganization?.role ?? 'VIEWER';
+  const canBuild = orgRole === 'ADMIN' || orgRole === 'EDITOR';
   
-  const { data: formsData, isLoading: formsLoading } = useForms();
-  const { data: templates, isLoading: templatesLoading } = useTemplates();
+  const { data: formsData, isLoading: formsLoading } = useForms(undefined, page, 5);
+  const { data: templatesRes, isLoading: templatesLoading } = useTemplates();
 
   const forms = formsData?.forms ?? [];
-  const quickTemplates = (templates ?? []).slice(0, 3);
+  const quickTemplates = (templatesRes?.templates ?? []).slice(0, 3);
   
   const activeForms = forms.filter(f => f.status === 'PUBLISHED').length;
   const totalSubmissions = forms.reduce((acc: number, f: any) => acc + (f._count?.submissions || f.responseCount || 0), 0);
@@ -43,10 +53,12 @@ export default function FormSubmissionDashboard() {
           <p className="text-sm text-muted-foreground mt-1">Overview of your organization's forms, templates, and submissions.</p>
         </div>
         <div className="flex items-center gap-3">
-           <Link href="/forms/builder" className={buttonVariants({ variant: 'default', className: 'gap-2 shadow-sm' })}>
+          {canBuild && (
+            <Link href="/forms/builder" className={buttonVariants({ variant: 'default', className: 'gap-2 shadow-sm' })}>
               <Plus size={16} />
               Create Form
-          </Link>
+            </Link>
+          )}
         </div>
       </div>
 
@@ -90,7 +102,8 @@ export default function FormSubmissionDashboard() {
       </div>
 
       {/* Start New Form Section */}
-      <div className="space-y-4">
+      {canBuild && (
+        <div className="space-y-4">
         <div className="flex items-center justify-between">
           <h2 className="text-sm font-semibold text-foreground tracking-tight">Quick Start Templates</h2>
           <Link href="/templates" className={buttonVariants({ variant: 'link', size: 'sm', className: 'text-muted-foreground hover:text-foreground h-auto p-0 font-medium' })}>
@@ -141,7 +154,8 @@ export default function FormSubmissionDashboard() {
             </>
           )}
         </div>
-      </div>
+        </div>
+      )}
 
       {/* Submissions Section */}
       <div className="space-y-4 pt-4 border-t border-border">
@@ -153,6 +167,7 @@ export default function FormSubmissionDashboard() {
         </div>
 
         {/* High-density Table */}
+        <div className="rounded-xl border border-border overflow-hidden">
           <Table>
             <TableHeader className="bg-muted/50">
               <TableRow>
@@ -179,7 +194,7 @@ export default function FormSubmissionDashboard() {
                   <TableCell colSpan={5} className="text-center py-8 text-muted-foreground">No forms found. Create your first form above!</TableCell>
                 </TableRow>
               ) : (
-                forms.slice(0, 5).map((form: any) => {
+                forms.map((form: any) => {
                   const isPublished = form.status === 'PUBLISHED';
                   const timeAgo = form.updatedAt ? formatDistanceToNow(new Date(form.updatedAt), { addSuffix: true }) : '—';
                   const createdStr = form.createdAt ? format(new Date(form.createdAt), 'MMM dd, yyyy') : '—';
@@ -208,6 +223,38 @@ export default function FormSubmissionDashboard() {
               )}
             </TableBody>
           </Table>
+          {!formsLoading && forms.length > 0 && (
+            <div className="p-4 border-t border-border">
+              {(() => {
+                const totalItems = formsData?.pagination?.total ?? forms.length;
+                const totalPages = Math.ceil(totalItems / 5);
+                return (
+                  <Pagination>
+                    <PaginationContent>
+                      <PaginationItem>
+                        <PaginationPrevious 
+                          href="#" 
+                          onClick={(e) => { e.preventDefault(); setPage(Math.max(1, page - 1)); }} 
+                          className={page === 1 ? 'pointer-events-none opacity-50' : ''} 
+                        />
+                      </PaginationItem>
+                      <PaginationItem>
+                        <span className="text-sm font-medium mx-2">Page {page} of {totalPages || 1}</span>
+                      </PaginationItem>
+                      <PaginationItem>
+                        <PaginationNext 
+                          href="#" 
+                          onClick={(e) => { e.preventDefault(); setPage(Math.min(totalPages, page + 1)); }} 
+                          className={page === totalPages || totalPages === 0 ? 'pointer-events-none opacity-50' : ''} 
+                        />
+                      </PaginationItem>
+                    </PaginationContent>
+                  </Pagination>
+                );
+              })()}
+            </div>
+          )}
+        </div>
         </div>
     </div>
   );

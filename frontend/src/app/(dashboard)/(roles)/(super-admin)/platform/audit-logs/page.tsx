@@ -13,11 +13,19 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
+import {
+  Pagination,
+  PaginationContent,
+  PaginationItem,
+  PaginationNext,
+  PaginationPrevious,
+} from '@/components/ui/pagination';
 
 export default function AdminAuditLogsPage() {
   const [search, setSearch] = useState('');
+  const [page, setPage] = useState(1);
   
-  const { data: logData, isLoading } = useAdminAuditLogs(1, 50, '');
+  const { data: logData, isLoading } = useAdminAuditLogs(page, 50, '');
 
   return (
     <div className="w-full space-y-8">
@@ -97,6 +105,38 @@ export default function AdminAuditLogsPage() {
               ))}
             </TableBody>
           </Table>
+          
+          {!isLoading && (logData?.data || []).length > 0 && (
+            <div className="pt-4 border-t border-border mt-4">
+              {(() => {
+                const totalItems = logData?.pagination?.total ?? logData?.total ?? (logData?.data || []).length;
+                const totalPages = Math.ceil(totalItems / 50);
+                return (
+                  <Pagination>
+                    <PaginationContent>
+                      <PaginationItem>
+                        <PaginationPrevious 
+                          href="#" 
+                          onClick={(e) => { e.preventDefault(); setPage(Math.max(1, page - 1)); }} 
+                          className={page === 1 ? 'pointer-events-none opacity-50' : ''} 
+                        />
+                      </PaginationItem>
+                      <PaginationItem>
+                        <span className="text-sm font-medium mx-2">Page {page} of {totalPages || 1}</span>
+                      </PaginationItem>
+                      <PaginationItem>
+                        <PaginationNext 
+                          href="#" 
+                          onClick={(e) => { e.preventDefault(); setPage(Math.min(totalPages, page + 1)); }} 
+                          className={page === totalPages || totalPages === 0 ? 'pointer-events-none opacity-50' : ''} 
+                        />
+                      </PaginationItem>
+                    </PaginationContent>
+                  </Pagination>
+                );
+              })()}
+            </div>
+          )}
         </div>
       </div>
     </div>

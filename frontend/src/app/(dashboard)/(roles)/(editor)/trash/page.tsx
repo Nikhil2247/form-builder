@@ -20,7 +20,7 @@ import { toast } from 'sonner';
 export default function TrashPage() {
   const { data: session } = useUser();
   const orgId = session?.activeOrganization?.id;
-  
+
   const { data: forms, isLoading } = useTrashedForms();
   const restoreMutation = useRestoreForm();
 
@@ -40,7 +40,7 @@ export default function TrashPage() {
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-border pb-6">
         <div>
           <h1 className="text-2xl font-bold text-foreground tracking-tight flex items-center gap-2">
-            <Trash2 className="text-muted-foreground" size={24} /> 
+            <Trash2 className="text-muted-foreground" size={24} />
             Trash
           </h1>
           <p className="text-sm text-muted-foreground mt-1">Deleted forms are kept here for 30 days before permanent removal.</p>
@@ -73,9 +73,9 @@ export default function TrashPage() {
                     <Badge variant="outline" className="text-destructive border-destructive">Deleted</Badge>
                   </TableCell>
                   <TableCell className="text-right">
-                    <Button 
-                      variant="ghost" 
-                      size="sm" 
+                    <Button
+                      variant="ghost"
+                      size="sm"
                       onClick={() => handleRestore(form.id)}
                       disabled={restoreMutation.isPending}
                       className="text-primary hover:text-primary/90"

@@ -16,17 +16,32 @@ export interface Template {
   createdAt: string;
 }
 
+export interface TemplatesResponse {
+  templates: Template[];
+  pagination: {
+    page: number;
+    limit: number;
+    total: number;
+    totalPages: number;
+  };
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Hooks
 // ─────────────────────────────────────────────────────────────────────────────
 
 /** List all available templates */
-export function useTemplates() {
-  return useQuery<Template[]>({
-    queryKey: ['templates'],
+export function useTemplates(page = 1, limit = 20, category?: string) {
+  return useQuery<TemplatesResponse>({
+    queryKey: ['templates', page, limit, category],
     queryFn: async () => {
-      const res = await fetchApi('/templates');
-      return res.data?.templates ?? res.data ?? res;
+      const params = new URLSearchParams();
+      params.append('page', String(page));
+      params.append('limit', String(limit));
+      if (category) params.append('category', category);
+
+      const res = await fetchApi(`/templates?${params.toString()}`);
+      return res.data ?? res;
     },
   });
 }

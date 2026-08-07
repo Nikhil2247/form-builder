@@ -2,7 +2,7 @@ import { Injectable, BadRequestException, Logger, ForbiddenException } from '@ne
 import { SubmissionProducer, SubmissionPayload } from './queues/submission.producer';
 import { SubmitFormDto } from './dto/submit-form.dto';
 import { PrismaService } from '../../common/prisma/prisma.service';
-import { nanoid } from 'nanoid';
+import { randomUUID } from 'crypto';
 
 @Injectable()
 export class SubmissionsService {
@@ -68,7 +68,7 @@ export class SubmissionsService {
       }
     }
 
-    const submissionId = nanoid(14);
+    const submissionId = randomUUID();
     
     const payload: SubmissionPayload = {
       submissionId,

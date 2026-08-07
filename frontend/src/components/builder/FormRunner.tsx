@@ -22,9 +22,112 @@ import {
   UploadCloud,
   PenTool,
   Check,
-  Award
+  Award,
+  Loader2,
+  X as XIcon
 } from 'lucide-react';
 import SignatureCanvas from 'react-signature-canvas';
+
+// Helper component for File Uploads
+function FileUploader({ 
+  formId, 
+  questionId, 
+  value, 
+  onChange 
+}: { 
+  formId: string; 
+  questionId: string; 
+  value: string; 
+  onChange: (fileId: string) => void 
+}) {
+  const [isUploading, setIsUploading] = useState(false);
+  const [error, setError] = useState('');
+  const [fileName, setFileName] = useState('');
+
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setIsUploading(true);
+    setError('');
+
+    try {
+      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3100/v1'}/storage/presigned-url`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          formId,
+          questionId,
+          filename: file.name,
+          mimeType: file.type || 'application/octet-stream',
+          fileSizeMb: file.size / (1024 * 1024),
+        }),
+      });
+
+      if (!res.ok) {
+        throw new Error('Failed to get presigned URL');
+      }
+
+      const { data } = await res.json();
+      
+      const uploadRes = await fetch(data.uploadUrl, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': file.type || 'application/octet-stream',
+        },
+        body: file,
+      });
+
+      if (!uploadRes.ok) {
+        throw new Error('Failed to upload file');
+      }
+
+      setFileName(file.name);
+      onChange(data.fileId);
+    } catch (err: any) {
+      setError(err.message || 'Upload failed');
+    } finally {
+      setIsUploading(false);
+    }
+  };
+
+  if (value) {
+    return (
+      <div className="flex items-center justify-between border border-border rounded-xl bg-background p-4 max-w-md">
+        <div className="flex items-center space-x-3 truncate">
+          <CheckCircle2 size={20} className="text-emerald-500" />
+          <span className="text-sm font-medium text-foreground truncate">{fileName || 'File Uploaded'}</span>
+        </div>
+        <Button variant="ghost" size="icon" onClick={() => { onChange(''); setFileName(''); }}>
+          <XIcon size={16} />
+        </Button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-2 max-w-md">
+      <label className="flex flex-col items-center justify-center border-2 border-dashed border-border rounded-xl bg-background p-8 text-center cursor-pointer hover:bg-muted/50 transition-colors">
+        {isUploading ? (
+          <Loader2 size={32} className="mx-auto text-muted-foreground mb-3 animate-spin" />
+        ) : (
+          <UploadCloud size={32} className="mx-auto text-muted-foreground mb-3" />
+        )}
+        <div className="text-sm font-semibold text-foreground">
+          {isUploading ? 'Uploading...' : 'Click to upload file'}
+        </div>
+        {!isUploading && <div className="text-xs text-muted-foreground mt-1">or drag and drop</div>}
+        <input 
+          type="file" 
+          className="hidden" 
+          onChange={handleFileChange}
+          disabled={isUploading}
+        />
+      </label>
+      {error && <p className="text-xs text-destructive mt-1 font-medium">{error}</p>}
+    </div>
+  );
+}
 
 function SignaturePadWrapper({ value, onChange }: { value: string; onChange: (v: string) => void }) {
   const sigCanvas = React.useRef<any>(null);
@@ -65,7 +168,7 @@ function SignaturePadWrapper({ value, onChange }: { value: string; onChange: (v:
 
 interface FormRunnerProps {
   form: FormConfig;
-  onSubmitResponse?: (submission: FormSubmission) => void;
+  onSubmitResponse?: (submission: FormSubmission) => Promise<void> | void;
   onBackToBuilder?: () => void;
   initialAnswers?: Record<string, any>;
   onProgressSave?: (answers: Record<string, any>) => void;
@@ -77,6 +180,8 @@ export function FormRunner({ form, onSubmitResponse, onBackToBuilder, initialAns
   const [answers, setAnswers] = useState<Record<string, any>>(initialAnswers);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [isSubmitted, setIsSubmitted] = useState<boolean>(false);
+  const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
+  const [submitError, setSubmitError] = useState<string>('');
   const [quizScore, setQuizScore] = useState<number>(0);
   const [totalMarks, setTotalMarks] = useState<number>(0);
   const [startTime] = useState<number>(Date.now());
@@ -187,7 +292,7 @@ export function FormRunner({ form, onSubmitResponse, onBackToBuilder, initialAns
     return Object.keys(newErrors).length === 0;
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!validatePage()) return;
 
@@ -245,12 +350,22 @@ export function FormRunner({ form, onSubmitResponse, onBackToBuilder, initialAns
       maxQuizScore: maxScore > 0 ? maxScore : undefined
     };
 
-    if (onSubmitResponse) onSubmitResponse(newSubmission);
-    setIsSubmitted(true);
+    setIsSubmitting(true);
+    setSubmitError('');
 
     try {
-      confetti({ particleCount: 100, spread: 70, origin: { y: 0.6 } });
-    } catch (err) {}
+      if (onSubmitResponse) {
+        await onSubmitResponse(newSubmission);
+      }
+      setIsSubmitted(true);
+      try {
+        confetti({ particleCount: 100, spread: 70, origin: { y: 0.6 } });
+      } catch (err) {}
+    } catch (err: any) {
+      setSubmitError(err.message || 'Failed to submit form. Please try again.');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   const totalPages = layoutMode === 'CONVERSATIONAL' ? getVisibleQuestions().length : (form.pages?.length || 1);
@@ -425,11 +540,12 @@ export function FormRunner({ form, onSubmitResponse, onBackToBuilder, initialAns
                   )}
 
                   {q.type === 'FILE_UPLOAD' && (
-                    <div className="border-2 border-dashed border-border rounded-xl bg-background p-8 text-center max-w-md cursor-pointer hover:bg-muted/50 transition-colors">
-                      <UploadCloud size={32} className="mx-auto text-muted-foreground mb-3" />
-                      <div className="text-sm font-semibold text-foreground">Click to upload file</div>
-                      <div className="text-xs text-muted-foreground mt-1">or drag and drop</div>
-                    </div>
+                    <FileUploader
+                      formId={form.id}
+                      questionId={q.id}
+                      value={answers[q.id] || ''}
+                      onChange={(fileId) => handleInputChange(q.id, fileId)}
+                    />
                   )}
 
                   {q.type === 'DATE' && (
@@ -609,6 +725,7 @@ export function FormRunner({ form, onSubmitResponse, onBackToBuilder, initialAns
               variant="outline"
               onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
               className="gap-2"
+              disabled={isSubmitting}
             >
               <ArrowLeft size={16} /> Back
             </Button>
@@ -616,13 +733,20 @@ export function FormRunner({ form, onSubmitResponse, onBackToBuilder, initialAns
             <div />
           )}
 
-          <Button type="submit" className="gap-2 font-bold px-8">
-            {currentPage < totalPages ? (
-              <>Next Step <ArrowRight size={16} /></>
-            ) : (
-              <>Submit Response <Check size={16} /></>
+          <div className="flex items-center gap-4">
+            {submitError && (
+              <span className="text-sm font-semibold text-destructive">{submitError}</span>
             )}
-          </Button>
+            <Button type="submit" className="gap-2 font-bold px-8" disabled={isSubmitting}>
+              {currentPage < totalPages ? (
+                <>Next Step <ArrowRight size={16} /></>
+              ) : isSubmitting ? (
+                <><Loader2 size={16} className="animate-spin" /> Submitting...</>
+              ) : (
+                <>Submit Response <Check size={16} /></>
+              )}
+            </Button>
+          </div>
         </div>
       </form>
     </div>

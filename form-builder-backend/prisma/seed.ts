@@ -9,12 +9,12 @@ async function main() {
   // 1. Hash the password
   const passwordHash = await argon2.hash('Password123');
 
-  // 2. Create a SuperAdmin User
+  // 2. Create Users for all roles
   const superAdmin = await prisma.user.upsert({
-    where: { email: 'admin@formbuilder.com' },
+    where: { email: 'superadmin@formbuilder.com' },
     update: {},
     create: {
-      email: 'admin@formbuilder.com',
+      email: 'superadmin@formbuilder.com',
       passwordHash,
       firstName: 'Super',
       lastName: 'Admin',
@@ -24,25 +24,52 @@ async function main() {
   });
   console.log(`Created SuperAdmin: ${superAdmin.email}`);
 
-  // 3. Create a Regular User
-  const regularUser = await prisma.user.upsert({
-    where: { email: 'user@formbuilder.com' },
+  const orgAdmin = await prisma.user.upsert({
+    where: { email: 'admin@formbuilder.com' },
     update: {},
     create: {
-      email: 'user@formbuilder.com',
+      email: 'admin@formbuilder.com',
       passwordHash,
-      firstName: 'Regular',
-      lastName: 'User',
+      firstName: 'Org',
+      lastName: 'Admin',
       systemRole: SystemRole.USER,
       emailVerified: true,
     },
   });
-  console.log(`Created Regular User: ${regularUser.email}`);
+  console.log(`Created Org Admin: ${orgAdmin.email}`);
 
-  // User Tokens & API Keys
+  const editorUser = await prisma.user.upsert({
+    where: { email: 'editor@formbuilder.com' },
+    update: {},
+    create: {
+      email: 'editor@formbuilder.com',
+      passwordHash,
+      firstName: 'Form',
+      lastName: 'Editor',
+      systemRole: SystemRole.USER,
+      emailVerified: true,
+    },
+  });
+  console.log(`Created Editor User: ${editorUser.email}`);
+
+  const viewerUser = await prisma.user.upsert({
+    where: { email: 'viewer@formbuilder.com' },
+    update: {},
+    create: {
+      email: 'viewer@formbuilder.com',
+      passwordHash,
+      firstName: 'Data',
+      lastName: 'Viewer',
+      systemRole: SystemRole.USER,
+      emailVerified: true,
+    },
+  });
+  console.log(`Created Viewer User: ${viewerUser.email}`);
+
+  // User Tokens & API Keys (Mock for OrgAdmin to keep it simple)
   await prisma.emailVerificationToken.create({
     data: {
-      userId: regularUser.id,
+      userId: orgAdmin.id,
       tokenHash: 'dummy_hash_email_verification',
       expiresAt: new Date(Date.now() + 86400000),
     }
@@ -50,7 +77,7 @@ async function main() {
 
   await prisma.passwordResetToken.create({
     data: {
-      userId: regularUser.id,
+      userId: orgAdmin.id,
       tokenHash: 'dummy_hash_password_reset',
       expiresAt: new Date(Date.now() + 86400000),
     }
@@ -58,7 +85,7 @@ async function main() {
 
   await prisma.refreshToken.create({
     data: {
-      userId: regularUser.id,
+      userId: orgAdmin.id,
       tokenHash: 'dummy_hash_refresh_token',
       userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
       ipAddress: '192.168.1.1',
@@ -78,7 +105,7 @@ async function main() {
   });
   await prisma.notification.create({
     data: {
-      userId: regularUser.id,
+      userId: orgAdmin.id,
       type: 'new_submission',
       title: 'New Submission Received',
       body: 'You have a new response on your form.',
@@ -135,6 +162,7 @@ async function main() {
 
   // 5. Add Members to Organizations
   for (const org of createdOrgs) {
+    // SuperAdmin gets ADMIN in all orgs
     await prisma.organizationMember.upsert({
       where: { userId: superAdmin.id },
       update: {},
@@ -144,16 +172,62 @@ async function main() {
         role: OrgRole.ADMIN,
       },
     });
-    
-    // Put regular user in acme-corp only
-    if (org.slug === 'acme-corp') {
-      await prisma.organizationMember.upsert({
-        where: { userId: regularUser.id },
+
+    // Generate 5 mock users for each org
+    for (let u = 1; u <= 5; u++) {
+      const email = `mockuser${u}_${org.slug}@formbuilder.com`;
+      const user = await prisma.user.upsert({
+        where: { email },
         update: {},
         create: {
-          userId: regularUser.id,
+          email,
+          passwordHash,
+          firstName: `Mock${u}`,
+          lastName: org.name.split(' ')[0],
+          systemRole: SystemRole.USER,
+          emailVerified: true,
+        },
+      });
+      await prisma.organizationMember.upsert({
+        where: { userId: user.id },
+        update: {},
+        create: {
+          userId: user.id,
+          organizationId: org.id,
+          role: u === 1 ? OrgRole.ADMIN : u === 2 ? OrgRole.EDITOR : OrgRole.VIEWER,
+        },
+      });
+    }
+    
+    // Put other specific users in Acme Corp only
+    if (org.slug === 'acme-corp') {
+      await prisma.organizationMember.upsert({
+        where: { userId: orgAdmin.id },
+        update: {},
+        create: {
+          userId: orgAdmin.id,
+          organizationId: org.id,
+          role: OrgRole.ADMIN,
+        },
+      });
+
+      await prisma.organizationMember.upsert({
+        where: { userId: editorUser.id },
+        update: {},
+        create: {
+          userId: editorUser.id,
           organizationId: org.id,
           role: OrgRole.EDITOR,
+        },
+      });
+
+      await prisma.organizationMember.upsert({
+        where: { userId: viewerUser.id },
+        update: {},
+        create: {
+          userId: viewerUser.id,
+          organizationId: org.id,
+          role: OrgRole.VIEWER,
         },
       });
 
@@ -165,7 +239,7 @@ async function main() {
           role: OrgRole.VIEWER,
           token: 'dummy_hash_invitation_token',
           status: InviteStatus.PENDING,
-          invitedById: superAdmin.id,
+          invitedById: orgAdmin.id,
           expiresAt: new Date(Date.now() + 86400000),
         }
       });
@@ -212,6 +286,18 @@ async function main() {
     { title: 'Product Beta Signup', slug: 'beta-signup', status: FormStatus.PUBLISHED, orgIdx: 1 },
     { title: 'Support Ticket', slug: 'support-ticket', status: FormStatus.CLOSED, orgIdx: 2 },
   ];
+
+  // Generate 10 forms per org
+  for (let o = 0; o < createdOrgs.length; o++) {
+    for (let f = 1; f <= 10; f++) {
+      forms.push({
+        title: `${createdOrgs[o].name} Generated Form ${f}`,
+        slug: `generated-${createdOrgs[o].slug}-form-${f}`,
+        status: f % 4 === 0 ? FormStatus.DRAFT : FormStatus.PUBLISHED,
+        orgIdx: o,
+      });
+    }
+  }
 
   for (const formInput of forms) {
     const form = await prisma.form.upsert({

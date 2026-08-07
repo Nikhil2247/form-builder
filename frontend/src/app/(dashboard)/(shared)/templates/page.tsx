@@ -9,7 +9,15 @@ import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
+import {
+  Pagination,
+  PaginationContent,
+  PaginationItem,
+  PaginationNext,
+  PaginationPrevious,
+} from '@/components/ui/pagination';
 import { useTemplates, useCreateFromTemplate } from '@/hooks/use-templates';
+import { useUser } from '@/hooks/use-auth';
 
 const CATEGORY_COLORS: Record<string, string> = {
   'Feedback': 'bg-blue-500/10 text-blue-600',
@@ -25,15 +33,22 @@ export default function TemplatesPage() {
   const [search, setSearch] = useState('');
   const [usingId, setUsingId] = useState<string | null>(null);
 
-  const { data: templates, isLoading } = useTemplates();
+  const [page, setPage] = useState(1);
+  const { data: session } = useUser();
+  const orgRole = session?.activeOrganization?.role ?? 'VIEWER';
+  const canBuild = orgRole === 'ADMIN' || orgRole === 'EDITOR';
+
+  const { data: templatesRes, isLoading } = useTemplates(page, 20);
   const createFromTemplate = useCreateFromTemplate();
 
-  const list = templates ?? [];
-  const filtered = list.filter(t =>
+  const list = templatesRes?.templates ?? [];
+  const total = templatesRes?.pagination?.total ?? list.length;
+  
+  const filtered = search ? list.filter(t =>
     (t.title || t.name || '').toLowerCase().includes(search.toLowerCase()) ||
     (t.description || '').toLowerCase().includes(search.toLowerCase()) ||
     (t.category || '').toLowerCase().includes(search.toLowerCase())
-  );
+  ) : list;
 
   async function handleUseTemplate(templateId: string) {
     setUsingId(templateId);
@@ -55,11 +70,13 @@ export default function TemplatesPage() {
             Start with a pre-built template and customize it to your needs.
           </p>
         </div>
-        <Link href="/forms/builder">
-          <Button variant="outline" size="sm" className="gap-2">
-            <Layers size={14} /> Blank Form
-          </Button>
-        </Link>
+        {canBuild && (
+          <Link href="/forms/builder">
+            <Button variant="outline" size="sm" className="gap-2">
+              <Layers size={14} /> Blank Form
+            </Button>
+          </Link>
+        )}
       </div>
 
       {/* Search */}
@@ -117,20 +134,54 @@ export default function TemplatesPage() {
                   )}
                 </div>
 
-                <button
-                  onClick={() => handleUseTemplate(template.id)}
-                  disabled={isUsing}
-                  className="mt-4 w-full rounded-lg border border-border bg-muted/40 py-2 text-xs font-semibold text-foreground transition-all hover:bg-primary hover:text-primary-foreground hover:border-primary group-hover:opacity-100 flex items-center justify-center gap-1.5"
-                >
-                  {isUsing ? (
-                    <><Loader2 size={12} className="animate-spin" />Creating...</>
-                  ) : (
-                    'Use Template →'
-                  )}
-                </button>
+                {canBuild && (
+                  <button
+                    onClick={() => handleUseTemplate(template.id)}
+                    disabled={isUsing}
+                    className="mt-4 w-full rounded-lg border border-border bg-muted/40 py-2 text-xs font-semibold text-foreground transition-all hover:bg-primary hover:text-primary-foreground hover:border-primary group-hover:opacity-100 flex items-center justify-center gap-1.5"
+                  >
+                    {isUsing ? (
+                      <><Loader2 size={12} className="animate-spin" />Creating...</>
+                    ) : (
+                      'Use Template →'
+                    )}
+                  </button>
+                )}
               </Card>
             );
           })}
+        </div>
+      )}
+      
+      {!isLoading && list.length > 0 && (
+        <div className="pt-4 border-t border-border">
+          {(() => {
+            const currentTotal = search ? filtered.length : total;
+            const totalPages = Math.ceil(currentTotal / 20);
+            return (
+              <Pagination>
+                <PaginationContent>
+                  <PaginationItem>
+                    <PaginationPrevious 
+                      href="#" 
+                      onClick={(e) => { e.preventDefault(); setPage(Math.max(1, page - 1)); }} 
+                      className={page === 1 ? 'pointer-events-none opacity-50' : ''} 
+                    />
+                  </PaginationItem>
+                  <PaginationItem>
+                    <span className="text-sm font-medium mx-2">Page {page} of {totalPages || 1}</span>
+                  </PaginationItem>
+                  <PaginationItem>
+                    <PaginationNext 
+                      href="#" 
+                      onClick={(e) => { e.preventDefault(); setPage(Math.min(totalPages, page + 1)); }} 
+                      className={page === totalPages || totalPages === 0 ? 'pointer-events-none opacity-50' : ''} 
+                    />
+                  </PaginationItem>
+                </PaginationContent>
+              </Pagination>
+            );
+          })()}
         </div>
       )}
     </div>

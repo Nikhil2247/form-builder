@@ -5,11 +5,18 @@ import {
   Building2, Users, FileBox, Activity, TrendingUp, Globe,
   Search, MoreHorizontal, ShieldAlert, ShieldCheck, Settings2, ChevronRight
 } from 'lucide-react';
-import { Card } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Badge } from '@/components/ui/badge';
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table';
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem,
   DropdownMenuSeparator, DropdownMenuTrigger,
@@ -17,7 +24,13 @@ import {
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { useAdminOrganizations, useSuspendOrganization, useActivateOrganization } from '@/hooks/use-admin';
 import { formatDistanceToNow } from 'date-fns';
-import { DataTablePagination } from '@/components/ui/data-table-pagination';
+import {
+  Pagination,
+  PaginationContent,
+  PaginationItem,
+  PaginationNext,
+  PaginationPrevious,
+} from '@/components/ui/pagination';
 
 const ORG_STATUS: Record<string, { label: string; color: string }> = {
   ACTIVE: { label: 'Active', color: 'bg-emerald-500/10 text-emerald-600 border-emerald-500/20' },
@@ -73,58 +86,58 @@ export default function PlatformOrganizationsPage() {
       </div>
 
       {/* Table */}
-      <Card className="rounded-xl border border-border overflow-hidden">
-        <table className="w-full text-sm">
-          <thead className="bg-muted/50">
-            <tr>
-              <th className="px-4 py-3 text-left font-semibold text-muted-foreground">Organization</th>
-              <th className="px-4 py-3 text-left font-semibold text-muted-foreground">Slug</th>
-              <th className="px-4 py-3 text-left font-semibold text-muted-foreground">Status</th>
-              <th className="px-4 py-3 text-left font-semibold text-muted-foreground">Members</th>
-              <th className="px-4 py-3 text-left font-semibold text-muted-foreground">Forms</th>
-              <th className="px-4 py-3 text-left font-semibold text-muted-foreground">Created</th>
-              <th className="px-4 py-3 text-right font-semibold text-muted-foreground">Actions</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-border bg-card">
+      <div className="rounded-xl border border-border overflow-hidden">
+        <Table>
+          <TableHeader className="bg-muted/50">
+            <TableRow>
+              <TableHead>Organization</TableHead>
+              <TableHead>Slug</TableHead>
+              <TableHead>Status</TableHead>
+              <TableHead>Members</TableHead>
+              <TableHead>Forms</TableHead>
+              <TableHead>Created</TableHead>
+              <TableHead className="text-right">Actions</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
             {isLoading ? (
               Array.from({ length: 6 }).map((_, i) => (
-                <tr key={i}>
+                <TableRow key={i}>
                   {Array.from({ length: 7 }).map((_, j) => (
-                    <td key={j} className="px-4 py-3"><Skeleton className="h-5 w-full rounded" /></td>
+                    <TableCell key={j}><Skeleton className="h-5 w-full rounded" /></TableCell>
                   ))}
-                </tr>
+                </TableRow>
               ))
             ) : orgs.length === 0 ? (
-              <tr>
-                <td colSpan={7} className="px-4 py-16 text-center text-muted-foreground">
+              <TableRow>
+                <TableCell colSpan={7} className="text-center py-16 text-muted-foreground">
                   No organizations found.
-                </td>
-              </tr>
+                </TableCell>
+              </TableRow>
             ) : (
               orgs.map((org: any) => {
                 const statusInfo = ORG_STATUS[org.status ?? 'ACTIVE'] ?? ORG_STATUS.ACTIVE;
                 const createdAgo = org.createdAt ? formatDistanceToNow(new Date(org.createdAt), { addSuffix: true }) : '—';
                 return (
-                  <tr key={org.id} className="group hover:bg-muted/30 transition-colors">
-                    <td className="px-4 py-3">
+                  <TableRow key={org.id} className="group hover:bg-muted/30 transition-colors">
+                    <TableCell>
                       <div className="flex items-center gap-3">
                         <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary font-bold text-sm">
                           {org.name?.charAt(0)?.toUpperCase() ?? 'O'}
                         </div>
                         <span className="font-medium text-foreground">{org.name}</span>
                       </div>
-                    </td>
-                    <td className="px-4 py-3 text-muted-foreground font-mono text-xs">{org.slug}</td>
-                    <td className="px-4 py-3">
+                    </TableCell>
+                    <TableCell className="text-muted-foreground font-mono text-xs">{org.slug}</TableCell>
+                    <TableCell>
                       <span className={`rounded-full border px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wider ${statusInfo.color}`}>
                         {statusInfo.label}
                       </span>
-                    </td>
-                    <td className="px-4 py-3 text-muted-foreground">{org._count?.members ?? org.memberCount ?? '—'}</td>
-                    <td className="px-4 py-3 text-muted-foreground">{org._count?.forms ?? org.formCount ?? '—'}</td>
-                    <td className="px-4 py-3 text-muted-foreground text-xs">{createdAgo}</td>
-                    <td className="px-4 py-3 text-right">
+                    </TableCell>
+                    <TableCell className="text-muted-foreground">{org._count?.members ?? org.memberCount ?? '—'}</TableCell>
+                    <TableCell className="text-muted-foreground">{org._count?.forms ?? org.formCount ?? '—'}</TableCell>
+                    <TableCell className="text-muted-foreground text-xs">{createdAgo}</TableCell>
+                    <TableCell className="text-right">
                       <DropdownMenu>
                         <DropdownMenuTrigger className="rounded-md p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground transition-colors">
                           <MoreHorizontal size={15} />
@@ -145,22 +158,43 @@ export default function PlatformOrganizationsPage() {
                           )}
                         </DropdownMenuContent>
                       </DropdownMenu>
-                    </td>
-                  </tr>
+                    </TableCell>
+                  </TableRow>
                 );
               })
             )}
-          </tbody>
-        </table>
+          </TableBody>
+        </Table>
         {/* Pagination */}
-        {/* Pagination */}
-        <DataTablePagination
-          page={page}
-          total={total}
-          pageSize={20}
-          onPageChange={setPage}
-        />
-      </Card>
+        <div className="p-4 border-t border-border">
+          {(() => {
+            const totalPages = Math.ceil(total / 20);
+            return (
+              <Pagination>
+                <PaginationContent>
+                  <PaginationItem>
+                    <PaginationPrevious 
+                      href="#" 
+                      onClick={(e) => { e.preventDefault(); setPage(Math.max(1, page - 1)); }} 
+                      className={page === 1 ? 'pointer-events-none opacity-50' : ''} 
+                    />
+                  </PaginationItem>
+                  <PaginationItem>
+                    <span className="text-sm font-medium mx-2">Page {page} of {totalPages || 1}</span>
+                  </PaginationItem>
+                  <PaginationItem>
+                    <PaginationNext 
+                      href="#" 
+                      onClick={(e) => { e.preventDefault(); setPage(Math.min(totalPages, page + 1)); }} 
+                      className={page === totalPages || totalPages === 0 ? 'pointer-events-none opacity-50' : ''} 
+                    />
+                  </PaginationItem>
+                </PaginationContent>
+              </Pagination>
+            );
+          })()}
+        </div>
+      </div>
 
       {/* Suspend Dialog */}
       <Dialog open={!!suspendTarget} onOpenChange={() => setSuspendTarget(null)}>

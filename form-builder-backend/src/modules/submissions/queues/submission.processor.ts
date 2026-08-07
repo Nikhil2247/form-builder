@@ -30,6 +30,36 @@ export class SubmissionProcessor extends WorkerHost {
 
     if (!formVersion) throw new Error(`No published version for form ${formId}`);
 
+    const questions = formVersion.questionsJson as any[];
+    let quizScore = 0;
+    let maxQuizScore = 0;
+
+    if (Array.isArray(questions)) {
+      questions.forEach((q) => {
+        if (q.type === 'SECTION_HEADER') return;
+        const pts = q.points || 0;
+        maxQuizScore += pts;
+
+        if (pts > 0) {
+          const userAns = answers[q.id];
+          if (q.type === 'SINGLE_CHOICE' || q.type === 'DROPDOWN') {
+            const correctOpt = q.options?.find((o: any) => o.isCorrect);
+            if (correctOpt && userAns === correctOpt.label) quizScore += pts;
+          } else if (q.type === 'MULTI_CHOICE') {
+            const correctOpts = q.options?.filter((o: any) => o.isCorrect).map((o: any) => o.label) || [];
+            const userArr = (userAns as string[]) || [];
+            if (
+              correctOpts.length > 0 &&
+              correctOpts.every((item: string) => userArr.includes(item)) &&
+              userArr.every((item: string) => correctOpts.includes(item))
+            ) {
+              quizScore += pts;
+            }
+          }
+        }
+      });
+    }
+
     const dailySalt = new Date().toISOString().slice(0, 10);
     const respondentIpHash = createHash('sha256').update(respondentIp + dailySalt).digest('hex');
 
@@ -40,6 +70,8 @@ export class SubmissionProcessor extends WorkerHost {
         formVersionId: formVersion.id,
         answers,
         completionTimeMs: completionTimeMs ?? 0,
+        quizScore: maxQuizScore > 0 ? quizScore : null,
+        maxQuizScore: maxQuizScore > 0 ? maxQuizScore : null,
         respondentIpHash,
         userAgent,
         respondentId,

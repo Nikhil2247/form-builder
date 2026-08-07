@@ -5,9 +5,9 @@ import { allNavGroups, filterNavForRole, type NavGroup } from '@/config/navigati
 import type { Role } from '@/config/roles';
 
 /**
- * Returns navigation groups filtered by the given user role.
+ * Returns navigation groups filtered by the given user roles.
  * Memoized to avoid unnecessary re-computations on re-renders.
  */
-export function useFilteredNavigation(userRole: Role | string | undefined): NavGroup[] {
-  return useMemo(() => filterNavForRole(allNavGroups, userRole), [userRole]);
+export function useFilteredNavigation(userRoles: (Role | string | undefined)[]): NavGroup[] {
+  return useMemo(() => filterNavForRole(allNavGroups, userRoles), [userRoles]);
 }

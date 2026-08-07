@@ -147,16 +147,23 @@ export function FormRunnerClient({ slug, initialData }: { slug: string, initialD
         layoutMode={actualFormConfig.layoutMode || 'DOCUMENT'}
         onSubmitResponse={async (submission) => {
           try {
-            await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3100/v1'}/submissions/${actualFormConfig.id}`, {
+            const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3100/v1'}/forms/${actualFormConfig.id}/submit`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ answers: submission.answers, completionTimeMs: submission.completionTimeMs })
             });
+            
+            if (!res.ok) {
+              const errorData = await res.json().catch(() => null);
+              throw new Error(errorData?.message || 'Failed to submit form. Please try again.');
+            }
+
             // Clear draft after successful submission
             const fp = getFingerprint();
             if (fp) localStorage.removeItem(`draft_${slug}`);
-          } catch (e) {
+          } catch (e: any) {
             console.error('Failed to submit form', e);
+            throw e; // Rethrow to let FormRunner handle and display it
           }
         }}
       />
