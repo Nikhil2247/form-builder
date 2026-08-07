@@ -30,6 +30,24 @@ export class WebhooksController {
     return this.webhooksService.getWebhooks(orgId, formId);
   }
 
+  @Post(':webhookId/rotate-secret')
+  async rotateSecret(
+    @OrgId() orgId: string,
+    @Param('formId') formId: string,
+    @Param('webhookId') webhookId: string,
+  ) {
+    return this.webhooksService.rotateSecret(orgId, formId, webhookId);
+  }
+
+  @Get(':webhookId/deliveries')
+  async getDeliveries(
+    @OrgId() orgId: string,
+    @Param('formId') formId: string,
+    @Param('webhookId') webhookId: string,
+  ) {
+    return this.webhooksService.getDeliveries(orgId, formId, webhookId);
+  }
+
   @Delete(':webhookId')
   async deleteWebhook(
     @OrgId() orgId: string,

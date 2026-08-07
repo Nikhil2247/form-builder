@@ -61,17 +61,19 @@
 // ============================================================================
 
 generator client {
-  provider      = "prisma-client-js"
-  // binaryTargets ensures the generated client works in Docker (Linux)
-  // as well as on your host machine (native Windows/Mac).
-  binaryTargets = ["native", "rhel-openssl-1.0.x", "debian-openssl-3.0.x"]
+  provider = "prisma-client-js"
+  // NOTE (Prisma 7): binaryTargets is gone. v7 replaced the Rust query engine
+  // with the in-process query compiler, so there are no engine binaries to ship
+  // and the Docker image no longer needs platform-specific downloads.
 }
 
 datasource db {
-  // In production: point this to PgBouncer for connection pooling.
-  // Example: postgresql://user:pass@pgbouncer:5432/formbuilder?pgbouncer=true&connection_limit=5
+  // NOTE (Prisma 7): `url` is no longer permitted here. The connection is
+  // supplied at runtime via a driver adapter (@prisma/adapter-pg) in
+  // src/common/prisma/prisma.service.ts, and to the CLI via prisma.config.ts.
+  // This is what lets us configure the pg Pool directly — see PrismaService for
+  // the explicit per-process connection limits.
   provider = "postgresql"
-  url      = env("DATABASE_URL")
 }
 
 // ============================================================================
@@ -411,9 +413,31 @@ model User {
   formComments        FormComment[]
 
   emailVerificationTokens EmailVerificationToken[]
+  mfaRecoveryCodes        MfaRecoveryCode[]
+  auditLogs               AuditLog[] @relation("AuditActor")
 
   @@index([email])
   @@map("users")
+}
+
+/// Single-use MFA recovery codes.
+///
+/// Issued (10 at a time) when a user completes MFA enrolment and shown exactly
+/// once. Only the argon2id hash is stored. Without these, a lost authenticator
+/// device means the account is unrecoverable without manual support action.
+model MfaRecoveryCode {
+  id        String    @id @default(uuid()) @db.Uuid
+  userId    String    @map("user_id") @db.Uuid
+  /// argon2id hash of the plaintext recovery code.
+  codeHash  String    @map("code_hash") @db.VarChar(255)
+  /// NULL until redeemed. A code may be used exactly once.
+  usedAt    DateTime? @map("used_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, usedAt])
+  @@map("mfa_recovery_codes")
 }
 
 /// Token used for email verification flows.
@@ -863,7 +887,12 @@ model FormAnalytics {
   views           Int @default(0)               // Public form URL page loads
   starts          Int @default(0)               // First field interaction recorded
   submissions     Int @default(0)               // Successfully persisted submissions
-  // Running average of completionTimeMs for all submissions on this date.
+  /// Sum of completionTimeMs across all submissions on this date.
+  /// Required to compute a TRUE mean: the previous implementation used
+  /// (existing + new) / 2, which is an exponential recency-weighted average
+  /// and drifts far from the real average as volume grows.
+  sumCompletionMs BigInt @default(0) @map("sum_completion_ms")
+  /// Derived: sumCompletionMs / submissions. Maintained by the worker upsert.
   avgCompletionMs Int @default(0) @map("avg_completion_ms")
 
   form Form @relation(fields: [formId], references: [id], onDelete: Cascade)
@@ -959,6 +988,17 @@ model AuditLog {
   createdAt      DateTime @default(now()) @map("created_at")
 
   organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  /// The actor.
+  ///
+  /// `userId` was already stored but had no relation, so reading an audit log
+  /// gave you a bare UUID and the UI had no way to show who did anything. This
+  /// adds only the relation — the column and its index already exist, so the
+  /// migration carries a foreign key and nothing else.
+  ///
+  /// SetNull, not Cascade: deleting a user must never erase the record of what
+  /// they did.
+  user           User? @relation("AuditActor", fields: [userId], references: [id], onDelete: SetNull)
 
   @@index([organizationId, createdAt(sort: Desc)])
   @@index([userId])

@@ -3,108 +3,106 @@
 import React, { useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import {
-  PanelLeftClose,
-  PanelLeft,
-  X,
-  ChevronDown,
-  MessageCircle,
-  LogOut,
-  User,
-} from 'lucide-react';
+import { ChevronDown, PanelLeft, PanelLeftClose, Squircle, X } from 'lucide-react';
+
 import { cn } from '@/lib/utils';
 import { useSidebarStore } from '@/store/sidebar-store';
 import { useUser } from '@/hooks/use-auth';
 import { useFilteredNavigation } from '@/hooks/use-filtered-navigation';
-import { type NavGroup, type NavItem } from '@/config/navigation';
+import { isNavItemActive, type NavGroup, type NavItem } from '@/config/navigation';
+import { StatusBadge } from '@/components/shared/status-badge';
 
 export function Sidebar() {
   const pathname = usePathname();
   const { isCollapsed, isOpen, setCollapsed, close } = useSidebarStore();
   const { data: session } = useUser();
-
-  const systemRole = session?.user?.systemRole;
-  const orgRole = session?.activeOrganization?.role;
-  
-  // If user is a Super Admin, strictly limit their view to Super Admin routes
-  // to prevent cluttering the sidebar with organization-specific links.
-  const activeRoles = systemRole === 'SUPER_ADMIN' ? [systemRole] : [systemRole, orgRole];
-  const navigation = useFilteredNavigation(activeRoles);
+  const navigation = useFilteredNavigation();
 
   const user = session?.user;
-  const displayName = user ? `${user.firstName} ${user.lastName}`.trim() || user.email : 'User';
-  const displayEmail = user?.email ?? '';
+  const org = session?.activeOrganization;
+  const displayName = user
+    ? `${user.firstName ?? ''} ${user.lastName ?? ''}`.trim() || user.email
+    : '';
   const initials = user
-    ? `${user.firstName?.charAt(0) ?? ''}${user.lastName?.charAt(0) ?? ''}`.toUpperCase() || 'U'
+    ? `${user.firstName?.[0] ?? ''}${user.lastName?.[0] ?? ''}`.toUpperCase() ||
+      user.email?.[0]?.toUpperCase() ||
+      'U'
     : 'U';
 
   return (
     <>
-      {/* Mobile overlay backdrop */}
       {isOpen && (
         <div
-          className="fixed inset-0 z-40 bg-black/50 backdrop-blur-sm md:hidden"
+          role="presentation"
+          className="fixed inset-0 z-40 bg-foreground/20 backdrop-blur-sm md:hidden"
           onClick={close}
         />
       )}
 
       <aside
+        aria-label="Main navigation"
         className={cn(
-          'fixed left-0 top-0 z-50 flex h-screen flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground shadow-xl transition-all duration-300 ease-in-out',
-          // Mobile: hidden by default, shown when isOpen
+          'fixed left-0 top-0 z-50 flex h-dvh w-64 flex-col border-r border-sidebar-border',
+          'bg-sidebar text-sidebar-foreground transition-[width,transform] duration-200 ease-out',
           '-translate-x-full md:translate-x-0',
           isOpen && 'translate-x-0',
-          // Desktop width: 256px expanded, 64px collapsed
           isCollapsed ? 'md:w-16' : 'md:w-64',
-          // Always 64px on mobile (full width when open handled by translate)
-          'w-64',
         )}
       >
-        {/* ── Logo + Toggle ── */}
-        <div className="flex h-14 shrink-0 items-center justify-between border-b border-sidebar-border px-4">
-          <Link href="/dashboard" className="flex items-center gap-2.5 overflow-hidden">
-            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-sidebar-primary text-sidebar-primary-foreground shadow-sm">
-              <MessageCircle size={16} fill="currentColor" strokeWidth={0} />
-            </div>
-            <div
+        {/* ── Brand ─────────────────────────────────────────────────────── */}
+        <div className="flex h-14 shrink-0 items-center justify-between gap-2 border-b border-sidebar-border px-3">
+          <Link
+            href="/dashboard"
+            className="flex min-w-0 items-center gap-2.5 rounded-md"
+            aria-label="FormBuilder home"
+          >
+            <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-sidebar-primary text-sidebar-primary-foreground">
+              <Squircle className="size-4" strokeWidth={2.5} />
+            </span>
+            <span
               className={cn(
-                'overflow-hidden transition-all duration-300',
-                isCollapsed ? 'md:w-0 md:opacity-0' : 'md:w-auto md:opacity-100',
+                'min-w-0 overflow-hidden transition-opacity duration-150',
+                isCollapsed && 'md:w-0 md:opacity-0',
               )}
             >
-              <div className="text-sm font-bold leading-none tracking-tight whitespace-nowrap">
+              <span className="block truncate text-sm font-semibold leading-tight">
                 FormBuilder
-              </div>
-              <div className="mt-0.5 text-[10px] font-medium uppercase tracking-widest text-sidebar-foreground/60 whitespace-nowrap">
-                Enterprise
-              </div>
-            </div>
+              </span>
+              {/* The active organization belongs in the chrome — a user with
+                  access to more than one workspace otherwise has no way to tell
+                  which one they are looking at. */}
+              <span className="block truncate text-xs leading-tight text-muted-foreground">
+                {org?.name ?? 'No organization'}
+              </span>
+            </span>
           </Link>
 
-          {/* Desktop collapse toggle */}
           <button
             onClick={() => setCollapsed(!isCollapsed)}
-            className="hidden rounded-md p-1.5 text-sidebar-foreground/50 hover:bg-sidebar-accent hover:text-sidebar-foreground md:flex"
             aria-label={isCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+            className="hidden shrink-0 rounded-md p-1.5 text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-foreground md:block"
           >
-            {isCollapsed ? <PanelLeft size={16} strokeWidth={1.5} /> : <PanelLeftClose size={16} strokeWidth={1.5} />}
+            {isCollapsed ? (
+              <PanelLeft className="size-4" strokeWidth={1.5} />
+            ) : (
+              <PanelLeftClose className="size-4" strokeWidth={1.5} />
+            )}
           </button>
 
-          {/* Mobile close button */}
           <button
             onClick={close}
-            className="rounded-md p-1.5 text-sidebar-foreground/50 hover:bg-sidebar-accent hover:text-sidebar-foreground md:hidden"
-            aria-label="Close sidebar"
+            aria-label="Close navigation"
+            className="shrink-0 rounded-md p-1.5 text-muted-foreground hover:bg-sidebar-accent md:hidden"
           >
-            <X size={16} strokeWidth={1.5} />
+            <X className="size-4" strokeWidth={1.5} />
           </button>
         </div>
 
-        {/* ── Navigation ── */}
-        <nav className="flex-1 overflow-y-auto overflow-x-hidden p-2 scrollbar-thin">
-          {navigation.map((group, i) => (
-            <NavGroupSection
-              key={i}
+        {/* ── Navigation ────────────────────────────────────────────────── */}
+        <nav className="flex-1 overflow-y-auto overflow-x-hidden p-2">
+          {navigation.map((group) => (
+            <NavSection
+              key={group.title}
               group={group}
               isCollapsed={isCollapsed}
               pathname={pathname}
@@ -113,55 +111,58 @@ export function Sidebar() {
           ))}
         </nav>
 
-        {/* ── User Profile Footer ── */}
-        <div
-          className={cn(
-            'border-t border-sidebar-border p-3 transition-all duration-300',
-            isCollapsed && 'md:p-2',
-          )}
-        >
-          <div className="flex items-center gap-3">
-            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-sidebar-primary to-sidebar-primary/60 text-sidebar-primary-foreground text-sm font-bold shadow-md">
+        {/* ── Account ───────────────────────────────────────────────────── */}
+        <div className="border-t border-sidebar-border p-2">
+          <Link
+            href="/profile"
+            onClick={close}
+            className={cn(
+              'flex items-center gap-2.5 rounded-lg p-2 transition-colors hover:bg-sidebar-accent',
+              isCollapsed && 'md:justify-center',
+            )}
+          >
+            <span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-muted text-xs font-semibold text-muted-foreground">
               {initials}
-            </div>
-            <div
+            </span>
+            <span
               className={cn(
-                'min-w-0 flex-1 overflow-hidden transition-all duration-300',
+                'min-w-0 flex-1 overflow-hidden transition-opacity duration-150',
                 isCollapsed && 'md:w-0 md:opacity-0',
               )}
             >
-              <p className="truncate text-sm font-semibold text-sidebar-foreground">{displayName}</p>
-              <p className="truncate text-[11px] text-sidebar-foreground/60">{displayEmail}</p>
-            </div>
-          </div>
+              <span className="block truncate text-sm font-medium">{displayName}</span>
+              <span className="block truncate text-xs text-muted-foreground">{user?.email}</span>
+            </span>
+            {!isCollapsed && org?.role && <StatusBadge status={org.role} className="shrink-0" />}
+          </Link>
         </div>
       </aside>
     </>
   );
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// NavGroupSection
-// ─────────────────────────────────────────────────────────────────────────────
-interface NavGroupSectionProps {
+function NavSection({
+  group,
+  isCollapsed,
+  pathname,
+  onNavigate,
+}: {
   group: NavGroup;
   isCollapsed: boolean;
   pathname: string;
   onNavigate: () => void;
-}
-
-function NavGroupSection({ group, isCollapsed, pathname, onNavigate }: NavGroupSectionProps) {
+}) {
   return (
-    <div className="mb-4">
+    <div className="mb-4 last:mb-0">
       {!isCollapsed && (
-        <p className="mb-1 px-3 text-[10px] font-bold uppercase tracking-widest text-sidebar-foreground/40">
+        <h2 className="mb-1 px-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
           {group.title}
-        </p>
+        </h2>
       )}
       <ul className="space-y-0.5">
-        {group.items.map((item, i) => (
-          <NavItemComponent
-            key={i}
+        {group.items.map((item) => (
+          <NavRow
+            key={item.href}
             item={item}
             isCollapsed={isCollapsed}
             pathname={pathname}
@@ -173,76 +174,61 @@ function NavGroupSection({ group, isCollapsed, pathname, onNavigate }: NavGroupS
   );
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// NavItemComponent
-// ─────────────────────────────────────────────────────────────────────────────
-interface NavItemComponentProps {
-  item: NavItem;
-  isCollapsed: boolean;
-  pathname: string;
-  onNavigate: () => void;
-  depth?: number;
-}
-
-function NavItemComponent({
+function NavRow({
   item,
   isCollapsed,
   pathname,
   onNavigate,
-  depth = 0,
-}: NavItemComponentProps) {
-  const hasChildren = item.children && item.children.length > 0;
-  const isActive = pathname === item.href || (item.href !== '/' && pathname.startsWith(item.href + '/'));
-  const isChildActive = item.children?.some(
-    (child) => pathname === child.href || pathname.startsWith(child.href + '/'),
-  );
-
-  const [isExpanded, setIsExpanded] = useState(isChildActive || false);
+}: {
+  item: NavItem;
+  isCollapsed: boolean;
+  pathname: string;
+  onNavigate: () => void;
+}) {
   const Icon = item.icon;
+  const isActive = isNavItemActive(item, pathname);
+  const hasChildren = !!item.children?.length;
+  const childActive = item.children?.some((child) => isNavItemActive(child, pathname)) ?? false;
 
-  const shouldBeOpen = isExpanded || isChildActive;
+  const [manuallyOpen, setManuallyOpen] = useState<boolean | null>(null);
+  // Default to open when a child is active, but let an explicit toggle win —
+  // the previous implementation forced the section open whenever a child route
+  // matched, so it could not be collapsed while you were inside it.
+  const expanded = manuallyOpen ?? childActive;
+
+  const rowClasses = (active: boolean) =>
+    cn(
+      'flex w-full items-center gap-2.5 rounded-lg px-2 py-2 text-sm transition-colors',
+      active
+        ? 'bg-sidebar-accent font-medium text-sidebar-accent-foreground'
+        : 'text-muted-foreground hover:bg-sidebar-accent/60 hover:text-sidebar-foreground',
+    );
 
   if (hasChildren && !isCollapsed) {
     return (
       <li>
         <button
-          onClick={() => setIsExpanded(!shouldBeOpen)}
-          className={cn(
-            'flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium transition-all duration-200',
-            isActive || isChildActive
-              ? 'bg-sidebar-accent text-sidebar-accent-foreground'
-              : 'text-sidebar-foreground/75 hover:bg-sidebar-accent/60 hover:text-sidebar-foreground',
-          )}
+          onClick={() => setManuallyOpen(!expanded)}
+          aria-expanded={expanded}
+          className={rowClasses(isActive || childActive)}
         >
-          <Icon
-            size={16}
-            strokeWidth={1.5}
-            className={cn(
-              'shrink-0',
-              isActive || isChildActive
-                ? 'text-sidebar-accent-foreground'
-                : 'text-sidebar-foreground/50',
-            )}
-          />
+          <Icon className="size-4 shrink-0" strokeWidth={1.5} />
           <span className="flex-1 text-left">{item.title}</span>
           <ChevronDown
-            size={14}
-            className={cn(
-              'text-sidebar-foreground/40 transition-transform duration-200',
-              !shouldBeOpen && '-rotate-90',
-            )}
+            className={cn('size-3.5 transition-transform', !expanded && '-rotate-90')}
+            aria-hidden
           />
         </button>
-        {shouldBeOpen && (
-          <ul className="ml-4 mt-0.5 space-y-0.5 border-l border-sidebar-border pl-3">
-            {item.children?.map((child, i) => (
-              <NavItemComponent
-                key={i}
+
+        {expanded && (
+          <ul className="ml-4 mt-0.5 space-y-0.5 border-l border-sidebar-border pl-2">
+            {item.children!.map((child) => (
+              <NavRow
+                key={child.href}
                 item={child}
                 isCollapsed={isCollapsed}
                 pathname={pathname}
                 onNavigate={onNavigate}
-                depth={depth + 1}
               />
             ))}
           </ul>
@@ -257,32 +243,13 @@ function NavItemComponent({
         href={item.href}
         onClick={onNavigate}
         title={isCollapsed ? item.title : undefined}
-        className={cn(
-          'flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium transition-all duration-200',
-          isActive
-            ? 'bg-sidebar-accent text-sidebar-accent-foreground shadow-sm'
-            : 'text-sidebar-foreground/75 hover:bg-sidebar-accent/60 hover:text-sidebar-foreground',
-          isCollapsed && 'md:justify-center md:px-2',
-        )}
+        aria-current={isActive ? 'page' : undefined}
+        className={cn(rowClasses(isActive), isCollapsed && 'md:justify-center md:px-2')}
       >
-        <Icon
-          size={16}
-          strokeWidth={1.5}
-          className={cn(
-            'shrink-0',
-            isActive ? 'text-sidebar-accent-foreground' : 'text-sidebar-foreground/50',
-          )}
-        />
-        <span
-          className={cn(
-            'truncate transition-all duration-300',
-            isCollapsed && 'md:w-0 md:opacity-0 md:overflow-hidden',
-          )}
-        >
-          {item.title}
-        </span>
+        <Icon className="size-4 shrink-0" strokeWidth={1.5} />
+        <span className={cn('truncate', isCollapsed && 'md:hidden')}>{item.title}</span>
         {!isCollapsed && item.badge && (
-          <span className="ml-auto rounded-full bg-sidebar-primary px-2 py-0.5 text-[10px] font-bold text-sidebar-primary-foreground">
+          <span className="tabular ml-auto rounded bg-muted px-1.5 text-xs text-muted-foreground">
             {item.badge}
           </span>
         )}

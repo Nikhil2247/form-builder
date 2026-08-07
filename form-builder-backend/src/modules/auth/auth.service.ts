@@ -1,21 +1,39 @@
-import { Injectable, UnauthorizedException, ConflictException } from '@nestjs/common';
+import { Injectable, Logger, UnauthorizedException, ConflictException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { PrismaService } from '../../common/prisma/prisma.service';
+import { userCredentialsSelect } from '../../common/prisma/selects';
 import * as argon2 from 'argon2';
 import * as crypto from 'crypto';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
 import { MailService } from '../mail/mail.service';
-// @ts-ignore
-import { authenticator } from 'otplib';
+import { TotpService } from '../../common/crypto/totp.service';
+import { CryptoService } from '../../common/crypto/crypto.service';
 import * as qrcode from 'qrcode';
+
+/**
+ * Base URL of the frontend, used to build links in outbound email.
+ * Falls back to the first configured CORS origin so the two can never drift
+ * (previously this defaulted to :3000, which is the API's own port).
+ */
+export function frontendUrl(): string {
+  return (
+    process.env.FRONTEND_URL ??
+    process.env.CORS_ORIGINS?.split(',')[0]?.trim() ??
+    'http://localhost:3001'
+  );
+}
 
 @Injectable()
 export class AuthService {
+  private readonly logger = new Logger(AuthService.name);
+
   constructor(
     private prisma: PrismaService,
     private jwtService: JwtService,
     private mailService: MailService,
+    private totp: TotpService,
+    private crypto: CryptoService,
   ) {}
 
   private async hashPassword(password: string): Promise<string> {
@@ -142,9 +160,11 @@ export class AuthService {
       },
     });
 
-    const verifyUrl = `${process.env.FRONTEND_URL || 'http://localhost:3000'}/verify-email?token=${rawToken}`;
-    // Fire and forget email sending
-    this.mailService.sendPasswordResetEmail(result.user.email, verifyUrl).catch(console.error); // We'd want a proper sendVerificationEmail here in reality, but leveraging this for now or assuming mailService has it
+    const verifyUrl = `${frontendUrl()}/verify-email?token=${rawToken}`;
+    // Fire and forget — a mail outage must not block account creation.
+    this.mailService
+      .sendVerificationEmail(result.user.email, verifyUrl, result.user.firstName)
+      .catch((err) => this.logger.error('Failed to send verification email', err));
 
     return this.generateTokens(
       result.user.id,
@@ -185,7 +205,12 @@ export class AuthService {
   async login(dto: LoginDto) {
     const user = await this.prisma.reader.user.findUnique({
       where: { email: dto.email.toLowerCase() },
-      include: {
+      // Explicit projection. `include` pulled every user column — including
+      // `preferredStorage`, `avatarUrl`, and both timestamps — on the hottest
+      // unauthenticated endpoint in the app. Only the credential fields and the
+      // membership are needed to issue a token.
+      select: {
+        ...userCredentialsSelect,
         memberships: {
           select: {
             organizationId: true,
@@ -258,7 +283,14 @@ export class AuthService {
       throw new UnauthorizedException('MFA is not configured for this user');
     }
 
-    const isValid = authenticator.verify({ token: code, secret: user.mfaSecret });
+    const secret = this.crypto.decrypt(user.mfaSecret)!;
+
+    // Accept either a TOTP code or a single-use recovery code.
+    let isValid = await this.totp.verifyToken(code, secret);
+    if (!isValid) {
+      isValid = await this.consumeRecoveryCode(user.id, code);
+    }
+
     if (!isValid) {
       throw new UnauthorizedException('Invalid MFA code');
     }
@@ -342,6 +374,9 @@ export class AuthService {
         avatarUrl: true,
         emailVerified: true,
         systemRole: true,
+        // Was missing from the select, so getMe() always returned
+        // mfaEnabled: undefined and the UI could never show MFA as active.
+        mfaEnabled: true,
         createdAt: true,
         memberships: {
           select: {
@@ -415,7 +450,7 @@ export class AuthService {
       },
     });
 
-    const resetUrl = `${process.env.FRONTEND_URL || 'http://localhost:3000'}/reset-password?token=${rawToken}`;
+    const resetUrl = `${frontendUrl()}/reset-password?token=${rawToken}`;
     await this.mailService.sendPasswordResetEmail(user.email, resetUrl);
 
     return { message: 'If that email exists, a reset link has been sent.' };
@@ -463,16 +498,17 @@ export class AuthService {
   async setupMfa(userId: string) {
     const user = await this.prisma.reader.user.findUnique({ where: { id: userId } });
     if (!user) throw new UnauthorizedException('User not found');
-    
+
     // Always generate a new secret during setup
-    const secret = authenticator.generateSecret();
-    
+    const secret = this.totp.generateSecret();
+
     await this.prisma.writer.user.update({
       where: { id: userId },
-      data: { mfaSecret: secret, mfaEnabled: false }, // Only enable after verification
+      // Encrypted at rest — a leaked backup must not hand over TOTP seeds.
+      data: { mfaSecret: this.crypto.encrypt(secret), mfaEnabled: false },
     });
 
-    const otpauthUrl = authenticator.keyuri(user.email, 'FormBuilder', secret);
+    const otpauthUrl = this.totp.buildUri(user.email, secret);
     const qrCodeDataUrl = await qrcode.toDataURL(otpauthUrl);
 
     return {
@@ -487,26 +523,96 @@ export class AuthService {
       throw new UnauthorizedException('MFA setup not initiated');
     }
 
-    const isValid = authenticator.verify({ token: code, secret: user.mfaSecret });
-    
+    const secret = this.crypto.decrypt(user.mfaSecret)!;
+    // NOTE: totp.verifyToken returns a real boolean. otplib 13's verify()
+    // resolves to { valid, delta } — truthiness-checking that object directly
+    // would accept every code.
+    const isValid = await this.totp.verifyToken(code, secret);
+
     if (!isValid) {
       throw new UnauthorizedException('Invalid MFA code');
     }
+
+    const recoveryCodes = await this.issueRecoveryCodes(userId);
 
     await this.prisma.writer.user.update({
       where: { id: userId },
       data: { mfaEnabled: true },
     });
 
-    return { message: 'MFA enabled successfully' };
+    // Shown exactly once. Without these, a lost device means a support ticket.
+    return { message: 'MFA enabled successfully', recoveryCodes };
   }
 
-  async disableMfa(userId: string) {
-    await this.prisma.writer.user.update({
-      where: { id: userId },
-      data: { mfaEnabled: false, mfaSecret: null },
+  async disableMfa(userId: string, currentPassword: string) {
+    // Disabling a second factor is a security-sensitive action; require the
+    // password so a hijacked session cannot silently strip MFA.
+    const user = await this.prisma.reader.user.findUnique({ where: { id: userId } });
+    if (!user) throw new UnauthorizedException('User not found');
+
+    if (!(await argon2.verify(user.passwordHash, currentPassword))) {
+      throw new UnauthorizedException('Password is incorrect');
+    }
+
+    await this.prisma.writer.$transaction(async (tx: any) => {
+      await tx.user.update({
+        where: { id: userId },
+        data: { mfaEnabled: false, mfaSecret: null },
+      });
+      await tx.mfaRecoveryCode.deleteMany({ where: { userId } });
     });
+
     return { message: 'MFA disabled successfully' };
+  }
+
+  /**
+   * Generate a fresh set of single-use recovery codes, replacing any existing
+   * ones. Only argon2 hashes are stored; the plaintext is returned once.
+   */
+  private async issueRecoveryCodes(userId: string): Promise<string[]> {
+    const codes = Array.from({ length: 10 }, () =>
+      // 10 chars of base32-ish alphabet, hyphenated for legibility.
+      crypto
+        .randomBytes(8)
+        .toString('base64url')
+        .replace(/[^A-Za-z0-9]/g, '')
+        .slice(0, 10)
+        .toUpperCase()
+        .replace(/^(.{5})(.{5})$/, '$1-$2'),
+    );
+
+    const hashes = await Promise.all(codes.map((c) => argon2.hash(c, { type: argon2.argon2id })));
+
+    await this.prisma.writer.$transaction(async (tx: any) => {
+      await tx.mfaRecoveryCode.deleteMany({ where: { userId } });
+      await tx.mfaRecoveryCode.createMany({
+        data: hashes.map((codeHash) => ({ userId, codeHash })),
+      });
+    });
+
+    return codes;
+  }
+
+  /**
+   * Consume a recovery code in place of a TOTP token.
+   * Each code works exactly once.
+   */
+  private async consumeRecoveryCode(userId: string, candidate: string): Promise<boolean> {
+    const normalized = candidate.trim().toUpperCase();
+    const codes = await this.prisma.reader.mfaRecoveryCode.findMany({
+      where: { userId, usedAt: null },
+    });
+
+    for (const record of codes) {
+      if (await argon2.verify(record.codeHash, normalized)) {
+        await this.prisma.writer.mfaRecoveryCode.update({
+          where: { id: record.id },
+          data: { usedAt: new Date() },
+        });
+        return true;
+      }
+    }
+    return false;
   }
 
   private async generateTokens(

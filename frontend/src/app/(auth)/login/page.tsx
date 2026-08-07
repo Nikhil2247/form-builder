@@ -1,8 +1,9 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { Suspense, useState } from 'react';
+import { landingRoute } from '@/config/roles';
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -10,8 +11,9 @@ import { Layers } from 'lucide-react';
 import { useLogin } from '@/hooks/use-auth';
 import { toast } from 'sonner';
 
-export default function LoginPage() {
+function LoginForm() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   
@@ -27,16 +29,14 @@ export default function LoginPage() {
             router.push(`/mfa?token=${data.mfaToken}`);
           } else {
             toast.success('Logged in successfully!');
+            // One shared rule (config/roles.ts), so the login redirect, the
+            // middleware, and the forbidden page cannot disagree. This used to
+            // drop an org ADMIN on the audit log and an EDITOR on a blank
+            // unsaved form, and could send a super admin with no membership to
+            // /dashboard — a page their permissions forbid.
             const user = data.user;
-            if (user?.systemRole === 'SUPER_ADMIN') {
-              router.push('/platform');
-            } else if (user?.orgRole === 'ADMIN') {
-              router.push('/org-audit');
-            } else if (user?.orgRole === 'EDITOR') {
-              router.push('/forms/builder');
-            } else {
-              router.push('/dashboard');
-            }
+            const next = searchParams.get('next');
+            router.push(next ?? landingRoute(user?.systemRole, user?.orgRole));
           }
         },
         onError: (error: any) => {
@@ -107,5 +107,18 @@ export default function LoginPage() {
         </Link>
       </div>
     </div>
+  );
+}
+
+/**
+ * useSearchParams() (used to honour ?next=) forces this subtree to render on the
+ * client, and Next requires an explicit Suspense boundary around that — without
+ * one the static export of /login fails the build outright.
+ */
+export default function LoginPage() {
+  return (
+    <Suspense fallback={<div className="min-h-[24rem]" aria-busy="true" />}>
+      <LoginForm />
+    </Suspense>
   );
 }

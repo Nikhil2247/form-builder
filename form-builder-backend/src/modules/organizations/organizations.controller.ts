@@ -11,6 +11,9 @@ import { OrgMemberGuard } from '../../common/guards/org-member.guard';
 import { RoleGuard } from '../../common/guards/role.guard';
 import { RequiredRole } from '../../common/decorators/roles.decorator';
 import { OrgId } from '../../common/decorators/org-id.decorator';
+import { PaginationQueryDto } from '../../common/pagination/pagination-query.dto';
+import { AuditLogQueryDto } from '../../common/pagination/audit-query.dto';
+import { parsePagination } from '../../common/pagination/pagination';
 import type { Request } from 'express';
 
 /**
@@ -84,16 +87,8 @@ export class OrganizationsController {
   @Get(':orgId/members')
   @UseGuards(OrgMemberGuard, RoleGuard)
   @RequiredRole('ADMIN')
-  async listMembers(
-    @OrgId() orgId: string,
-    @Query('page') page?: string,
-    @Query('limit') limit?: string,
-  ) {
-    return this.orgsService.listMembers(
-      orgId,
-      parseInt(page ?? '1', 10),
-      parseInt(limit ?? '50', 10)
-    );
+  async listMembers(@OrgId() orgId: string, @Query() query: PaginationQueryDto) {
+    return this.orgsService.listMembers(orgId, parsePagination(query));
   }
 
   /**
@@ -156,16 +151,8 @@ export class OrganizationsController {
   @Get(':orgId/invitations')
   @UseGuards(OrgMemberGuard, RoleGuard)
   @RequiredRole('ADMIN')
-  async listInvitations(
-    @OrgId() orgId: string,
-    @Query('page') page?: string,
-    @Query('limit') limit?: string,
-  ) {
-    return this.orgsService.listInvitations(
-      orgId,
-      parseInt(page ?? '1', 10),
-      parseInt(limit ?? '50', 10)
-    );
+  async listInvitations(@OrgId() orgId: string, @Query() query: PaginationQueryDto) {
+    return this.orgsService.listInvitations(orgId, parsePagination(query));
   }
 
   /**
@@ -204,15 +191,7 @@ export class OrganizationsController {
   @Get(':orgId/audit-logs')
   @UseGuards(OrgMemberGuard, RoleGuard)
   @RequiredRole('ADMIN')
-  async getAuditLogs(
-    @OrgId() orgId: string,
-    @Query('page') page?: string,
-    @Query('limit') limit?: string,
-  ) {
-    return this.orgsService.getAuditLogs(
-      orgId,
-      parseInt(page ?? '1', 10),
-      parseInt(limit ?? '50', 10)
-    );
+  async getAuditLogs(@OrgId() orgId: string, @Query() query: AuditLogQueryDto) {
+    return this.orgsService.getAuditLogs(orgId, parsePagination(query), query.action);
   }
 }

@@ -1,37 +1,50 @@
+'use client';
+
 import React, { useState } from 'react';
-import { FormQuestion, QuestionType } from '@/types/form';
-import { 
-  ChevronDown, 
-  ChevronRight, 
-  Pin, 
-  Plus, 
-  MessageSquare, 
-  CheckCircle2, 
-  AlignLeft, 
-  Type, 
-  UploadCloud, 
-  ListFilter,
-  Layers,
-  CheckSquare,
-  Star,
-  Gauge,
-  Sliders,
+import {
+  AlignLeft,
   Calendar,
-  PenTool,
+  CheckCircle2,
+  CheckSquare,
+  ChevronDown,
+  ChevronRight,
+  Gauge,
   Grid,
-  Heading,
-  Mail,
-  Phone,
   Hash,
+  Heading,
   Link as LinkIcon,
-  X
+  ListFilter,
+  Mail,
+  PenTool,
+  Phone,
+  Plus,
+  Sliders,
+  Star,
+  Type,
+  UploadCloud,
+  X,
 } from 'lucide-react';
+import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
+import { useBuilderStore, useQuestionOutline } from '@/store/builder-store';
+import type { QuestionType } from '@/types/form';
+
+/**
+ * Field palette and document outline.
+ *
+ * Reads selection and structure from the builder store rather than props, so
+ * selecting a question re-renders this panel alone instead of the page and
+ * every card beneath it.
+ *
+ * Two fixes worth calling out:
+ *   • The outline hardcoded `[1, 2]` as the page list, so it always drew a
+ *     "Page 2" (even for single-page forms) and never showed page 3 or beyond.
+ *     It now walks the real pages.
+ *   • Outline rows were `<div onClick>`, unreachable by keyboard. They are
+ *     buttons now.
+ */
 
 interface LeftTreePanelProps {
-  questions: FormQuestion[];
-  selectedQuestionId: string | null;
-  onSelectQuestion: (id: string) => void;
   onAddQuestion: (type: QuestionType) => void;
   onAddPage: () => void;
   onClose?: () => void;
@@ -39,216 +52,236 @@ interface LeftTreePanelProps {
 
 interface PaletteCategory {
   category: string;
-  items: Array<{ type: QuestionType; label: string; icon: any }>;
+  items: Array<{ type: QuestionType; label: string; icon: React.ElementType }>;
 }
 
 const CATEGORIZED_PALETTE: PaletteCategory[] = [
   {
-    category: 'Basic Fields',
+    category: 'Basic',
     items: [
-      { type: 'SHORT_TEXT', label: 'Short Text Input', icon: Type },
-      { type: 'LONG_TEXT', label: 'Paragraph / Textarea', icon: AlignLeft },
-      { type: 'EMAIL', label: 'Email Address', icon: Mail },
-      { type: 'PHONE', label: 'Phone Number', icon: Phone },
-      { type: 'NUMBER', label: 'Numeric Limit Value', icon: Hash },
-      { type: 'URL', label: 'Website Link URL', icon: LinkIcon },
+      { type: 'SHORT_TEXT', label: 'Short answer', icon: Type },
+      { type: 'LONG_TEXT', label: 'Paragraph', icon: AlignLeft },
+      { type: 'EMAIL', label: 'Email address', icon: Mail },
+      { type: 'PHONE', label: 'Phone number', icon: Phone },
+      { type: 'NUMBER', label: 'Number', icon: Hash },
+      { type: 'URL', label: 'Website URL', icon: LinkIcon },
     ],
   },
   {
-    category: 'Selection Fields',
+    category: 'Choice',
     items: [
-      { type: 'SINGLE_CHOICE', label: 'Radio (Single Choice)', icon: CheckCircle2 },
-      { type: 'MULTI_CHOICE', label: 'Checkbox (Multi Choice)', icon: CheckSquare },
-      { type: 'DROPDOWN', label: 'Dropdown Select', icon: ListFilter },
+      { type: 'SINGLE_CHOICE', label: 'Single choice', icon: CheckCircle2 },
+      { type: 'MULTI_CHOICE', label: 'Multiple choice', icon: CheckSquare },
+      { type: 'DROPDOWN', label: 'Dropdown', icon: ListFilter },
     ],
   },
   {
-    category: 'Rating & Evaluation',
+    category: 'Rating',
     items: [
-      { type: 'STAR_RATING', label: '5-Star Rating', icon: Star },
-      { type: 'NPS', label: 'NPS Score (0-10)', icon: Gauge },
-      { type: 'SLIDER', label: 'Range Slider', icon: Sliders },
+      { type: 'STAR_RATING', label: 'Star rating', icon: Star },
+      { type: 'NPS', label: 'NPS score', icon: Gauge },
+      { type: 'SLIDER', label: 'Slider', icon: Sliders },
     ],
   },
   {
-    category: 'Advanced & Storage',
+    category: 'Advanced',
     items: [
-      { type: 'DATE', label: 'Date Picker', icon: Calendar },
-      { type: 'FILE_UPLOAD', label: 'MinIO File Upload', icon: UploadCloud },
-      { type: 'SIGNATURE', label: 'Digital Signature', icon: PenTool },
-      { type: 'MATRIX', label: 'Likert Scale Matrix', icon: Grid },
+      { type: 'DATE', label: 'Date', icon: Calendar },
+      { type: 'FILE_UPLOAD', label: 'File upload', icon: UploadCloud },
+      { type: 'SIGNATURE', label: 'Signature', icon: PenTool },
+      { type: 'MATRIX', label: 'Matrix / Likert', icon: Grid },
     ],
   },
   {
-    category: 'Layout Banner',
-    items: [
-      { type: 'SECTION_HEADER', label: 'Section Header Banner', icon: Heading },
-    ],
+    category: 'Layout',
+    items: [{ type: 'SECTION_HEADER', label: 'Section header', icon: Heading }],
   },
 ];
 
-export function LeftTreePanel({
-  questions,
-  selectedQuestionId,
-  onSelectQuestion,
-  onAddQuestion,
-  onAddPage,
-  onClose
-}: LeftTreePanelProps) {
-  const [activeTab, setActiveTab] = useState<'elements' | 'myform'>('elements');
-  const [openPages, setOpenPages] = useState<Record<number, boolean>>({ 1: true, 2: true });
+const TYPE_ICONS: Partial<Record<QuestionType, React.ElementType>> = {
+  SINGLE_CHOICE: CheckCircle2,
+  MULTI_CHOICE: CheckSquare,
+  DROPDOWN: ListFilter,
+  LONG_TEXT: AlignLeft,
+  FILE_UPLOAD: UploadCloud,
+  STAR_RATING: Star,
+  NPS: Gauge,
+  SLIDER: Sliders,
+  SIGNATURE: PenTool,
+  DATE: Calendar,
+  MATRIX: Grid,
+  SECTION_HEADER: Heading,
+  EMAIL: Mail,
+  PHONE: Phone,
+  NUMBER: Hash,
+  URL: LinkIcon,
+};
 
-  const togglePage = (pageNum: number) => {
-    setOpenPages(prev => ({ ...prev, [pageNum]: !prev[pageNum] }));
-  };
+export function LeftTreePanel({ onAddQuestion, onAddPage, onClose }: LeftTreePanelProps) {
+  const [activeTab, setActiveTab] = useState<'elements' | 'outline'>('elements');
+  const [collapsedPages, setCollapsedPages] = useState<Record<number, boolean>>({});
 
-  const getIconForType = (type: QuestionType) => {
-    switch (type) {
-      case 'SINGLE_CHOICE':
-        return CheckCircle2;
-      case 'MULTI_CHOICE':
-        return CheckSquare;
-      case 'LONG_TEXT':
-        return AlignLeft;
-      case 'FILE_UPLOAD':
-        return UploadCloud;
-      case 'DROPDOWN':
-        return ListFilter;
-      case 'STAR_RATING':
-        return Star;
-      case 'SIGNATURE':
-        return PenTool;
-      default:
-        return Type;
-    }
+  const outline = useQuestionOutline();
+  const pages = useBuilderStore((s) => s.pages);
+  const selectedQuestionId = useBuilderStore((s) => s.selectedQuestionId);
+  const selectQuestion = useBuilderStore((s) => s.selectQuestion);
+
+  const focusQuestion = (id: string) => {
+    selectQuestion(id);
+    document
+      .querySelector(`[data-question-id="${id}"]`)
+      ?.scrollIntoView({ block: 'center', behavior: 'smooth' });
   };
 
   return (
-    <aside className="w-64 border-r border-border bg-card flex flex-col shrink-0 h-full overflow-hidden">
-      {/* Mobile Close Button */}
+    <aside className="flex h-full w-64 shrink-0 flex-col overflow-hidden border-r border-border bg-card">
       {onClose && (
-        <Button 
+        <Button
           variant="ghost"
-          size="icon"
+          size="icon-sm"
           onClick={onClose}
-          className="md:hidden absolute top-2 right-2 z-10"
+          aria-label="Close panel"
+          className="absolute right-2 top-2 z-10 md:hidden"
         >
-          <X className="h-4 w-4" />
+          <X className="size-4" />
         </Button>
       )}
 
-      {/* Tabs Bar */}
-      <div className="flex border-b border-border text-xs font-semibold text-muted-foreground bg-muted/30">
-        <button
-          onClick={() => setActiveTab('elements')}
-          className={`flex-1 py-3 px-3 text-center transition-colors cursor-pointer border-b-2 ${
-            activeTab === 'elements'
-              ? 'border-primary text-primary bg-background font-bold'
-              : 'border-transparent hover:text-foreground'
-          }`}
-        >
-          Elements
-        </button>
-        <button
-          onClick={() => setActiveTab('myform')}
-          className={`flex-1 py-3 px-3 text-center transition-colors cursor-pointer border-b-2 ${
-            activeTab === 'myform'
-              ? 'border-primary text-primary bg-background font-bold'
-              : 'border-transparent hover:text-foreground'
-          }`}
-        >
-          My Form ({questions.length})
-        </button>
+      <div role="tablist" className="flex border-b border-border bg-muted/30 text-xs font-medium">
+        {(
+          [
+            ['elements', 'Fields'],
+            ['outline', `Outline (${outline.length})`],
+          ] as const
+        ).map(([tab, label]) => (
+          <button
+            key={tab}
+            role="tab"
+            aria-selected={activeTab === tab}
+            onClick={() => setActiveTab(tab)}
+            className={cn(
+              'flex-1 border-b-2 px-3 py-2.5 text-center transition-colors',
+              activeTab === tab
+                ? 'border-foreground bg-background font-semibold text-foreground'
+                : 'border-transparent text-muted-foreground hover:text-foreground',
+            )}
+          >
+            {label}
+          </button>
+        ))}
       </div>
 
-      {/* Tab Contents */}
-      <div className="flex-1 overflow-y-auto p-4 space-y-6">
+      <div className="flex-1 space-y-5 overflow-y-auto p-3">
         {activeTab === 'elements' ? (
-          /* All 17 Categorized Question Types */
-          <div className="space-y-6">
-            {CATEGORIZED_PALETTE.map((cat) => (
-              <div key={cat.category} className="space-y-2">
-                <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider block">
-                  {cat.category}
-                </span>
-                <div className="space-y-1.5">
-                  {cat.items.map((item) => {
-                    const Icon = item.icon;
-                    return (
-                      <button
-                        key={item.type}
-                        onClick={() => onAddQuestion(item.type)}
-                        className="w-full flex items-center gap-3 p-2 bg-background hover:bg-accent border border-border hover:border-primary/50 rounded-md text-left text-xs font-medium text-foreground transition-all cursor-pointer shadow-sm group"
-                      >
-                        <div className="w-7 h-7 rounded bg-muted flex items-center justify-center text-muted-foreground shrink-0 group-hover:text-primary transition-colors">
-                          <Icon className="h-4 w-4" />
-                        </div>
-                        <span className="truncate">{item.label}</span>
-                      </button>
-                    );
-                  })}
-                </div>
+          CATEGORIZED_PALETTE.map((group) => (
+            <section key={group.category} className="space-y-1.5">
+              <h3 className="px-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                {group.category}
+              </h3>
+              <div className="space-y-1">
+                {group.items.map((item) => {
+                  const Icon = item.icon;
+                  return (
+                    <button
+                      key={item.type}
+                      onClick={() => onAddQuestion(item.type)}
+                      className="flex w-full items-center gap-2.5 rounded-md border border-border bg-background
+                                 p-1.5 text-left text-xs font-medium transition-colors
+                                 hover:border-border-strong hover:bg-muted"
+                    >
+                      <span className="flex size-6 shrink-0 items-center justify-center rounded bg-muted text-muted-foreground">
+                        <Icon className="size-3.5" />
+                      </span>
+                      <span className="truncate">{item.label}</span>
+                    </button>
+                  );
+                })}
               </div>
-            ))}
-          </div>
+            </section>
+          ))
         ) : (
-          /* Tree View of Pages & Questions Outline */
-          <div className="space-y-4">
-            {[1, 2].map((pageNum) => {
-              const pageQuestions = questions.filter(q => (q.pageNumber || 1) === pageNum);
-              const isOpen = openPages[pageNum] ?? true;
+          <div className="space-y-3">
+            {pages.map((page) => {
+              const pageQuestions = outline.filter((q) => (q.pageNumber ?? 1) === page.pageNumber);
+              const collapsed = collapsedPages[page.pageNumber] ?? false;
 
               return (
-                <div key={pageNum} className="space-y-1.5">
-                  <div
-                    onClick={() => togglePage(pageNum)}
-                    className="flex items-center justify-between py-1.5 px-2 rounded-md hover:bg-accent cursor-pointer text-xs font-semibold text-foreground transition-colors"
+                <div key={page.pageNumber} className="space-y-1">
+                  <button
+                    onClick={() =>
+                      setCollapsedPages((prev) => ({
+                        ...prev,
+                        [page.pageNumber]: !collapsed,
+                      }))
+                    }
+                    aria-expanded={!collapsed}
+                    className="flex w-full items-center gap-1.5 rounded-md px-1.5 py-1.5 text-xs font-semibold
+                               transition-colors hover:bg-muted"
                   >
-                    <div className="flex items-center gap-2">
-                      {isOpen ? <ChevronDown className="h-4 w-4 text-muted-foreground" /> : <ChevronRight className="h-4 w-4 text-muted-foreground" />}
-                      <span>Page {pageNum} ({pageQuestions.length})</span>
-                    </div>
-                  </div>
+                    {collapsed ? (
+                      <ChevronRight className="size-3.5 text-muted-foreground" />
+                    ) : (
+                      <ChevronDown className="size-3.5 text-muted-foreground" />
+                    )}
+                    <span className="truncate">{page.title || `Page ${page.pageNumber}`}</span>
+                    <span className="tabular ml-auto text-muted-foreground">
+                      {pageQuestions.length}
+                    </span>
+                  </button>
 
-                  {isOpen && (
-                    <div className="pl-4 space-y-1">
-                      {pageQuestions.map((q) => {
-                        const Icon = getIconForType(q.type);
-                        const isSelected = selectedQuestionId === q.id;
+                  {!collapsed && (
+                    <ul className="space-y-0.5 border-l border-border pl-3">
+                      {pageQuestions.length === 0 && (
+                        <li className="px-2 py-1.5 text-[11px] text-muted-foreground">
+                          No questions on this page
+                        </li>
+                      )}
+                      {pageQuestions.map((question) => {
+                        const Icon = TYPE_ICONS[question.type as QuestionType] ?? Type;
+                        const isSelected = selectedQuestionId === question.id;
 
                         return (
-                          <div
-                            key={q.id}
-                            onClick={() => onSelectQuestion(q.id)}
-                            className={`flex items-center justify-between py-2 px-2.5 rounded-md text-xs font-medium cursor-pointer transition-colors ${
-                              isSelected
-                                ? 'bg-primary/10 text-primary border border-primary/20'
-                                : 'text-muted-foreground hover:bg-accent hover:text-foreground border border-transparent'
-                            }`}
-                          >
-                            <div className="flex items-center gap-2 truncate">
-                              <Icon className={`h-3.5 w-3.5 ${isSelected ? 'text-primary' : 'text-muted-foreground'}`} />
-                              <span className="truncate">{q.label}</span>
-                            </div>
-                            {isSelected && <Pin className="h-3 w-3 text-primary shrink-0 opacity-80" />}
-                          </div>
+                          <li key={question.id}>
+                            <button
+                              onClick={() => focusQuestion(question.id)}
+                              aria-current={isSelected ? 'true' : undefined}
+                              className={cn(
+                                'flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs transition-colors',
+                                isSelected
+                                  ? 'bg-muted font-medium text-foreground'
+                                  : 'text-muted-foreground hover:bg-muted/60 hover:text-foreground',
+                              )}
+                            >
+                              <Icon className="size-3.5 shrink-0" />
+                              <span className="truncate">{question.label || 'Untitled'}</span>
+                              {question.required && (
+                                <span
+                                  aria-label="Required"
+                                  title="Required"
+                                  className="ml-auto text-destructive"
+                                >
+                                  *
+                                </span>
+                              )}
+                            </button>
+                          </li>
                         );
                       })}
-
-                      {pageNum === 1 && (
-                        <div
-                          onClick={onAddPage}
-                          className="flex items-center justify-center gap-2 mt-3 py-2 px-3 bg-muted/50 hover:bg-accent border border-border border-dashed rounded-md text-[10px] font-semibold text-muted-foreground hover:text-foreground cursor-pointer transition-colors"
-                        >
-                          <Layers className="h-3.5 w-3.5" />
-                          <span>+ Next Page Break</span>
-                        </div>
-                      )}
-                    </div>
+                    </ul>
                   )}
                 </div>
               );
             })}
+
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={onAddPage}
+              className="w-full gap-1.5 border-dashed"
+            >
+              <Plus className="size-3.5" />
+              Add page
+            </Button>
           </div>
         )}
       </div>

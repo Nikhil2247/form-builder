@@ -1,390 +1,598 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { memo, useCallback, useMemo, useState } from 'react';
 import { useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { QuestionType, FormQuestion, QuestionOption } from '@/types/form';
-import { 
-  GripVertical, 
-  Pin, 
-  Trash2, 
-  Link as LinkIcon,
-  Plus,
-  X,
-  Star,
-  UploadCloud,
-  PenTool,
+import {
   Calendar,
-  Key,
   Check,
-  CheckCircle2,
-  Hash,
-  ListFilter
+  Copy,
+  GitBranch,
+  GripVertical,
+  Key,
+  PenTool,
+  Plus,
+  Star,
+  Trash2,
+  UploadCloud,
+  X,
 } from 'lucide-react';
+import { cn } from '@/lib/utils';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { Switch } from '@/components/ui/switch';
 import { Label } from '@/components/ui/label';
+import { useBuilderStore, useQuestion } from '@/store/builder-store';
+import type { QuestionOption } from '@/types/form';
+
+/**
+ * One question on the canvas.
+ *
+ * Perf contract — do not break these without measuring:
+ *
+ *  1. Props are `id` and `index` only. The previous signature took the whole
+ *     `question` object, `isSelected`, four callbacks, and `allQuestions` — the
+ *     last of which changed identity on every keystroke anywhere in the form,
+ *     so `memo` could never have helped even if it had been applied.
+ *  2. Data comes from `useQuestion(id)`, a store slice. Editing another
+ *     question does not touch this component.
+ *  3. Selection is read as a boolean, not passed down, so selecting a card
+ *     re-renders exactly two cards rather than all of them.
+ *  4. Actions are read individually off the store; zustand keeps their identity
+ *     stable, so the memo comparison holds.
+ *
+ * Together these take a keystroke in a 50-question form from 50 card renders
+ * to 1.
+ */
 
 interface EnterpriseFieldCardProps {
-  question: FormQuestion;
+  id: string;
   index: number;
-  isSelected: boolean;
-  onSelect: () => void;
-  onUpdate: (updated: FormQuestion) => void;
-  onDelete: () => void;
-  allQuestions: FormQuestion[];
-  onAddInlineQuestion?: (type: QuestionType, afterIndex: number) => void;
 }
 
-export function EnterpriseFieldCard({
-  question,
-  index,
-  isSelected,
-  onSelect,
-  onUpdate,
-  onDelete,
-  allQuestions,
-  onAddInlineQuestion
-}: EnterpriseFieldCardProps) {
+const CHOICE_TYPES = ['SINGLE_CHOICE', 'MULTI_CHOICE', 'DROPDOWN'] as const;
+
+function slugifyOption(label: string) {
+  return (
+    label
+      .toLowerCase()
+      .trim()
+      .replace(/[^a-z0-9]+/g, '_')
+      .replace(/^_+|_+$/g, '') || 'option'
+  );
+}
+
+function EnterpriseFieldCardImpl({ id, index }: EnterpriseFieldCardProps) {
+  const question = useQuestion(id);
+  const isSelected = useBuilderStore((s) => s.selectedQuestionId === id);
+  const isQuizMode = useBuilderStore((s) => s.isQuizMode);
+  const logicRuleCount = useBuilderStore(
+    (s) => s.logic.filter((r) => r.triggerQuestionId === id || r.targetQuestionId === id).length,
+  );
+
+  const patchQuestion = useBuilderStore((s) => s.patchQuestion);
+  const deleteQuestion = useBuilderStore((s) => s.deleteQuestion);
+  const duplicateQuestion = useBuilderStore((s) => s.duplicateQuestion);
+  const selectQuestion = useBuilderStore((s) => s.selectQuestion);
+  const addQuestion = useBuilderStore((s) => s.addQuestion);
+  const setActiveView = useBuilderStore((s) => s.setActiveView);
+
   const [isAnswerKeyOpen, setIsAnswerKeyOpen] = useState(false);
-  const [logicRules, setLogicRules] = useState([
-    { id: '1', whenQuestion: 'Single Response', operator: 'Equals', value: '' },
-  ]);
 
-  const {
-    attributes,
-    listeners,
-    setNodeRef,
-    transform,
-    transition,
-    isDragging
-  } = useSortable({ id: question.id });
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+    id,
+  });
 
-  const style = {
-    transform: CSS.Transform.toString(transform),
-    transition: transition || 'transform 200ms cubic-bezier(0.2, 0, 0, 1)',
-    opacity: isDragging ? 0.4 : 1,
-    zIndex: isDragging ? 20 : 1,
-  };
+  const style = useMemo(
+    () => ({
+      transform: CSS.Translate.toString(transform),
+      transition,
+      // The card stays in place at reduced opacity; dnd-kit renders the moving
+      // copy. `CSS.Transform` (with scale) was distorting the card mid-drag.
+      opacity: isDragging ? 0.4 : 1,
+      zIndex: isDragging ? 20 : undefined,
+    }),
+    [transform, transition, isDragging],
+  );
 
-  const handleOptionChange = (optionId: string, label: string) => {
-    const updatedOptions = (question.options || []).map((opt) =>
-      opt.id === optionId ? { ...opt, label, value: label.toLowerCase().replace(/\s+/g, '_') } : opt
-    );
-    onUpdate({ ...question, options: updatedOptions });
-  };
+  const patch = useCallback(
+    (changes: Parameters<typeof patchQuestion>[1]) => patchQuestion(id, changes),
+    [patchQuestion, id],
+  );
 
-  const handleToggleCorrectOption = (optionId: string) => {
-    const updatedOptions = (question.options || []).map((opt) => {
-      if (question.type === 'SINGLE_CHOICE' || question.type === 'DROPDOWN') {
-        return { ...opt, isCorrect: opt.id === optionId ? !opt.isCorrect : false };
-      }
-      return opt.id === optionId ? { ...opt, isCorrect: !opt.isCorrect } : opt;
-    });
-    onUpdate({ ...question, options: updatedOptions });
-  };
+  const handleOptionLabel = useCallback(
+    (optionId: string, label: string) => {
+      if (!question?.options) return;
+      patch({
+        options: question.options.map((o) =>
+          o.id === optionId ? { ...o, label, value: slugifyOption(label) } : o,
+        ),
+      });
+    },
+    [patch, question?.options],
+  );
 
-  const handleAddOption = () => {
-    const newCount = (question.options || []).length + 1;
-    const newOpt: QuestionOption = {
-      id: `opt-${Date.now()}`,
-      label: `Option ${newCount}`,
-      value: `option_${newCount}`,
-      isCorrect: false
+  const handleToggleCorrect = useCallback(
+    (optionId: string) => {
+      if (!question?.options) return;
+      const single = question.type === 'SINGLE_CHOICE' || question.type === 'DROPDOWN';
+      patch({
+        options: question.options.map((o) =>
+          single
+            ? { ...o, isCorrect: o.id === optionId ? !o.isCorrect : false }
+            : o.id === optionId
+              ? { ...o, isCorrect: !o.isCorrect }
+              : o,
+        ),
+      });
+    },
+    [patch, question?.options, question?.type],
+  );
+
+  const handleAddOption = useCallback(() => {
+    const existing = question?.options ?? [];
+    const next = existing.length + 1;
+    const option: QuestionOption = {
+      id: `opt_${Math.random().toString(36).slice(2, 10)}`,
+      label: `Option ${next}`,
+      value: `option_${next}`,
+      isCorrect: false,
     };
-    onUpdate({ ...question, options: [...(question.options || []), newOpt] });
-  };
+    patch({ options: [...existing, option] });
+  }, [patch, question?.options]);
 
-  const handleRemoveOption = (optionId: string) => {
-    const updatedOptions = (question.options || []).filter((opt) => opt.id !== optionId);
-    onUpdate({ ...question, options: updatedOptions });
-  };
+  const handleRemoveOption = useCallback(
+    (optionId: string) => {
+      if (!question?.options) return;
+      // A choice question with no options cannot be answered, and the API's
+      // validator rejects the whole submission. Keep at least one.
+      if (question.options.length <= 1) return;
+      patch({ options: question.options.filter((o) => o.id !== optionId) });
+    },
+    [patch, question?.options],
+  );
 
-  const addConditionRule = () => {
-    setLogicRules(prev => [...prev, { id: String(Date.now()), whenQuestion: 'Single Response', operator: 'Equals', value: '' }]);
-  };
+  // The store may have removed this question between the parent's render and
+  // ours (delete during drag, for instance).
+  if (!question) return null;
 
-  const removeConditionRule = (id: string) => {
-    setLogicRules(prev => prev.filter(r => r.id !== id));
-  };
+  const isChoice = (CHOICE_TYPES as readonly string[]).includes(question.type);
+  const required = question.validation?.required ?? false;
 
   return (
-    <div ref={setNodeRef} style={style} className="space-y-4 font-sans">
+    <div ref={setNodeRef} style={style} data-question-id={id} className="group/field">
       <Card
-        onClick={onSelect}
-        className={`transition-all p-5 shadow-sm space-y-4 ${
+        onClick={() => !isSelected && selectQuestion(id)}
+        className={cn(
+          'space-y-4 p-4 transition-shadow',
           isSelected
-            ? 'border-primary ring-1 ring-primary'
-            : 'hover:border-primary/50'
-        }`}
+            ? 'border-foreground/25 ring-1 ring-foreground/15'
+            : 'hover:border-border-strong',
+        )}
       >
-        {/* Card Header Bar */}
-        <div className="flex items-center justify-between border-b border-border pb-3">
-          <div className="flex items-center gap-3 flex-wrap">
+        {/* ── Header ─────────────────────────────────────────────────────── */}
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border pb-3">
+          <div className="flex min-w-0 flex-1 items-center gap-2">
             <button
               {...attributes}
               {...listeners}
-              className="p-1 text-muted-foreground hover:text-foreground cursor-grab active:cursor-grabbing rounded-md hover:bg-accent"
-              title="Drag to reorder card"
+              type="button"
+              aria-label={`Reorder question ${index + 1}`}
+              className="shrink-0 cursor-grab rounded-md p-1 text-muted-foreground
+                         hover:bg-muted hover:text-foreground active:cursor-grabbing"
             >
-              <GripVertical size={16} />
+              <GripVertical className="size-4" />
             </button>
 
-            <span className="text-xs font-bold text-muted-foreground">Q{index + 1}</span>
-            <Pin size={13} className="text-primary" />
-            
+            <span className="tabular shrink-0 text-xs font-semibold text-muted-foreground">
+              Q{index + 1}
+            </span>
+
             <Input
-              type="text"
               value={question.label}
-              onChange={(e) => onUpdate({ ...question, label: e.target.value })}
-              className="font-bold text-foreground text-sm border-0 focus-visible:ring-0 focus-visible:border-b focus-visible:border-primary px-1 rounded-none bg-transparent shadow-none w-auto min-w-[200px]"
+              onChange={(e) => patch({ label: e.target.value })}
+              placeholder="Question text"
+              aria-label={`Question ${index + 1} label`}
+              className="h-8 min-w-0 flex-1 border-0 bg-transparent px-1 text-sm font-medium shadow-none
+                         focus-visible:border-b focus-visible:border-foreground/30 focus-visible:ring-0"
             />
 
-            <Badge variant="outline" className="text-[10px] bg-primary/5 text-primary">Custom field</Badge>
-            <Badge variant="outline" className="text-[10px] bg-secondary text-secondary-foreground">Internal</Badge>
+            {logicRuleCount > 0 && (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setActiveView('LOGIC');
+                }}
+                className="shrink-0"
+                title="This question is used by conditional logic"
+              >
+                <Badge variant="outline" className="gap-1 text-[10px]">
+                  <GitBranch className="size-2.5" />
+                  {logicRuleCount}
+                </Badge>
+              </button>
+            )}
           </div>
 
-          {/* Right Controls: Required Switch, Quiz Answer Key, Delete */}
-          <div className="flex items-center gap-4">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={(e) => {
-                e.stopPropagation();
-                setIsAnswerKeyOpen(!isAnswerKeyOpen);
-              }}
-              className={`gap-1.5 h-7 px-2 text-xs font-semibold ${(question.points || 0) > 0 ? 'bg-primary/10 text-primary border-primary/20' : ''}`}
-            >
-              <Key size={13} />
-              <span>{question.points || 0} pts</span>
-            </Button>
+          <div className="flex shrink-0 items-center gap-3">
+            {/* The points control only exists for quizzes. It used to render
+                unconditionally, so every form showed a "0 pts" button that did
+                nothing. */}
+            {isQuizMode && (
+              <Button
+                variant={question.points ? 'secondary' : 'outline'}
+                size="sm"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setIsAnswerKeyOpen((open) => !open);
+                }}
+                aria-expanded={isAnswerKeyOpen}
+                className="gap-1.5"
+              >
+                <Key className="size-3" />
+                <span className="tabular">{question.points || 0} pts</span>
+              </Button>
+            )}
 
-            <div className="flex items-center space-x-2">
-              <Switch 
-                id={`required-${question.id}`}
-                checked={question.validation?.required || false}
-                onCheckedChange={(checked) => onUpdate({ ...question, validation: { ...question.validation, required: checked } })}
+            <div className="flex items-center gap-2">
+              <Switch
+                id={`required-${id}`}
+                checked={required}
+                onCheckedChange={(checked) =>
+                  patch({ validation: { ...question.validation, required: checked } })
+                }
               />
-              <Label htmlFor={`required-${question.id}`} className="text-xs font-medium cursor-pointer">
+              <Label htmlFor={`required-${id}`} className="cursor-pointer text-xs">
                 Required
               </Label>
             </div>
 
-            <Button variant="ghost" size="icon" className="h-7 w-7 text-muted-foreground hover:text-destructive hover:bg-destructive/10" onClick={onDelete} title="Delete Field">
-              <Trash2 size={14} />
-            </Button>
-          </div>
-        </div>
-
-        {/* Quiz Answer Key Assign Drawer */}
-        {isAnswerKeyOpen && (
-          <div className="p-4 bg-muted/40 border border-border rounded-xl space-y-4">
-            <div className="flex items-center justify-between">
-              <div className="text-xs font-bold text-foreground flex items-center gap-1.5">
-                <Key size={14} className="text-primary" />
-                <span>Quiz Score & Correct Answer Assignment</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <span className="text-xs text-muted-foreground font-semibold">Points:</span>
-                <Input
-                  type="number"
-                  min="0"
-                  value={question.points || 0}
-                  onChange={(e) => onUpdate({ ...question, points: parseInt(e.target.value) || 0 })}
-                  className="w-16 h-7 text-xs bg-background"
-                />
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* Input Simulation Area */}
-        <div className="bg-muted/30 border border-border border-dashed rounded-xl p-4">
-          {question.type === 'SHORT_TEXT' && (
-            <Input disabled placeholder={question.placeholder || 'Short text answer...'} className="bg-background max-w-md" />
-          )}
-
-          {question.type === 'LONG_TEXT' && (
-            <textarea
-              disabled
-              placeholder={question.placeholder || 'Long paragraph text answer...'}
-              className="w-full max-w-md rounded-md border border-input bg-background px-3 py-2 text-sm text-muted-foreground shadow-sm min-h-[80px]"
-            />
-          )}
-
-          {question.type === 'EMAIL' && (
-            <div className="relative max-w-md">
-              <Input disabled placeholder="user@acme.com" className="bg-background" />
-            </div>
-          )}
-
-          {question.type === 'NUMBER' && (
-            <Input type="number" disabled placeholder="e.g. 100" className="bg-background max-w-md" />
-          )}
-          
-          {question.type === 'URL' && (
-            <Input disabled placeholder="https://" className="bg-background max-w-md" />
-          )}
-          
-          {question.type === 'PHONE' && (
-            <Input disabled placeholder="+1 (555) 000-0000" className="bg-background max-w-md" />
-          )}
-
-          {question.type === 'DATE' && (
-            <div className="flex items-center gap-2 max-w-md border border-input bg-background rounded-md px-3 py-2 text-sm text-muted-foreground">
-              <Calendar size={14} />
-              <span>MM/DD/YYYY</span>
-            </div>
-          )}
-
-          {question.type === 'FILE_UPLOAD' && (
-            <div className="flex flex-col items-center justify-center border-2 border-dashed border-border rounded-lg bg-background p-6 max-w-md">
-              <UploadCloud size={24} className="text-muted-foreground mb-2" />
-              <span className="text-xs font-semibold text-foreground">Drag and drop file here</span>
-              <span className="text-[10px] text-muted-foreground">JPG, PNG, PDF up to 10MB</span>
-            </div>
-          )}
-
-          {question.type === 'SIGNATURE' && (
-            <div className="border border-input rounded-md bg-background h-24 max-w-md flex items-center justify-center text-muted-foreground">
-              <PenTool size={16} className="mr-2 opacity-50" />
-              <span className="text-xs">Draw Signature Here</span>
-            </div>
-          )}
-
-          {question.type === 'STAR_RATING' && (
-            <div className="flex items-center gap-1 text-muted-foreground">
-              {[1,2,3,4,5].map(s => <Star key={s} size={24} />)}
-            </div>
-          )}
-
-          {question.type === 'NPS' && (
-            <div className="flex gap-1 max-w-md w-full justify-between">
-              {[0,1,2,3,4,5,6,7,8,9,10].map(n => (
-                <div key={n} className="w-8 h-8 rounded-md border border-input bg-background flex items-center justify-center text-xs font-semibold text-muted-foreground">{n}</div>
-              ))}
-            </div>
-          )}
-
-          {['SINGLE_CHOICE', 'MULTI_CHOICE', 'DROPDOWN'].includes(question.type) && (
-            <div className="space-y-2 max-w-md">
-              {question.options?.map((opt) => (
-                <div key={opt.id} className="flex items-center gap-2 group">
-                  {isAnswerKeyOpen ? (
-                    <button
-                      onClick={() => handleToggleCorrectOption(opt.id)}
-                      className={`w-5 h-5 rounded flex items-center justify-center shrink-0 border transition-colors ${
-                        opt.isCorrect ? 'bg-primary border-primary text-primary-foreground' : 'bg-background border-input text-transparent hover:border-primary'
-                      }`}
-                    >
-                      <Check size={12} />
-                    </button>
-                  ) : (
-                    <div className={`w-4 h-4 shrink-0 border border-input bg-background ${question.type === 'SINGLE_CHOICE' ? 'rounded-full' : 'rounded-sm'}`} />
-                  )}
-                  
-                  <Input
-                    type="text"
-                    value={opt.label}
-                    onChange={(e) => handleOptionChange(opt.id, e.target.value)}
-                    className="h-8 text-sm bg-background border-transparent hover:border-input focus-visible:border-input shadow-none"
-                  />
-
-                  {isAnswerKeyOpen && opt.isCorrect && (
-                    <span className="text-[10px] font-bold text-primary bg-primary/10 px-1.5 py-0.5 rounded shrink-0">Correct</span>
-                  )}
-                  
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    onClick={() => handleRemoveOption(opt.id)}
-                    className="h-7 w-7 opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive"
-                  >
-                    <X size={14} />
-                  </Button>
-                </div>
-              ))}
-              
+            <div className="flex items-center">
               <Button
                 variant="ghost"
-                size="sm"
-                onClick={handleAddOption}
-                className="mt-2 text-primary hover:bg-primary/5 hover:text-primary gap-1"
+                size="icon-sm"
+                title="Duplicate question"
+                aria-label="Duplicate question"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  duplicateQuestion(id);
+                }}
+                className="text-muted-foreground hover:text-foreground"
               >
-                <Plus size={14} />
-                Add Option
+                <Copy className="size-3.5" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                title="Delete question"
+                aria-label="Delete question"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  deleteQuestion(id);
+                }}
+                className="text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+              >
+                <Trash2 className="size-3.5" />
               </Button>
             </div>
-          )}
-
-          {question.type === 'SECTION_HEADER' && (
-            <div className="py-2">
-              <Input
-                value={question.placeholder || ''}
-                onChange={(e) => onUpdate({ ...question, placeholder: e.target.value })}
-                placeholder="Section Subtitle or Description..."
-                className="border-0 bg-transparent text-sm text-muted-foreground focus-visible:ring-0 focus-visible:border-b px-0 shadow-none w-full rounded-none"
-              />
-            </div>
-          )}
+          </div>
         </div>
 
-        {/* Conditional Logic Drawer (Visible only if selected and has rules or button clicked) */}
+        {/* ── Help text ──────────────────────────────────────────────────── */}
         {isSelected && (
-          <div className="pt-2">
-            <div className="bg-muted/50 rounded-xl p-3 border border-border">
-              <div className="flex items-center justify-between mb-3">
-                <span className="text-xs font-bold text-foreground">Visibility Logic</span>
-                <Button variant="outline" size="sm" onClick={addConditionRule} className="h-7 text-xs bg-background">
-                  + Add Rule
-                </Button>
-              </div>
+          <Input
+            value={question.description ?? ''}
+            onChange={(e) => patch({ description: e.target.value })}
+            placeholder="Help text shown under the question (optional)"
+            className="h-8 border-0 bg-transparent px-1 text-xs text-muted-foreground shadow-none
+                       focus-visible:border-b focus-visible:border-border-strong focus-visible:ring-0"
+          />
+        )}
 
-              {logicRules.length === 0 ? (
-                <div className="text-[11px] text-muted-foreground text-center py-2">
-                  No logic applied. Field is always visible.
-                </div>
-              ) : (
-                <div className="space-y-2">
-                  {logicRules.map((rule, idx) => (
-                    <div key={rule.id} className="flex flex-wrap sm:flex-nowrap items-center gap-2 bg-background p-2 rounded-lg border border-border text-xs">
-                      <span className="font-semibold text-muted-foreground shrink-0">{idx === 0 ? 'IF' : 'AND'}</span>
-                      <select className="bg-muted border border-border rounded px-2 py-1 flex-1 min-w-[100px] text-foreground text-xs focus:ring-1 focus:ring-ring">
-                        <option>Q1: Department</option>
-                        <option>Q2: Role</option>
-                      </select>
-                      <select className="bg-muted border border-border rounded px-2 py-1 w-24 shrink-0 text-foreground text-xs focus:ring-1 focus:ring-ring">
-                        <option>Equals</option>
-                        <option>Not Equals</option>
-                      </select>
-                      <Input type="text" placeholder="Value" className="h-7 text-xs bg-background w-24 shrink-0" />
-                      <Button variant="ghost" size="icon" className="h-6 w-6 text-muted-foreground hover:text-destructive" onClick={() => removeConditionRule(rule.id)}>
-                        <X size={12} />
-                      </Button>
-                    </div>
-                  ))}
-                </div>
-              )}
+        {/* ── Quiz answer key ────────────────────────────────────────────── */}
+        {isQuizMode && isAnswerKeyOpen && (
+          <div className="space-y-3 rounded-lg border border-border bg-muted/40 p-3">
+            <div className="flex items-center justify-between">
+              <span className="flex items-center gap-1.5 text-xs font-semibold">
+                <Key className="size-3.5" />
+                Answer key
+              </span>
+              <label className="flex items-center gap-2 text-xs text-muted-foreground">
+                Points
+                <Input
+                  type="number"
+                  min={0}
+                  max={1000}
+                  value={question.points ?? 0}
+                  onChange={(e) => {
+                    const points = Number.parseInt(e.target.value, 10);
+                    patch({ points: Number.isFinite(points) && points >= 0 ? points : 0 });
+                  }}
+                  className="tabular h-7 w-16 bg-background text-xs"
+                />
+              </label>
             </div>
+            {isChoice ? (
+              <p className="text-xs text-muted-foreground">
+                Tick the correct option{question.type === 'MULTI_CHOICE' ? 's' : ''} below.
+              </p>
+            ) : (
+              <Input
+                value={(question.correctAnswer as string) ?? ''}
+                onChange={(e) => patch({ correctAnswer: e.target.value })}
+                placeholder="Expected answer"
+                className="h-8 bg-background text-xs"
+              />
+            )}
           </div>
         )}
+
+        {/* ── Preview of the respondent's control ────────────────────────── */}
+        <div className="rounded-lg border border-dashed border-border bg-muted/25 p-3">
+          <QuestionPreview
+            question={question}
+            isChoice={isChoice}
+            showAnswerKey={isQuizMode && isAnswerKeyOpen}
+            onOptionLabel={handleOptionLabel}
+            onToggleCorrect={handleToggleCorrect}
+            onAddOption={handleAddOption}
+            onRemoveOption={handleRemoveOption}
+            onPatch={patch}
+          />
+        </div>
       </Card>
 
-      {/* Hover action block to insert field in between */}
-      {isSelected && onAddInlineQuestion && (
-        <div className="flex justify-center -my-2 relative z-10 opacity-0 hover:opacity-100 transition-opacity pb-2">
-          <Button
-            size="sm"
-            onClick={() => onAddInlineQuestion('SHORT_TEXT', index)}
-            className="rounded-full shadow-md gap-1 h-7 text-xs"
-          >
-            <Plus size={12} /> Add Field Below
-          </Button>
-        </div>
-      )}
+      {/* Insert-below affordance. Was `opacity-0 hover:opacity-100` on the
+          element itself, so it could never be hovered — it had zero opacity and
+          the pointer never reached it. Now driven by the card's hover group and
+          always reachable by keyboard. */}
+      <div
+        className="flex justify-center py-1 opacity-0 transition-opacity
+                   focus-within:opacity-100 group-hover/field:opacity-100"
+      >
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => addQuestion('SHORT_TEXT', id)}
+          className="h-7 gap-1 rounded-full bg-background text-xs shadow-card"
+        >
+          <Plus className="size-3" />
+          Add field below
+        </Button>
+      </div>
     </div>
   );
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Preview
+// ─────────────────────────────────────────────────────────────────────────────
+
+interface PreviewProps {
+  question: NonNullable<ReturnType<typeof useQuestion>>;
+  isChoice: boolean;
+  showAnswerKey: boolean;
+  onOptionLabel: (optionId: string, label: string) => void;
+  onToggleCorrect: (optionId: string) => void;
+  onAddOption: () => void;
+  onRemoveOption: (optionId: string) => void;
+  onPatch: (patch: Partial<NonNullable<ReturnType<typeof useQuestion>>>) => void;
+}
+
+function QuestionPreview({
+  question,
+  isChoice,
+  showAnswerKey,
+  onOptionLabel,
+  onToggleCorrect,
+  onAddOption,
+  onRemoveOption,
+  onPatch,
+}: PreviewProps) {
+  if (isChoice) {
+    return (
+      <div className="max-w-md space-y-1.5">
+        {question.options?.map((option) => (
+          <div key={option.id} className="group/option flex items-center gap-2">
+            {showAnswerKey ? (
+              <button
+                type="button"
+                onClick={() => onToggleCorrect(option.id)}
+                aria-pressed={!!option.isCorrect}
+                aria-label={`Mark "${option.label}" as correct`}
+                className={cn(
+                  'flex size-5 shrink-0 items-center justify-center rounded border transition-colors',
+                  option.isCorrect
+                    ? 'border-success bg-success text-success-foreground'
+                    : 'border-input bg-background text-transparent hover:border-foreground/40',
+                )}
+              >
+                <Check className="size-3" />
+              </button>
+            ) : (
+              <span
+                aria-hidden
+                className={cn(
+                  'size-4 shrink-0 border border-input bg-background',
+                  question.type === 'SINGLE_CHOICE' ? 'rounded-full' : 'rounded-sm',
+                )}
+              />
+            )}
+
+            <Input
+              value={option.label}
+              onChange={(e) => onOptionLabel(option.id, e.target.value)}
+              aria-label="Option label"
+              className="h-8 border-transparent bg-background text-sm shadow-none hover:border-input focus-visible:border-input"
+            />
+
+            {showAnswerKey && option.isCorrect && (
+              <span className="shrink-0 rounded bg-success/10 px-1.5 py-0.5 text-[10px] font-semibold text-success">
+                Correct
+              </span>
+            )}
+
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              aria-label={`Remove option "${option.label}"`}
+              onClick={() => onRemoveOption(option.id)}
+              disabled={(question.options?.length ?? 0) <= 1}
+              className="opacity-0 transition-opacity group-focus-within/option:opacity-100 group-hover/option:opacity-100"
+            >
+              <X className="size-3.5" />
+            </Button>
+          </div>
+        ))}
+
+        <Button variant="ghost" size="sm" onClick={onAddOption} className="mt-1 gap-1">
+          <Plus className="size-3.5" />
+          Add option
+        </Button>
+      </div>
+    );
+  }
+
+  switch (question.type) {
+    case 'LONG_TEXT':
+      return (
+        <textarea
+          disabled
+          placeholder={question.placeholder || 'Long answer…'}
+          className="min-h-20 w-full max-w-md resize-none rounded-md border border-input bg-background px-3 py-2 text-sm text-muted-foreground"
+        />
+      );
+
+    case 'DATE':
+      return (
+        <div className="flex max-w-md items-center gap-2 rounded-md border border-input bg-background px-3 py-2 text-sm text-muted-foreground">
+          <Calendar className="size-3.5" />
+          <span>Select a date</span>
+        </div>
+      );
+
+    case 'FILE_UPLOAD':
+      return (
+        <div className="flex max-w-md flex-col items-center justify-center rounded-lg border-2 border-dashed border-border bg-background p-5">
+          <UploadCloud className="mb-2 size-5 text-muted-foreground" />
+          <span className="text-xs font-medium">Drag and drop, or browse</span>
+          <span className="text-[11px] text-muted-foreground">
+            {question.validation?.allowedTypes?.join(', ') || 'JPG, PNG, PDF'} · up to{' '}
+            {question.validation?.maxSizeMb ?? 10} MB
+          </span>
+        </div>
+      );
+
+    case 'SIGNATURE':
+      return (
+        <div className="flex h-20 max-w-md items-center justify-center gap-2 rounded-md border border-input bg-background text-muted-foreground">
+          <PenTool className="size-4 opacity-50" />
+          <span className="text-xs">Sign here</span>
+        </div>
+      );
+
+    case 'STAR_RATING':
+      return (
+        <div className="flex items-center gap-1 text-muted-foreground" aria-hidden>
+          {[1, 2, 3, 4, 5].map((star) => (
+            <Star key={star} className="size-5" />
+          ))}
+        </div>
+      );
+
+    case 'NPS':
+      return (
+        <div className="flex max-w-md flex-wrap gap-1" aria-hidden>
+          {Array.from({ length: 11 }, (_, n) => (
+            <span
+              key={n}
+              className="tabular flex size-7 items-center justify-center rounded-md border border-input bg-background text-xs text-muted-foreground"
+            >
+              {n}
+            </span>
+          ))}
+        </div>
+      );
+
+    case 'SLIDER':
+      return (
+        <div className="max-w-md space-y-1.5">
+          <input type="range" disabled className="w-full accent-foreground" />
+          <div className="tabular flex justify-between text-[11px] text-muted-foreground">
+            <span>{question.sliderMin ?? 0}</span>
+            <span>{question.sliderMax ?? 100}</span>
+          </div>
+        </div>
+      );
+
+    case 'MATRIX':
+      return (
+        <div className="max-w-lg overflow-x-auto">
+          <table className="w-full text-xs text-muted-foreground">
+            <thead>
+              <tr>
+                <th className="p-1.5 text-left" />
+                {(question.matrixColumns ?? []).map((column) => (
+                  <th key={column} className="p-1.5 font-medium">
+                    {column}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {(question.matrixRows ?? []).map((row) => (
+                <tr key={row} className="border-t border-border">
+                  <td className="p-1.5 text-left">{row}</td>
+                  {(question.matrixColumns ?? []).map((column) => (
+                    <td key={column} className="p-1.5 text-center">
+                      <span
+                        aria-hidden
+                        className="inline-block size-3.5 rounded-full border border-input bg-background"
+                      />
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      );
+
+    case 'SECTION_HEADER':
+      return (
+        <Input
+          value={question.placeholder ?? ''}
+          onChange={(e) => onPatch({ placeholder: e.target.value })}
+          placeholder="Section description…"
+          className="w-full border-0 bg-transparent px-0 text-sm text-muted-foreground shadow-none focus-visible:border-b focus-visible:ring-0"
+        />
+      );
+
+    default:
+      return (
+        <input
+          disabled
+          type={question.type === 'NUMBER' ? 'number' : 'text'}
+          placeholder={
+            question.placeholder ||
+            { EMAIL: 'name@example.com', PHONE: '+1 555 000 0000', URL: 'https://' }[
+              question.type as 'EMAIL' | 'PHONE' | 'URL'
+            ] ||
+            'Short answer…'
+          }
+          className="h-9 w-full max-w-md rounded-md border border-input bg-background px-3 text-sm text-muted-foreground"
+        />
+      );
+  }
+}
+
+/**
+ * `memo` is load-bearing here, not a micro-optimisation: the canvas maps over
+ * every id on any structural change, and without this each of those renders
+ * would rebuild the full card subtree.
+ */
+export const EnterpriseFieldCard = memo(EnterpriseFieldCardImpl);
+EnterpriseFieldCard.displayName = 'EnterpriseFieldCard';

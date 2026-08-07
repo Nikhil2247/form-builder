@@ -1,5 +1,15 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../common/prisma/prisma.service';
+import {
+  parsePagination,
+  paginated,
+  type Pagination,
+} from '../../common/pagination/pagination';
+import {
+  organizationAdminSelect,
+  userAdminSelect,
+  auditLogSelect,
+} from '../../common/prisma/selects';
 
 @Injectable()
 export class AdminService {
@@ -50,36 +60,32 @@ export class AdminService {
   /**
    * List all organizations with pagination and search.
    */
-  async listOrganizations(page = 1, limit = 20, search?: string) {
-    const skip = (page - 1) * limit;
+  async listOrganizations(pagination: Pagination = parsePagination(), search?: string) {
     const where: any = { deletedAt: null };
 
-    if (search) {
+    const term = search?.trim();
+    if (term) {
       where.OR = [
-        { name: { contains: search, mode: 'insensitive' } },
-        { slug: { contains: search, mode: 'insensitive' } },
+        { name: { contains: term, mode: 'insensitive' } },
+        { slug: { contains: term, mode: 'insensitive' } },
       ];
     }
 
     const [organizations, total] = await Promise.all([
       this.prisma.reader.organization.findMany({
         where,
-        skip,
-        take: limit,
-        orderBy: { createdAt: 'desc' },
-        include: {
-          _count: {
-            select: { members: true, forms: true },
-          },
-        },
+        skip: pagination.skip,
+        take: pagination.take,
+        orderBy: [{ createdAt: 'desc' }, { id: 'asc' }],
+        // `include` returned every column, including the MinIO/S3 bucket names
+        // and the raw `settings` JSON — internal configuration with no place in
+        // a list response.
+        select: organizationAdminSelect,
       }),
       this.prisma.reader.organization.count({ where }),
     ]);
 
-    return {
-      organizations,
-      pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
-    };
+    return paginated('organizations', organizations, pagination, total);
   }
 
   /**
@@ -164,78 +170,55 @@ export class AdminService {
   /**
    * List all users with pagination and search.
    */
-  async listUsers(page = 1, limit = 20, search?: string) {
-    const skip = (page - 1) * limit;
+  async listUsers(pagination: Pagination = parsePagination(), search?: string) {
     const where: any = { deletedAt: null };
 
-    if (search) {
+    const term = search?.trim();
+    if (term) {
       where.OR = [
-        { email: { contains: search, mode: 'insensitive' } },
-        { firstName: { contains: search, mode: 'insensitive' } },
-        { lastName: { contains: search, mode: 'insensitive' } },
+        { email: { contains: term, mode: 'insensitive' } },
+        { firstName: { contains: term, mode: 'insensitive' } },
+        { lastName: { contains: term, mode: 'insensitive' } },
       ];
     }
 
     const [users, total] = await Promise.all([
       this.prisma.reader.user.findMany({
         where,
-        skip,
-        take: limit,
-        orderBy: { createdAt: 'desc' },
-        select: {
-          id: true,
-          email: true,
-          firstName: true,
-          lastName: true,
-          systemRole: true,
-          emailVerified: true,
-          createdAt: true,
-          memberships: {
-            select: {
-              role: true,
-              organization: {
-                select: { id: true, name: true, slug: true },
-              },
-            },
-            take: 1,
-          },
-        },
+        skip: pagination.skip,
+        take: pagination.take,
+        orderBy: [{ createdAt: 'desc' }, { id: 'asc' }],
+        select: userAdminSelect,
       }),
       this.prisma.reader.user.count({ where }),
     ]);
 
-    return {
-      users,
-      pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
-    };
+    return paginated('users', users, pagination, total);
   }
 
   /**
    * Get audit logs with pagination and optional org filter.
    */
-  async getAuditLogs(page = 1, limit = 50, orgId?: string) {
-    const skip = (page - 1) * limit;
+  async getAuditLogs(
+    pagination: Pagination = parsePagination(),
+    orgId?: string,
+    action?: string,
+  ) {
     const where: any = {};
     if (orgId) where.organizationId = orgId;
+    if (action) where.action = action;
 
     const [logs, total] = await Promise.all([
       this.prisma.reader.auditLog.findMany({
         where,
-        skip,
-        take: limit,
-        orderBy: { createdAt: 'desc' },
-        include: {
-          organization: {
-            select: { id: true, name: true, slug: true },
-          },
-        },
+        skip: pagination.skip,
+        take: pagination.take,
+        orderBy: [{ createdAt: 'desc' }, { id: 'asc' }],
+        select: auditLogSelect,
       }),
       this.prisma.reader.auditLog.count({ where }),
     ]);
 
-    return {
-      logs,
-      pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
-    };
+    return paginated('logs', logs, pagination, total);
   }
 }

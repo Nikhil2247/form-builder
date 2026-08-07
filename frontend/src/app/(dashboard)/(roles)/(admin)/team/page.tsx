@@ -1,359 +1,463 @@
 'use client';
 
 import React, { useState } from 'react';
-import {
-  Users, Mail, Plus, Trash2, ChevronDown, MoreHorizontal,
-  Clock, Shield, UserCheck, UserX, RefreshCcw,
-} from 'lucide-react';
+import { Mail, MoreHorizontal, Plus, Shield, UserCheck, UserX, Users } from 'lucide-react';
+import { toast } from 'sonner';
+
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Skeleton } from '@/components/ui/skeleton';
+import { Label } from '@/components/ui/label';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import {
-  DropdownMenu, DropdownMenuContent, DropdownMenuItem,
-  DropdownMenuSeparator, DropdownMenuTrigger,
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import {
-  Dialog, DialogContent, DialogDescription,
-  DialogFooter, DialogHeader, DialogTitle,
-} from '@/components/ui/dialog';
-import {
-  Select, SelectContent, SelectItem,
-  SelectTrigger, SelectValue,
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
 } from '@/components/ui/select';
 import {
-  useOrganizationMembers, useOrganizationInvites, useInviteMember,
-  useRevokeInvite, useUpdateMemberRole, useRemoveMember,
-} from '@/hooks/use-organization';
+  PageHeader,
+  PageShell,
+  DataTable,
+  StatusBadge,
+  EmptyState,
+  Modal,
+  ModalActions,
+  ConfirmDialog,
+  RelativeTime,
+  type DataTableColumn,
+} from '@/components/shared';
+import { usePagination } from '@/hooks/use-pagination';
 import { useUser } from '@/hooks/use-auth';
-import { formatDistanceToNow } from 'date-fns';
 import {
-  Pagination,
-  PaginationContent,
-  PaginationItem,
-  PaginationNext,
-  PaginationPrevious,
-} from '@/components/ui/pagination';
-
-const ROLE_BADGE: Record<string, string> = {
-  ADMIN: 'bg-blue-500/10 text-blue-600 border-blue-500/20',
-  EDITOR: 'bg-sky-500/10 text-sky-600 border-sky-500/20',
-  VIEWER: 'bg-slate-500/10 text-slate-500 border-slate-500/20',
-};
-
-const INVITE_STATUS: Record<string, string> = {
-  PENDING: 'bg-amber-500/10 text-amber-600',
-  ACCEPTED: 'bg-emerald-500/10 text-emerald-600',
-  EXPIRED: 'bg-slate-400/10 text-slate-400',
-};
+  useOrganizationMembers,
+  useOrganizationInvites,
+  useInviteMember,
+  useRevokeInvite,
+  useUpdateMemberRole,
+  useRemoveMember,
+  type OrgMember,
+  type OrgInvitation,
+} from '@/hooks/use-organization';
+import { ORG_ROLE_DESCRIPTIONS, ORG_ROLE_LABELS, type OrgRole } from '@/config/roles';
 
 export default function TeamPage() {
   const { data: session } = useUser();
-  const orgId = session?.activeOrganization?.id;
   const currentUserId = session?.user?.id;
 
-  const [membersPage, setMembersPage] = useState(1);
-  const [invitesPage, setInvitesPage] = useState(1);
+  // Two independent pagers on one page — the `prefix` keeps their query params
+  // from colliding, which the previous two `useState(1)` counters silently did
+  // not do (both tabs shared no URL state at all).
+  const membersPager = usePagination({ prefix: 'm' });
+  const invitesPager = usePagination({ prefix: 'i' });
 
-  const { data: membersData, isLoading: membersLoading } = useOrganizationMembers(orgId, membersPage, 20);
-  const { data: invitesData, isLoading: invitesLoading } = useOrganizationInvites(orgId, invitesPage, 20);
-  const inviteMember = useInviteMember(orgId);
-  const revokeInvite = useRevokeInvite(orgId);
-  const updateRole = useUpdateMemberRole(orgId);
-  const removeMember = useRemoveMember(orgId);
+  const members = useOrganizationMembers({
+    page: membersPager.page,
+    limit: membersPager.pageSize,
+  });
+  const invites = useOrganizationInvites({
+    page: invitesPager.page,
+    limit: invitesPager.pageSize,
+  });
+
+  const inviteMember = useInviteMember();
+  const revokeInvite = useRevokeInvite();
+  const updateRole = useUpdateMemberRole();
+  const removeMember = useRemoveMember();
 
   const [isInviteOpen, setIsInviteOpen] = useState(false);
-  const [inviteEmail, setInviteEmail] = useState('');
-  const [inviteRole, setInviteRole] = useState('VIEWER');
-  const [removeTarget, setRemoveTarget] = useState<any>(null);
+  const [removeTarget, setRemoveTarget] = useState<OrgMember | null>(null);
+  const [revokeTarget, setRevokeTarget] = useState<OrgInvitation | null>(null);
 
-  const members = Array.isArray(membersData) ? membersData : (membersData as any)?.members ?? membersData ?? [];
-  const membersTotal = (membersData as any)?.pagination?.total ?? members.length;
+  const memberRows = members.data?.items ?? [];
+  const memberTotal = members.data?.pagination.total ?? 0;
+  const inviteRows = invites.data?.items ?? [];
+  const inviteTotal = invites.data?.pagination.total ?? 0;
 
-  const invites = Array.isArray(invitesData) ? invitesData : (invitesData as any)?.invitations ?? (invitesData as any)?.invites ?? invitesData ?? [];
-  const invitesTotal = (invitesData as any)?.pagination?.total ?? invites.length;
+  // An organization with no admin cannot be administered. Block the last one
+  // from demoting or removing themselves — the API rejects it, but only after
+  // the UI has already suggested it is possible.
+  const adminCount = memberRows.filter((m) => m.role === 'ADMIN').length;
 
-  async function handleInvite() {
-    if (!inviteEmail.trim()) return;
-    await inviteMember.mutateAsync({ email: inviteEmail, role: inviteRole });
-    setIsInviteOpen(false);
-    setInviteEmail('');
-    setInviteRole('VIEWER');
+  async function changeRole(member: OrgMember, role: OrgRole) {
+    if (member.role === role) return;
+    if (member.role === 'ADMIN' && role !== 'ADMIN' && adminCount <= 1) {
+      toast.error('Your organization must keep at least one admin.');
+      return;
+    }
+    try {
+      await updateRole.mutateAsync({ memberId: member.id, role });
+      toast.success(`${member.user.email} is now ${ORG_ROLE_LABELS[role]}`);
+    } catch (err: any) {
+      toast.error(err?.message ?? 'Could not change this role');
+    }
   }
 
-  return (
-    <div className="w-full space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
-      {/* Header */}
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between border-b border-border pb-4">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight text-foreground">Team</h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Manage members and invitations for your organization
-          </p>
+  const memberColumns: DataTableColumn<OrgMember>[] = [
+    {
+      id: 'user',
+      header: 'Member',
+      isRowHeader: true,
+      className: 'max-w-0',
+      cell: (member) => {
+        const name = [member.user.firstName, member.user.lastName].filter(Boolean).join(' ');
+        const initials =
+          `${member.user.firstName?.[0] ?? ''}${member.user.lastName?.[0] ?? ''}`.toUpperCase() ||
+          member.user.email[0]?.toUpperCase() ||
+          '?';
+
+        return (
+          <div className="flex items-center gap-3">
+            <span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-muted text-xs font-semibold text-muted-foreground">
+              {initials}
+            </span>
+            <div className="min-w-0">
+              <div className="flex items-center gap-1.5">
+                <span className="truncate font-medium text-foreground">
+                  {name || member.user.email}
+                </span>
+                {member.user.id === currentUserId && (
+                  <span className="text-xs text-muted-foreground">(you)</span>
+                )}
+              </div>
+              <div className="truncate text-xs text-muted-foreground">{member.user.email}</div>
+            </div>
+          </div>
+        );
+      },
+    },
+    {
+      id: 'role',
+      header: 'Role',
+      width: 'w-32',
+      cell: (member) => <StatusBadge status={member.role} />,
+    },
+    {
+      id: 'joinedAt',
+      header: 'Joined',
+      width: 'w-36',
+      hideBelow: 'lg',
+      cell: (member) => (
+        <span className="text-muted-foreground">
+          <RelativeTime value={member.joinedAt} />
+        </span>
+      ),
+    },
+    {
+      id: 'actions',
+      header: <span className="sr-only">Actions</span>,
+      width: 'w-12',
+      className: 'text-right',
+      headerClassName: 'text-right',
+      cell: (member) => {
+        if (member.user.id === currentUserId) return null;
+        return (
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              aria-label={`Actions for ${member.user.email}`}
+              className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+            >
+              <MoreHorizontal className="size-4" />
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              {(['ADMIN', 'EDITOR', 'VIEWER'] as OrgRole[]).map((role) => (
+                <DropdownMenuItem
+                  key={role}
+                  disabled={member.role === role}
+                  onClick={() => changeRole(member, role)}
+                  className="cursor-pointer"
+                >
+                  {role === 'ADMIN' ? (
+                    <Shield className="mr-2 size-3.5" />
+                  ) : (
+                    <UserCheck className="mr-2 size-3.5" />
+                  )}
+                  Make {ORG_ROLE_LABELS[role]}
+                </DropdownMenuItem>
+              ))}
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                onClick={() => setRemoveTarget(member)}
+                className="cursor-pointer text-destructive focus:bg-destructive/10 focus:text-destructive"
+              >
+                <UserX className="mr-2 size-3.5" /> Remove from organization
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        );
+      },
+    },
+  ];
+
+  const inviteColumns: DataTableColumn<OrgInvitation>[] = [
+    {
+      id: 'email',
+      header: 'Email',
+      isRowHeader: true,
+      className: 'max-w-0',
+      cell: (invite) => (
+        <div className="flex items-center gap-2.5">
+          <Mail className="size-4 shrink-0 text-muted-foreground" strokeWidth={1.5} />
+          <span className="truncate font-medium">{invite.email}</span>
         </div>
-        <Button className="gap-2" onClick={() => setIsInviteOpen(true)}>
-          <Plus size={15} /> Invite Member
-        </Button>
-      </div>
+      ),
+    },
+    {
+      id: 'role',
+      header: 'Role',
+      width: 'w-28',
+      cell: (invite) => <StatusBadge status={invite.role} />,
+    },
+    {
+      id: 'status',
+      header: 'Status',
+      width: 'w-28',
+      cell: (invite) => <StatusBadge status={invite.status} dot />,
+    },
+    {
+      id: 'createdAt',
+      header: 'Sent',
+      width: 'w-36',
+      hideBelow: 'md',
+      cell: (invite) => (
+        <span className="text-muted-foreground">
+          <RelativeTime value={invite.createdAt} />
+        </span>
+      ),
+    },
+    {
+      id: 'actions',
+      header: <span className="sr-only">Actions</span>,
+      width: 'w-24',
+      className: 'text-right',
+      headerClassName: 'text-right',
+      cell: (invite) =>
+        invite.status === 'PENDING' ? (
+          <Button variant="ghost" size="sm" onClick={() => setRevokeTarget(invite)}>
+            Revoke
+          </Button>
+        ) : null,
+    },
+  ];
+
+  return (
+    <PageShell>
+      <PageHeader
+        title="Team"
+        description="Members and pending invitations for your organization."
+        actions={
+          <Button size="sm" className="gap-2" onClick={() => setIsInviteOpen(true)}>
+            <Plus className="size-4" /> Invite member
+          </Button>
+        }
+      />
 
       <Tabs defaultValue="members" className="space-y-4">
-        <TabsList className="bg-muted/50 rounded-xl p-1">
-          <TabsTrigger value="members" className="rounded-lg">
-            <Users size={14} className="mr-1.5" /> Members ({membersTotal})
+        <TabsList>
+          <TabsTrigger value="members" className="gap-1.5">
+            <Users className="size-3.5" /> Members
+            <span className="tabular ml-1 rounded bg-muted px-1.5 text-xs text-muted-foreground">
+              {memberTotal}
+            </span>
           </TabsTrigger>
-          <TabsTrigger value="invitations" className="rounded-lg">
-            <Mail size={14} className="mr-1.5" /> Invitations ({invitesTotal})
+          <TabsTrigger value="invitations" className="gap-1.5">
+            <Mail className="size-3.5" /> Invitations
+            <span className="tabular ml-1 rounded bg-muted px-1.5 text-xs text-muted-foreground">
+              {inviteTotal}
+            </span>
           </TabsTrigger>
         </TabsList>
 
-        {/* Members Tab */}
         <TabsContent value="members">
-          <div className="rounded-xl border border-border overflow-hidden">
-            <div className="p-4 border-b border-border">
-              <h2 className="text-sm font-semibold text-foreground">Organization Members</h2>
-            </div>
-            <div className="divide-y divide-border">
-              {membersLoading ? (
-                Array.from({ length: 4 }).map((_, i) => (
-                  <div key={i} className="flex items-center gap-4 px-4 py-3">
-                    <Skeleton className="h-9 w-9 rounded-full shrink-0" />
-                    <div className="flex-1 space-y-1.5">
-                      <Skeleton className="h-4 w-40 rounded" />
-                      <Skeleton className="h-3 w-56 rounded" />
-                    </div>
-                    <Skeleton className="h-6 w-16 rounded-full" />
-                  </div>
-                ))
-              ) : members.length === 0 ? (
-                <div className="flex flex-col items-center justify-center py-12 text-center">
-                  <Users size={24} className="mb-3 text-muted-foreground" />
-                  <p className="text-sm text-muted-foreground">No members found.</p>
-                </div>
-              ) : (
-                members.map((member: any) => {
-                  const isCurrentUser = member.userId === currentUserId || member.user?.id === currentUserId;
-                  const user = member.user ?? member;
-                  const name = [user.firstName, user.lastName].filter(Boolean).join(' ') || user.email;
-                  const initials = `${user.firstName?.charAt(0) ?? ''}${user.lastName?.charAt(0) ?? ''}`.toUpperCase() || 'U';
-                  const roleBadge = ROLE_BADGE[member.role ?? 'VIEWER'] ?? ROLE_BADGE.VIEWER;
-
-                  return (
-                    <div key={member.id} className="group flex items-center gap-4 px-4 py-3 hover:bg-muted/30 transition-colors">
-                      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-primary to-primary/60 text-primary-foreground text-sm font-bold">
-                        {initials}
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2">
-                          <p className="text-sm font-medium text-foreground truncate">{name}</p>
-                          {isCurrentUser && <span className="text-[10px] text-muted-foreground">(you)</span>}
-                        </div>
-                        <p className="text-xs text-muted-foreground truncate">{user.email}</p>
-                      </div>
-                      <span className={`rounded-full border px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wider ${roleBadge}`}>
-                        {member.role}
-                      </span>
-                      {!isCurrentUser && (
-                        <DropdownMenu>
-                          <DropdownMenuTrigger className="rounded-md p-1.5 text-muted-foreground opacity-0 group-hover:opacity-100 hover:bg-accent hover:text-foreground transition-all">
-                            <MoreHorizontal size={15} />
-                          </DropdownMenuTrigger>
-                          <DropdownMenuContent align="end">
-                            <DropdownMenuItem onClick={() => updateRole.mutate({ userId: member.id, role: 'ADMIN' })}>
-                              <Shield size={13} className="mr-2" /> Make Admin
-                            </DropdownMenuItem>
-                            <DropdownMenuItem onClick={() => updateRole.mutate({ userId: member.id, role: 'EDITOR' })}>
-                              <UserCheck size={13} className="mr-2" /> Make Editor
-                            </DropdownMenuItem>
-                            <DropdownMenuItem onClick={() => updateRole.mutate({ userId: member.id, role: 'VIEWER' })}>
-                              <UserCheck size={13} className="mr-2" /> Make Viewer
-                            </DropdownMenuItem>
-                            <DropdownMenuSeparator />
-                            <DropdownMenuItem onClick={() => setRemoveTarget(member)} className="text-destructive focus:text-destructive focus:bg-destructive/10">
-                              <UserX size={13} className="mr-2" /> Remove
-                            </DropdownMenuItem>
-                          </DropdownMenuContent>
-                        </DropdownMenu>
-                      )}
-                    </div>
-                  );
-                })
-              )}
-            </div>
-
-            {!membersLoading && members.length > 0 && (
-              <div className="p-4 border-t border-border">
-                {(() => {
-                  const totalPages = Math.ceil(membersTotal / 20);
-                  return (
-                    <Pagination>
-                      <PaginationContent>
-                        <PaginationItem>
-                          <PaginationPrevious 
-                            href="#" 
-                            onClick={(e) => { e.preventDefault(); setMembersPage(Math.max(1, membersPage - 1)); }} 
-                            className={membersPage === 1 ? 'pointer-events-none opacity-50' : ''} 
-                          />
-                        </PaginationItem>
-                        <PaginationItem>
-                          <span className="text-sm font-medium mx-2">Page {membersPage} of {totalPages || 1}</span>
-                        </PaginationItem>
-                        <PaginationItem>
-                          <PaginationNext 
-                            href="#" 
-                            onClick={(e) => { e.preventDefault(); setMembersPage(Math.min(totalPages, membersPage + 1)); }} 
-                            className={membersPage === totalPages || totalPages === 0 ? 'pointer-events-none opacity-50' : ''} 
-                          />
-                        </PaginationItem>
-                      </PaginationContent>
-                    </Pagination>
-                  );
-                })()}
-              </div>
-            )}
-          </div>
+          <DataTable
+            caption="Organization members"
+            columns={memberColumns}
+            data={memberRows}
+            getRowId={(member) => member.id}
+            isLoading={members.isLoading || members.isFetching}
+            error={members.error}
+            onRetry={() => members.refetch()}
+            pagination={membersPager.paginationProps(memberTotal, 'members')}
+            empty={
+              <EmptyState
+                variant="inline"
+                icon={Users}
+                title="No members"
+                description="Invite colleagues to collaborate on forms."
+              />
+            }
+          />
         </TabsContent>
 
-        {/* Invitations Tab */}
         <TabsContent value="invitations">
-          <div className="rounded-xl border border-border overflow-hidden">
-            <div className="p-4 border-b border-border">
-              <h2 className="text-sm font-semibold text-foreground">Pending Invitations</h2>
-            </div>
-            <div className="divide-y divide-border">
-              {invitesLoading ? (
-                Array.from({ length: 3 }).map((_, i) => (
-                  <div key={i} className="flex items-center gap-4 px-4 py-3">
-                    <Skeleton className="h-4 w-48 rounded" />
-                    <Skeleton className="h-4 w-20 rounded" />
-                  </div>
-                ))
-              ) : invites.length === 0 ? (
-                <div className="flex flex-col items-center justify-center py-12 text-center">
-                  <Mail size={24} className="mb-3 text-muted-foreground" />
-                  <p className="text-sm text-muted-foreground">No pending invitations.</p>
-                  <Button variant="outline" size="sm" className="mt-3 gap-2" onClick={() => setIsInviteOpen(true)}>
-                    <Plus size={13} /> Send Invitation
+          <DataTable
+            caption="Pending invitations"
+            columns={inviteColumns}
+            data={inviteRows}
+            getRowId={(invite) => invite.id}
+            isLoading={invites.isLoading || invites.isFetching}
+            error={invites.error}
+            onRetry={() => invites.refetch()}
+            pagination={invitesPager.paginationProps(inviteTotal, 'invitations')}
+            empty={
+              <EmptyState
+                variant="inline"
+                icon={Mail}
+                title="No invitations"
+                description="Invitations you send will appear here until they are accepted."
+                action={
+                  <Button size="sm" className="gap-2" onClick={() => setIsInviteOpen(true)}>
+                    <Plus className="size-4" /> Invite member
                   </Button>
-                </div>
-              ) : (
-                invites.map((invite: any) => {
-                  const statusColor = INVITE_STATUS[invite.status ?? 'PENDING'] ?? INVITE_STATUS.PENDING;
-                  const sentAgo = invite.createdAt ? formatDistanceToNow(new Date(invite.createdAt), { addSuffix: true }) : '—';
-                  return (
-                    <div key={invite.id} className="group flex items-center gap-4 px-4 py-3 hover:bg-muted/30 transition-colors">
-                      <Mail size={16} className="shrink-0 text-muted-foreground" />
-                      <div className="flex-1 min-w-0">
-                        <p className="text-sm font-medium text-foreground">{invite.email}</p>
-                        <p className="text-xs text-muted-foreground">Sent {sentAgo}</p>
-                      </div>
-                      <span className={`rounded-full px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wider ${ROLE_BADGE[invite.role ?? 'VIEWER'] ?? ''}`}>
-                        {invite.role}
-                      </span>
-                      <span className={`rounded-full px-2.5 py-0.5 text-[10px] font-semibold ${statusColor}`}>
-                        {invite.status ?? 'PENDING'}
-                      </span>
-                      {invite.status === 'PENDING' && (
-                        <button
-                          onClick={() => revokeInvite.mutate(invite.id)}
-                          className="rounded-md p-1.5 text-muted-foreground opacity-0 group-hover:opacity-100 hover:bg-red-100 hover:text-red-500 transition-all"
-                          title="Revoke invite"
-                        >
-                          <Trash2 size={14} />
-                        </button>
-                      )}
-                    </div>
-                  );
-                })
-              )}
-            </div>
-
-            {!invitesLoading && invites.length > 0 && (
-              <div className="p-4 border-t border-border">
-                {(() => {
-                  const totalPages = Math.ceil(invitesTotal / 20);
-                  return (
-                    <Pagination>
-                      <PaginationContent>
-                        <PaginationItem>
-                          <PaginationPrevious 
-                            href="#" 
-                            onClick={(e) => { e.preventDefault(); setInvitesPage(Math.max(1, invitesPage - 1)); }} 
-                            className={invitesPage === 1 ? 'pointer-events-none opacity-50' : ''} 
-                          />
-                        </PaginationItem>
-                        <PaginationItem>
-                          <span className="text-sm font-medium mx-2">Page {invitesPage} of {totalPages || 1}</span>
-                        </PaginationItem>
-                        <PaginationItem>
-                          <PaginationNext 
-                            href="#" 
-                            onClick={(e) => { e.preventDefault(); setInvitesPage(Math.min(totalPages, invitesPage + 1)); }} 
-                            className={invitesPage === totalPages || totalPages === 0 ? 'pointer-events-none opacity-50' : ''} 
-                          />
-                        </PaginationItem>
-                      </PaginationContent>
-                    </Pagination>
-                  );
-                })()}
-              </div>
-            )}
-          </div>
+                }
+              />
+            }
+          />
         </TabsContent>
       </Tabs>
 
-      {/* Invite Dialog */}
-      <Dialog open={isInviteOpen} onOpenChange={setIsInviteOpen}>
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle>Invite Team Member</DialogTitle>
-            <DialogDescription>Send an invitation to add someone to your organization.</DialogDescription>
-          </DialogHeader>
-          <div className="space-y-4 py-2">
-            <div className="space-y-1.5">
-              <label className="text-sm font-medium">Email Address</label>
-              <Input placeholder="colleague@company.com" value={inviteEmail} onChange={(e) => setInviteEmail(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleInvite()} autoFocus />
-            </div>
-            <div className="space-y-1.5">
-              <label className="text-sm font-medium">Role</label>
-              <Select value={inviteRole} onValueChange={(v) => setInviteRole(v ?? 'VIEWER')}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="VIEWER">Viewer — can view forms and responses</SelectItem>
-                  <SelectItem value="EDITOR">Editor — can create and edit forms</SelectItem>
-                  <SelectItem value="ADMIN">Admin — full organization access</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-          </div>
-          <DialogFooter>
-            <Button variant="ghost" onClick={() => setIsInviteOpen(false)}>Cancel</Button>
-            <Button onClick={handleInvite} disabled={!inviteEmail.trim() || inviteMember.isPending}>
-              {inviteMember.isPending ? 'Sending...' : 'Send Invitation'}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <InviteModal
+        open={isInviteOpen}
+        onOpenChange={setIsInviteOpen}
+        isPending={inviteMember.isPending}
+        onInvite={async (values) => {
+          try {
+            await inviteMember.mutateAsync(values);
+            toast.success(`Invitation sent to ${values.email}`);
+            setIsInviteOpen(false);
+          } catch (err: any) {
+            toast.error(err?.message ?? 'Could not send this invitation');
+          }
+        }}
+      />
 
-      {/* Remove Member Dialog */}
-      <Dialog open={!!removeTarget} onOpenChange={() => setRemoveTarget(null)}>
-        <DialogContent className="sm:max-w-sm">
-          <DialogHeader>
-            <DialogTitle>Remove Member</DialogTitle>
-            <DialogDescription>
-              Are you sure you want to remove {removeTarget?.user?.email ?? removeTarget?.email} from your organization?
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button variant="ghost" onClick={() => setRemoveTarget(null)}>Cancel</Button>
-            <Button variant="destructive" onClick={async () => {
-              await removeMember.mutateAsync(removeTarget.id);
-              setRemoveTarget(null);
-            }} disabled={removeMember.isPending}>
-              {removeMember.isPending ? 'Removing...' : 'Remove Member'}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-    </div>
+      <ConfirmDialog
+        open={!!removeTarget}
+        onOpenChange={(open) => !open && setRemoveTarget(null)}
+        title="Remove member"
+        description={
+          <>
+            {removeTarget?.user.email} will lose access to this organization immediately. Forms
+            they created are kept.
+          </>
+        }
+        confirmLabel="Remove member"
+        isPending={removeMember.isPending}
+        onConfirm={async () => {
+          if (!removeTarget) return;
+          try {
+            await removeMember.mutateAsync(removeTarget.id);
+            toast.success('Member removed');
+            setRemoveTarget(null);
+          } catch (err: any) {
+            toast.error(err?.message ?? 'Could not remove this member');
+          }
+        }}
+      />
+
+      <ConfirmDialog
+        open={!!revokeTarget}
+        onOpenChange={(open) => !open && setRevokeTarget(null)}
+        title="Revoke invitation"
+        description={<>The invitation link sent to {revokeTarget?.email} will stop working.</>}
+        confirmLabel="Revoke invitation"
+        isPending={revokeInvite.isPending}
+        onConfirm={async () => {
+          if (!revokeTarget) return;
+          try {
+            await revokeInvite.mutateAsync(revokeTarget.id);
+            toast.success('Invitation revoked');
+            setRevokeTarget(null);
+          } catch (err: any) {
+            toast.error(err?.message ?? 'Could not revoke this invitation');
+          }
+        }}
+      />
+    </PageShell>
+  );
+}
+
+function InviteModal({
+  open,
+  onOpenChange,
+  onInvite,
+  isPending,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onInvite: (values: { email: string; role: OrgRole }) => void;
+  isPending: boolean;
+}) {
+  const [email, setEmail] = useState('');
+  const [role, setRole] = useState<OrgRole>('VIEWER');
+
+  React.useEffect(() => {
+    if (open) {
+      setEmail('');
+      setRole('VIEWER');
+    }
+  }, [open]);
+
+  const valid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
+
+  return (
+    <Modal
+      open={open}
+      onOpenChange={onOpenChange}
+      title="Invite a team member"
+      description="They will receive an email with a link to join this organization."
+      footer={
+        <ModalActions
+          onCancel={() => onOpenChange(false)}
+          confirmLabel="Send invitation"
+          onConfirm={() => onInvite({ email: email.trim(), role })}
+          isPending={isPending}
+          disabled={!valid}
+        />
+      }
+    >
+      <div className="space-y-4">
+        <div className="space-y-1.5">
+          <Label htmlFor="invite-email">Email address</Label>
+          <Input
+            id="invite-email"
+            type="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && valid && onInvite({ email: email.trim(), role })}
+            placeholder="colleague@company.com"
+            autoFocus
+            aria-invalid={email.length > 0 && !valid}
+          />
+          {email.length > 0 && !valid && (
+            <p className="text-xs text-destructive">Enter a valid email address.</p>
+          )}
+        </div>
+
+        <div className="space-y-1.5">
+          <Label htmlFor="invite-role">Role</Label>
+          <Select value={role} onValueChange={(value) => value && setRole(value as OrgRole)}>
+            <SelectTrigger id="invite-role">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {(['VIEWER', 'EDITOR', 'ADMIN'] as OrgRole[]).map((option) => (
+                <SelectItem key={option} value={option}>
+                  {ORG_ROLE_LABELS[option]}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <p className="text-xs text-muted-foreground">{ORG_ROLE_DESCRIPTIONS[role]}</p>
+        </div>
+      </div>
+    </Modal>
   );
 }

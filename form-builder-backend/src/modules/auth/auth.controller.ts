@@ -1,5 +1,7 @@
 import { Controller, Post, Get, Body, Res, Req, HttpCode, HttpStatus, UseGuards } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
 import { AuthService } from './auth.service';
+import { DisableMfaDto } from './dto/disable-mfa.dto';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
 import { ForgotPasswordDto } from './dto/forgot-password.dto';
@@ -30,6 +32,10 @@ export class AuthController {
     return { accessToken: result.accessToken, user: result.user };
   }
 
+  // 5 attempts / 15 min. The global 100/min bucket allows ~144k password
+  // guesses per IP per day, which is not meaningful protection against
+  // credential stuffing.
+  @Throttle({ default: { limit: 5, ttl: 900_000 } })
   @Post('login')
   @HttpCode(HttpStatus.OK)
   async login(@Body() dto: LoginDto, @Res({ passthrough: true }) res: Response) {
@@ -44,6 +50,10 @@ export class AuthController {
     return { accessToken: result.accessToken, user: result.user };
   }
 
+  // A 6-digit TOTP has a 1M keyspace; at the global 100/min an attacker could
+  // brute-force it within the validity window. 5 attempts per 5 minutes makes
+  // that infeasible.
+  @Throttle({ default: { limit: 5, ttl: 300_000 } })
   @Post('login/mfa')
   @HttpCode(HttpStatus.OK)
   async loginMfa(@Body() dto: VerifyMfaLoginDto, @Res({ passthrough: true }) res: Response) {
@@ -90,12 +100,16 @@ export class AuthController {
   // FORGOT / RESET PASSWORD
   // ════════════════════════════════════════════════════════════════════════════
 
+  // Rate-limited to prevent using the endpoint as a free mail-bomb relay
+  // against arbitrary third-party addresses.
+  @Throttle({ default: { limit: 3, ttl: 900_000 } })
   @Post('forgot-password')
   @HttpCode(HttpStatus.OK)
   async forgotPassword(@Body() dto: ForgotPasswordDto) {
     return this.authService.forgotPassword(dto.email);
   }
 
+  @Throttle({ default: { limit: 5, ttl: 900_000 } })
   @Post('reset-password')
   @HttpCode(HttpStatus.OK)
   async resetPassword(@Body() dto: ResetPasswordDto) {
@@ -121,12 +135,13 @@ export class AuthController {
     return this.authService.verifyMfaSetup(userId, dto.code);
   }
 
+  @Throttle({ default: { limit: 5, ttl: 900_000 } })
   @Post('mfa/disable')
   @UseGuards(JwtAuthGuard)
   @HttpCode(HttpStatus.OK)
-  async disableMfa(@Req() req: Request) {
+  async disableMfa(@Req() req: Request, @Body() dto: DisableMfaDto) {
     const userId = (req.user as any).sub;
-    return this.authService.disableMfa(userId);
+    return this.authService.disableMfa(userId, dto.currentPassword);
   }
 
   /**

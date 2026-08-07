@@ -1,279 +1,370 @@
 'use client';
 
-import React, { useState } from 'react';
-import { useParams, useRouter } from 'next/navigation';
+import React, { useMemo, useState } from 'react';
 import Link from 'next/link';
+import { useParams } from 'next/navigation';
 import {
-  ArrowLeft, Edit, Eye, Share2, BarChart2, Settings, Inbox,
-  CheckCircle2, Clock, Users, Copy, ExternalLink, Download, Loader2,
+  CheckCircle2,
+  Clock,
+  Download,
+  Edit,
+  ExternalLink,
+  Eye,
+  Inbox,
+  Loader2,
+  User,
 } from 'lucide-react';
+import { toast } from 'sonner';
+
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
-import {
-  Pagination,
-  PaginationContent,
-  PaginationItem,
-  PaginationNext,
-  PaginationPrevious,
-} from '@/components/ui/pagination';
-import { Skeleton } from '@/components/ui/skeleton';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
+import {
+  PageHeader,
+  PageShell,
+  DataTable,
+  StatCard,
+  StatGrid,
+  StatusBadge,
+  EmptyState,
+  ErrorState,
+  CopyField,
+  RelativeTime,
+  Duration,
+  type DataTableColumn,
+  ButtonLink,
+  ButtonAnchor,
+} from '@/components/shared';
+import { formatCompact, formatDuration } from '@/components/shared/formatters';
+import { SubmissionDetailsDialog } from '@/components/submissions/SubmissionDetailsDialog';
+import { Can } from '@/components/auth/RoleGuard';
+import { usePagination } from '@/hooks/use-pagination';
 import { useForm } from '@/hooks/use-forms';
-import { useFormSubmissions } from '@/hooks/use-submissions';
-import { formatDistanceToNow, format } from 'date-fns';
+import { useFormTimeseries } from '@/hooks/use-analytics';
+import { useFormSubmissions, useExportSubmissions, type Submission } from '@/hooks/use-submissions';
+import { toFormConfig } from '@/types/form';
 
 export default function FormDetailPage() {
   const params = useParams();
-  const router = useRouter();
   const formId = params.formId as string;
 
-  const [page, setPage] = useState(1);
-  const { data: form, isLoading: formLoading } = useForm(formId);
-  const { data: submissionsData, isLoading: subsLoading } = useFormSubmissions(formId, page, 50);
+  const pager = usePagination();
+  const [selected, setSelected] = useState<Submission | null>(null);
 
-  const submissions = submissionsData?.submissions ?? [];
-  const totalSubmissions = submissionsData?.pagination?.total ?? submissionsData?.total ?? 0;
-  const shareUrl = form?.shareUrl ?? `${typeof window !== 'undefined' ? window.location.origin : ''}/f/${form?.slug || formId}`;
+  const { data: form, isLoading: formLoading, error: formError, refetch } = useForm(formId);
+  const submissions = useFormSubmissions(formId, {
+    page: pager.page,
+    limit: pager.pageSize,
+  });
+  const analytics = useFormTimeseries(formId, 30);
+  const exportSubmissions = useExportSubmissions(formId, form?.title);
 
-  const STATUS_COLORS: Record<string, string> = {
-    DRAFT: 'bg-amber-500/10 text-amber-600',
-    PUBLISHED: 'bg-emerald-500/10 text-emerald-600',
-    CLOSED: 'bg-slate-500/10 text-slate-500',
-    ARCHIVED: 'bg-slate-400/10 text-slate-400',
-  };
+  const questions = useMemo(() => (form ? toFormConfig(form).questions : []), [form]);
 
-  if (formLoading) {
+  // Totals come from the pre-aggregated analytics rows rather than the loaded
+  // page of submissions — the previous page showed a hardcoded "86%" completion
+  // rate and "1m 42s" average for every form.
+  const totals = useMemo(() => {
+    const rows = analytics.data ?? [];
+    const views = rows.reduce((sum, r) => sum + (r.views ?? 0), 0);
+    const starts = rows.reduce((sum, r) => sum + (r.starts ?? 0), 0);
+    const count = rows.reduce((sum, r) => sum + (r.submissions ?? 0), 0);
+    const sumMs = rows.reduce((sum, r) => sum + Number(r.sumCompletionMs ?? 0), 0);
+
+    return {
+      views,
+      starts,
+      submissions: count,
+      completionRate: starts > 0 ? Math.min((count / starts) * 100, 100) : null,
+      avgCompletionMs: count > 0 ? Math.round(sumMs / count) : null,
+    };
+  }, [analytics.data]);
+
+  const totalSubmissions = submissions.data?.pagination?.total ?? 0;
+
+  const shareUrl =
+    typeof window !== 'undefined' && form?.slug ? `${window.location.origin}/f/${form.slug}` : '';
+
+  async function handleExport(format: 'csv' | 'json') {
+    try {
+      const result = await exportSubmissions.mutateAsync(format);
+      toast.success(`Downloaded ${result.filename}`);
+    } catch (err: any) {
+      toast.error(err?.message ?? 'Export failed');
+    }
+  }
+
+  if (formError) {
     return (
-      <div className="space-y-6">
-        <Skeleton className="h-10 w-64" />
-        <div className="grid grid-cols-4 gap-4">
-          {Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-28 rounded-xl" />)}
-        </div>
-        <Skeleton className="h-96 rounded-xl" />
-      </div>
+      <PageShell>
+        <ErrorState title="Could not load this form" error={formError} onRetry={() => refetch()} />
+      </PageShell>
     );
   }
 
-  if (!form) {
+  if (!formLoading && !form) {
     return (
-      <div className="flex flex-col items-center justify-center py-20 text-center">
-        <h2 className="text-xl font-semibold">Form not found</h2>
-        <p className="mt-2 text-muted-foreground">This form may have been deleted or you don&apos;t have access.</p>
-        <Button className="mt-4" onClick={() => router.push('/forms')}>Back to Forms</Button>
-      </div>
+      <PageShell>
+        <EmptyState
+          icon={Inbox}
+          title="Form not found"
+          description="It may have been deleted, or you may not have access to it."
+          action={
+            <ButtonLink size="sm" href="/forms">
+              Back to forms
+            </ButtonLink>
+          }
+        />
+      </PageShell>
     );
   }
+
+  const columns: DataTableColumn<Submission>[] = [
+    {
+      id: 'respondent',
+      header: 'Respondent',
+      isRowHeader: true,
+      className: 'max-w-0',
+      cell: (submission) => {
+        const respondent = submission.respondent;
+        const name = respondent
+          ? `${respondent.firstName ?? ''} ${respondent.lastName ?? ''}`.trim()
+          : '';
+        return (
+          <div className="flex items-center gap-2.5">
+            <span className="flex size-7 shrink-0 items-center justify-center rounded-full bg-muted text-muted-foreground">
+              <User className="size-3.5" strokeWidth={1.5} />
+            </span>
+            <span className="truncate font-medium">
+              {name || respondent?.email || 'Anonymous'}
+            </span>
+          </div>
+        );
+      },
+    },
+    {
+      id: 'status',
+      header: 'Status',
+      width: 'w-32',
+      hideBelow: 'md',
+      cell: (submission) => <StatusBadge status={submission.status ?? 'SUBMITTED'} dot />,
+    },
+    ...(form?.isQuizMode
+      ? [
+          {
+            id: 'score',
+            header: 'Score',
+            numeric: true,
+            width: 'w-24',
+            cell: (submission: Submission) =>
+              submission.maxQuizScore
+                ? `${submission.quizScore ?? 0} / ${submission.maxQuizScore}`
+                : '—',
+          } satisfies DataTableColumn<Submission>,
+        ]
+      : []),
+    {
+      id: 'completionTimeMs',
+      header: 'Time taken',
+      numeric: true,
+      width: 'w-28',
+      hideBelow: 'lg',
+      cell: (submission) => <Duration ms={submission.completionTimeMs} />,
+    },
+    {
+      id: 'submittedAt',
+      header: 'Submitted',
+      width: 'w-40',
+      cell: (submission) => (
+        <span className="text-muted-foreground">
+          <RelativeTime value={submission.submittedAt} />
+        </span>
+      ),
+    },
+  ];
 
   return (
-    <div className="w-full space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
-      {/* Header */}
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between border-b border-border pb-4">
-        <div className="flex items-start gap-3">
-          <button onClick={() => router.push('/forms')} className="mt-0.5 rounded-lg p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground transition-colors">
-            <ArrowLeft size={18} />
-          </button>
-          <div>
-            <div className="flex items-center gap-2.5">
-              <h1 className="text-xl font-bold tracking-tight text-foreground">{form.title}</h1>
-              <span className={`rounded-full px-2.5 py-0.5 text-xs font-semibold ${STATUS_COLORS[form.status]}`}>{form.status}</span>
-            </div>
-            {form.description && <p className="mt-1 text-sm text-muted-foreground">{form.description}</p>}
-            <p className="mt-1 text-xs text-muted-foreground">
-              Updated {formatDistanceToNow(new Date(form.updatedAt), { addSuffix: true })}
-            </p>
-          </div>
-        </div>
-        <div className="flex items-center gap-2 ml-11 sm:ml-0">
-          <Link href={`/forms/builder?id=${formId}`}>
-            <Button variant="outline" size="sm" className="gap-2"><Edit size={14} />Edit Form</Button>
-          </Link>
-          <Link href={shareUrl} target="_blank">
-            <Button size="sm" className="gap-2"><Eye size={14} />Preview</Button>
-          </Link>
-        </div>
-      </div>
+    <PageShell>
+      <PageHeader
+        isLoading={formLoading}
+        back="/forms"
+        breadcrumbs={[{ label: 'Forms', href: '/forms' }, { label: form?.title ?? '' }]}
+        title={form?.title ?? ''}
+        description={form?.description || undefined}
+        badge={form && <StatusBadge status={form.status} dot />}
+        actions={
+          <>
+            {form?.status === 'PUBLISHED' && shareUrl && (
+              <ButtonAnchor
+                variant="outline"
+                size="sm"
+                className="gap-2"
+               href={shareUrl} external>
+                <Eye className="size-4" /> View live
+              </ButtonAnchor>
+            )}
+            <Can permission="form:edit">
+              <ButtonLink size="sm" className="gap-2" href={`/forms/builder?id=${formId}`}>
+                <Edit className="size-4" /> Edit form
+              </ButtonLink>
+            </Can>
+          </>
+        }
+      />
 
-      {/* Stats Cards */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <StatCard label="Total Responses" value={totalSubmissions.toString()} icon={Inbox} trend="+12%" positive />
-        <StatCard label="Completion Rate" value="86%" icon={CheckCircle2} trend="+2.4%" positive />
-        <StatCard label="Avg. Time" value="1m 42s" icon={Clock} trend="-8s" positive />
-        <StatCard label="Unique Visitors" value="—" icon={Users} />
-      </div>
+      <StatGrid>
+        <StatCard
+          label="Responses"
+          icon={Inbox}
+          isLoading={submissions.isLoading}
+          value={formatCompact(totalSubmissions)}
+          hint={`${formatCompact(totals.submissions)} in the last 30 days`}
+        />
+        <StatCard
+          label="Views"
+          icon={Eye}
+          isLoading={analytics.isLoading}
+          value={formatCompact(totals.views)}
+          hint="Last 30 days"
+        />
+        <StatCard
+          label="Completion rate"
+          icon={CheckCircle2}
+          isLoading={analytics.isLoading}
+          value={totals.completionRate != null ? `${totals.completionRate.toFixed(1)}%` : '—'}
+          hint={
+            totals.starts
+              ? `${formatCompact(totals.starts)} starts`
+              : 'No starts recorded yet'
+          }
+        />
+        <StatCard
+          label="Average time"
+          icon={Clock}
+          isLoading={analytics.isLoading}
+          value={totals.avgCompletionMs != null ? formatDuration(totals.avgCompletionMs) : '—'}
+          hint="Across completed responses"
+        />
+      </StatGrid>
 
-      {/* Tabs */}
       <Tabs defaultValue="responses" className="space-y-4">
-        <TabsList className="bg-muted/50 rounded-xl p-1">
-          <TabsTrigger value="responses" className="rounded-lg">
-            <Inbox size={14} className="mr-1.5" /> Responses ({totalSubmissions})
+        <TabsList>
+          <TabsTrigger value="responses" className="gap-1.5">
+            <Inbox className="size-3.5" />
+            Responses
+            {totalSubmissions > 0 && (
+              <span className="tabular ml-1 rounded bg-muted px-1.5 text-xs text-muted-foreground">
+                {totalSubmissions.toLocaleString()}
+              </span>
+            )}
           </TabsTrigger>
-          <TabsTrigger value="share" className="rounded-lg">
-            <Share2 size={14} className="mr-1.5" /> Share
-          </TabsTrigger>
-          <TabsTrigger value="settings" className="rounded-lg">
-            <Settings size={14} className="mr-1.5" /> Settings
+          <TabsTrigger value="share" className="gap-1.5">
+            <ExternalLink className="size-3.5" /> Share
           </TabsTrigger>
         </TabsList>
 
-        {/* Responses Tab */}
         <TabsContent value="responses">
-          <div className="rounded-xl border border-border overflow-hidden">
-            <div className="flex items-center justify-between p-4 border-b border-border">
-              <h2 className="text-sm font-semibold text-foreground">All Responses</h2>
-              <Button variant="outline" size="sm" className="gap-2">
-                <Download size={13} /> Export CSV
-              </Button>
-            </div>
-            {subsLoading ? (
-              <div className="p-6 space-y-3">
-                {Array.from({ length: 5 }).map((_, i) => <Skeleton key={i} className="h-10 rounded-lg" />)}
+          <DataTable
+            caption={`Responses to ${form?.title ?? 'this form'}`}
+            columns={columns}
+            data={submissions.data?.submissions}
+            getRowId={(submission) => submission.id}
+            isLoading={submissions.isLoading || submissions.isFetching}
+            error={submissions.error}
+            onRetry={() => submissions.refetch()}
+            onRowClick={setSelected}
+            pagination={pager.paginationProps(totalSubmissions, 'responses')}
+            toolbar={
+              <div className="ml-auto">
+                <Can permission="submission:export">
+                  <DropdownMenu>
+                    <DropdownMenuTrigger
+                      disabled={totalSubmissions === 0 || exportSubmissions.isPending}
+                      render={
+                        <Button variant="outline" size="sm" className="gap-2">
+                          {exportSubmissions.isPending ? (
+                            <Loader2 className="size-3.5 animate-spin" />
+                          ) : (
+                            <Download className="size-3.5" />
+                          )}
+                          Export
+                        </Button>
+                      }
+                    />
+                    <DropdownMenuContent align="end">
+                      <DropdownMenuItem onClick={() => handleExport('csv')} className="cursor-pointer">
+                        Download CSV
+                      </DropdownMenuItem>
+                      <DropdownMenuItem onClick={() => handleExport('json')} className="cursor-pointer">
+                        Download JSON
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                </Can>
               </div>
-            ) : submissions.length === 0 ? (
-              <div className="flex flex-col items-center justify-center py-16 text-center">
-                <div className="mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-muted">
-                  <Inbox size={20} className="text-muted-foreground" />
-                </div>
-                <h3 className="text-sm font-semibold">No responses yet</h3>
-                <p className="mt-1 text-xs text-muted-foreground">Share the form to start collecting responses.</p>
-              </div>
-            ) : (
-              <div className="divide-y divide-border">
-                {submissions.map((sub, i) => (
-                  <div key={sub.id} className="flex items-center justify-between px-4 py-3 hover:bg-muted/30 transition-colors">
-                    <div className="flex items-center gap-3">
-                      <div className="flex h-7 w-7 items-center justify-center rounded-full bg-primary/10 text-primary text-xs font-bold">
-                        {i + 1}
-                      </div>
-                      <div>
-                        <p className="text-sm font-medium text-foreground">
-                          {sub.respondentEmail ?? `Response #${i + 1}`}
-                        </p>
-                        <p className="text-xs text-muted-foreground">
-                          {format(new Date(sub.submittedAt), 'MMM dd, yyyy HH:mm')}
-                        </p>
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      {sub.completionTime && (
-                        <span className="text-xs text-muted-foreground">{Math.round(sub.completionTime)}s</span>
-                      )}
-                      <Button variant="ghost" size="sm" className="h-7 px-2 text-xs">
-                        View
-                      </Button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-            
-            {!subsLoading && submissions.length > 0 && (
-              <div className="p-4 border-t border-border">
-                {(() => {
-                  const totalPages = Math.ceil(totalSubmissions / 50);
-                  return (
-                    <Pagination>
-                      <PaginationContent>
-                        <PaginationItem>
-                          <PaginationPrevious 
-                            href="#" 
-                            onClick={(e) => { e.preventDefault(); setPage(Math.max(1, page - 1)); }} 
-                            className={page === 1 ? 'pointer-events-none opacity-50' : ''} 
-                          />
-                        </PaginationItem>
-                        <PaginationItem>
-                          <span className="text-sm font-medium mx-2">Page {page} of {totalPages || 1}</span>
-                        </PaginationItem>
-                        <PaginationItem>
-                          <PaginationNext 
-                            href="#" 
-                            onClick={(e) => { e.preventDefault(); setPage(Math.min(totalPages, page + 1)); }} 
-                            className={page === totalPages || totalPages === 0 ? 'pointer-events-none opacity-50' : ''} 
-                          />
-                        </PaginationItem>
-                      </PaginationContent>
-                    </Pagination>
-                  );
-                })()}
-              </div>
-            )}
-          </div>
+            }
+            empty={
+              <EmptyState
+                variant="inline"
+                icon={Inbox}
+                title="No responses yet"
+                description={
+                  form?.status === 'PUBLISHED'
+                    ? 'Share the form link to start collecting responses.'
+                    : 'This form is not published, so it cannot receive responses yet.'
+                }
+              />
+            }
+          />
         </TabsContent>
 
-        {/* Share Tab */}
         <TabsContent value="share">
-          <Card className="rounded-xl border border-border p-6 space-y-5">
-            <div>
-              <h2 className="text-sm font-semibold text-foreground mb-1">Public Form Link</h2>
-              <p className="text-xs text-muted-foreground mb-3">Share this link with respondents to collect their answers.</p>
-              <div className="flex items-center gap-2">
-                <input
-                  readOnly
+          <Card className="space-y-6 p-5">
+            {form?.status !== 'PUBLISHED' ? (
+              <EmptyState
+                variant="inline"
+                icon={ExternalLink}
+                title="This form is not live"
+                description="Publish it from the builder to get a shareable link. Until then its public URL returns a 404 and submissions are rejected."
+                action={
+                  <Can permission="form:publish">
+                    <ButtonLink size="sm" href={`/forms/builder?id=${formId}`}>
+                      Open builder
+                    </ButtonLink>
+                  </Can>
+                }
+              />
+            ) : (
+              <>
+                <CopyField
+                  label="Public link"
                   value={shareUrl}
-                  className="flex-1 h-9 rounded-lg border border-border bg-muted/40 px-3 text-sm text-foreground font-mono"
+                  description="Anyone with this link can complete the form."
                 />
-                <Button variant="outline" size="sm" className="gap-2 shrink-0" onClick={() => navigator.clipboard.writeText(shareUrl)}>
-                  <Copy size={13} /> Copy
-                </Button>
-                <Link href={shareUrl} target="_blank">
-                  <Button variant="outline" size="sm" className="gap-2 shrink-0">
-                    <ExternalLink size={13} /> Open
-                  </Button>
-                </Link>
-              </div>
-            </div>
-            <div className="border-t border-border pt-5">
-              <h3 className="text-sm font-semibold text-foreground mb-2">Embed Code</h3>
-              <pre className="rounded-lg bg-muted p-3 text-xs text-muted-foreground overflow-x-auto">
-                {`<iframe src="${shareUrl}" width="100%" height="600" frameborder="0"></iframe>`}
-              </pre>
-            </div>
-          </Card>
-        </TabsContent>
-
-        {/* Settings Tab */}
-        <TabsContent value="settings">
-          <Card className="rounded-xl border border-border p-6 space-y-5">
-            <div>
-              <h2 className="text-sm font-semibold text-foreground mb-4">Form Settings</h2>
-              <div className="space-y-4">
                 <div className="space-y-1.5">
-                  <label className="text-sm font-medium">Form Title</label>
-                  <input defaultValue={form.title} className="w-full h-9 rounded-lg border border-border bg-muted/40 px-3 text-sm text-foreground" />
+                  <span className="block text-xs font-medium">Embed</span>
+                  <pre className="overflow-x-auto rounded-lg border border-border bg-muted/40 p-3 text-xs text-muted-foreground">
+                    {`<iframe src="${shareUrl}" width="100%" height="600" style="border:0" title="${form.title}"></iframe>`}
+                  </pre>
                 </div>
-                <div className="space-y-1.5">
-                  <label className="text-sm font-medium">Description</label>
-                  <textarea defaultValue={form.description ?? ''} rows={3} className="w-full rounded-lg border border-border bg-muted/40 px-3 py-2 text-sm text-foreground resize-none" />
-                </div>
-              </div>
-            </div>
-            <div className="flex justify-end pt-2 border-t border-border">
-              <Button size="sm">Save Changes</Button>
-            </div>
+              </>
+            )}
           </Card>
         </TabsContent>
       </Tabs>
-    </div>
-  );
-}
 
-function StatCard({ label, value, icon: Icon, trend, positive }: { label: string; value: string; icon: React.ElementType; trend?: string; positive?: boolean }) {
-  return (
-    <Card className="p-5 rounded-xl border border-border bg-card shadow-sm">
-      <div className="flex items-center justify-between">
-        <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">{label}</span>
-        <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary/10 text-primary">
-          <Icon size={15} />
-        </div>
-      </div>
-      <div className="mt-3 flex items-baseline gap-2">
-        <span className="text-2xl font-black text-foreground">{value}</span>
-        {trend && (
-          <span className={`text-[10px] font-bold rounded-md px-1.5 py-0.5 ${positive ? 'bg-emerald-500/10 text-emerald-600' : 'bg-red-500/10 text-red-500'}`}>
-            {trend}
-          </span>
-        )}
-      </div>
-    </Card>
+      <SubmissionDetailsDialog
+        submission={selected}
+        questions={questions}
+        open={!!selected}
+        onOpenChange={(open) => !open && setSelected(null)}
+      />
+    </PageShell>
   );
 }

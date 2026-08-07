@@ -1,4 +1,11 @@
-import { Injectable, NotFoundException, ForbiddenException, BadRequestException } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  NotFoundException,
+  ForbiddenException,
+  BadRequestException,
+} from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { CreateFormDto } from './dto/create-form.dto';
@@ -7,9 +14,36 @@ import { nanoid } from 'nanoid';
 import * as argon2 from 'argon2';
 
 import { RedisService } from '../../common/redis/redis.service';
+import {
+  parsePagination,
+  paginated,
+  type Pagination,
+} from '../../common/pagination/pagination';
+import {
+  formListSelect,
+  formTrashSelect,
+  formDetailSelect,
+  submissionGridSelect,
+} from '../../common/prisma/selects';
+
+/**
+ * Escape a value for CSV, defending against CSV injection.
+ *
+ * A cell beginning with = + - @ (or tab/CR) is interpreted as a formula by
+ * Excel/Sheets, so a respondent answering `=cmd|'/c calc'!A1` gets code
+ * execution on whoever opens the export. Prefixing with a single quote
+ * neutralises it while still displaying the original text.
+ */
+function csvCell(value: string): string {
+  let v = value ?? '';
+  if (/^[=+\-@\t\r]/.test(v)) v = `'${v}`;
+  return `"${v.replace(/"/g, '""')}"`;
+}
 
 @Injectable()
 export class FormsService {
+  private readonly logger = new Logger(FormsService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
@@ -211,34 +245,61 @@ Respond ONLY with a valid JSON object matching this structure:
   /**
    * List forms for an organization, optionally filtered by status.
    */
-  async getForms(orgId: string, status?: string, page = 1, limit = 20) {
-    const where: any = { organizationId: orgId, deletedAt: null };
-    if (status) where.status = status;
+  /**
+   * List an organization's forms.
+   *
+   * Uses `formListSelect`, which omits `questionsJson`, `pagesJson`,
+   * `logicJson`, `themeConfig`, `passwordHash`, and `notifyEmails`. The previous
+   * `include` returned all of them: a page of 20 forms averaging 40 questions
+   * each was several megabytes of JSONB to render a table of titles and counts.
+   */
+  async getForms(
+    orgId: string,
+    options: {
+      status?: string;
+      search?: string;
+      sortBy?: string;
+      sortOrder?: 'asc' | 'desc';
+    } = {},
+    pagination: Pagination = parsePagination(),
+  ) {
+    const where: Prisma.FormWhereInput = { organizationId: orgId, deletedAt: null };
 
-    const skip = (page - 1) * limit;
+    if (options.status && options.status !== 'ALL') {
+      where.status = options.status as any;
+    }
+
+    // Search is applied in the database. It used to be done client-side over
+    // the loaded page, so a form on page 3 could not be found at all.
+    const term = options.search?.trim();
+    if (term) {
+      where.OR = [
+        { title: { contains: term, mode: 'insensitive' } },
+        { description: { contains: term, mode: 'insensitive' } },
+        { slug: { contains: term, mode: 'insensitive' } },
+      ];
+    }
+
+    // Allowlist: `sortBy` reaches Prisma as a key, so an unchecked value is a
+    // way to probe columns and to sort on unindexed ones.
+    const SORTABLE = new Set(['updatedAt', 'createdAt', 'title', 'status']);
+    const sortBy = SORTABLE.has(options.sortBy ?? '') ? options.sortBy! : 'updatedAt';
+    const sortOrder = options.sortOrder === 'asc' ? 'asc' : 'desc';
 
     const [forms, total] = await Promise.all([
       this.prisma.reader.form.findMany({
         where,
-        orderBy: { updatedAt: 'desc' },
-        skip,
-        take: limit,
-        include: {
-          createdBy: {
-            select: { id: true, firstName: true, lastName: true, email: true },
-          },
-          _count: {
-            select: { submissions: true },
-          },
-        },
+        // `id` breaks ties. Without a unique tiebreaker, rows sharing a sort
+        // value can swap between pages and one is never shown.
+        orderBy: [{ [sortBy]: sortOrder }, { id: 'asc' }],
+        skip: pagination.skip,
+        take: pagination.take,
+        select: formListSelect,
       }),
       this.prisma.reader.form.count({ where }),
     ]);
 
-    return {
-      forms,
-      pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
-    };
+    return paginated('forms', forms, pagination, total);
   }
 
   /**
@@ -284,7 +345,7 @@ Respond ONLY with a valid JSON object matching this structure:
       });
     }
 
-    return this.prisma.writer.form.update({
+    const updated = await this.prisma.writer.form.update({
       where: { id: formId },
       data: {
         title: dto.title,
@@ -305,6 +366,13 @@ Respond ONLY with a valid JSON object matching this structure:
         ...(dto.layoutMode && { layoutMode: dto.layoutMode }),
       },
     });
+
+    // Invalidate under BOTH the old and new slug — a slug change would
+    // otherwise leave the form reachable at its previous public URL.
+    await this.invalidatePublicFormCache(form.slug, updated.slug);
+    await this.invalidateIngestPolicy(formId);
+
+    return updated;
   }
 
   /**
@@ -320,6 +388,9 @@ Respond ONLY with a valid JSON object matching this structure:
       where: { id: formId },
       data: { deletedAt: new Date() },
     });
+
+    await this.invalidatePublicFormCache(form.slug);
+    await this.invalidateIngestPolicy(formId);
 
     this.audit.log({
       organizationId: orgId,
@@ -346,6 +417,9 @@ Respond ONLY with a valid JSON object matching this structure:
       data: { deletedAt: null },
     });
 
+    await this.invalidatePublicFormCache(form.slug);
+    await this.invalidateIngestPolicy(formId);
+
     this.audit.log({
       organizationId: orgId,
       action: 'form.restored',
@@ -364,65 +438,139 @@ Respond ONLY with a valid JSON object matching this structure:
     return this.prisma.reader.form.findMany({
       where: { organizationId: orgId, deletedAt: { not: null } },
       orderBy: { deletedAt: 'desc' },
-      include: {
-        createdBy: {
-          select: { id: true, firstName: true, lastName: true, email: true },
-        },
-      },
+      // Trash is retention-bounded, so it stays a single unpaginated list —
+      // but it does not need the form definitions either.
+      select: formTrashSelect,
     });
   }
 
   /**
    * Publish a form — creates an immutable FormVersion snapshot.
    */
-  async publishForm(orgId: string, formId: string, pagesJson: any, questionsJson: any, logicJson: any, themeJson: any) {
-    const form = await this.prisma.writer.form.findFirst({
-      where: { id: formId, organizationId: orgId, deletedAt: null },
-    });
-    if (!form) throw new NotFoundException('Form not found');
+  async publishForm(
+    orgId: string,
+    formId: string,
+    pagesJson: any,
+    questionsJson: any,
+    logicJson: any,
+    themeJson: any,
+    userId?: string,
+  ) {
+    // The version number, the FormVersion row, and the Form pointer must move
+    // together. Previously these were three separate statements computed from a
+    // stale read: a failure between them left currentVersion pointing at a
+    // version that did not exist, and two concurrent publishes both computed the
+    // same number and one died on @@unique([formId, version]).
+    //
+    // Serializable isolation makes concurrent publishes conflict cleanly; we
+    // retry once on a write conflict (Prisma P2034) before surfacing an error.
+    const runPublish = () =>
+      this.prisma.writer.$transaction(
+        async (tx: any) => {
+          const form = await tx.form.findFirst({
+            where: { id: formId, organizationId: orgId, deletedAt: null },
+          });
+          if (!form) throw new NotFoundException('Form not found');
 
-    const nextVersion = form.currentVersion + (form.status === 'DRAFT' ? 0 : 1);
+          const questions = questionsJson ?? form.questionsJson ?? [];
+          if (!Array.isArray(questions) || questions.length === 0) {
+            throw new BadRequestException(
+              'Cannot publish a form with no questions. Add at least one field first.',
+            );
+          }
 
-    const version = await this.prisma.writer.formVersion.create({
-      data: {
-        formId,
-        version: nextVersion,
-        pagesJson: pagesJson || form.pagesJson || [],
-        questionsJson: questionsJson || form.questionsJson || [],
-        logicJson: logicJson || form.logicJson || [],
-        themeJson: themeJson || form.themeConfig || {},
-      },
-    });
+          // Derive the next version from what actually exists, not from a
+          // possibly-stale currentVersion counter.
+          const last = await tx.formVersion.aggregate({
+            where: { formId },
+            _max: { version: true },
+          });
+          const nextVersion = (last._max.version ?? 0) + 1;
 
-    await this.prisma.writer.form.update({
-      where: { id: formId },
-      data: {
-        status: 'PUBLISHED',
-        currentVersion: nextVersion,
-      },
-    });
+          const version = await tx.formVersion.create({
+            data: {
+              formId,
+              version: nextVersion,
+              pagesJson: pagesJson ?? form.pagesJson ?? [],
+              questionsJson: questions,
+              logicJson: logicJson ?? form.logicJson ?? [],
+              themeJson: themeJson ?? form.themeConfig ?? {},
+            },
+          });
+
+          await tx.form.update({
+            where: { id: formId },
+            data: { status: 'PUBLISHED', currentVersion: nextVersion },
+          });
+
+          return { version, form };
+        },
+        { isolationLevel: 'Serializable' },
+      );
+
+    let result: { version: any; form: any };
+    try {
+      result = await runPublish();
+    } catch (err: any) {
+      if (err?.code === 'P2034' || err?.code === 'P2002') {
+        // Write conflict with a concurrent publish — one retry resolves it.
+        result = await runPublish();
+      } else {
+        throw err;
+      }
+    }
 
     this.audit.log({
       organizationId: orgId,
+      userId,
       action: 'form.published',
       resource: 'form',
       resourceId: formId,
-      metadata: { formTitle: form.title, version: nextVersion },
+      metadata: { formTitle: result.form.title, version: result.version.version },
     });
 
-    try {
-      await this.redis.del(`public_form:${form.slug}`);
-    } catch (e) {
-      console.warn('Failed to clear redis cache for form publish', e);
-    }
+    await this.invalidatePublicFormCache(result.form.slug);
+    await this.invalidateIngestPolicy(formId);
 
-    return version;
+    return result.version;
+  }
+
+  /**
+   * Drop the cached public payload for a form.
+   * Must be called on publish, update, slug change, delete, and restore —
+   * otherwise a deleted or edited form stays publicly fillable for up to 5 min.
+   */
+  private async invalidatePublicFormCache(...slugs: (string | null | undefined)[]) {
+    for (const slug of slugs) {
+      if (!slug) continue;
+      try {
+        await this.redis.del(`public_form:${slug}`);
+      } catch (e) {
+        this.logger.warn(`Failed to invalidate public form cache for slug ${slug}`, e as any);
+      }
+    }
+  }
+
+  /**
+   * Drop the cached ingest policy used by the submission hot path.
+   * See SubmissionsService.loadIngestPolicy.
+   */
+  private async invalidateIngestPolicy(formId: string) {
+    try {
+      await this.redis.del(`ingest_policy:${formId}`);
+    } catch (e) {
+      this.logger.warn(`Failed to invalidate ingest policy for form ${formId}`, e as any);
+    }
   }
 
   /**
    * Get submissions for a form within an organization (paginated).
    */
-  async getSubmissions(orgId: string, formId: string, page = 1, limit = 50) {
+  async getSubmissions(
+    orgId: string,
+    formId: string,
+    pagination: Pagination = parsePagination(),
+  ) {
     // Verify form belongs to this org and is not deleted
     const form = await this.prisma.reader.form.findFirst({
       where: { id: formId, organizationId: orgId, deletedAt: null },
@@ -430,21 +578,25 @@ Respond ONLY with a valid JSON object matching this structure:
     });
     if (!form) throw new NotFoundException('Form not found');
 
-    const skip = (page - 1) * limit;
+    const where: Prisma.FormSubmissionWhereInput = { formId, status: { not: 'DELETED' } };
+
     const [submissions, total] = await Promise.all([
       this.prisma.reader.formSubmission.findMany({
-        where: { formId },
-        skip,
-        take: limit,
-        orderBy: { submittedAt: 'desc' },
+        where,
+        skip: pagination.skip,
+        take: pagination.take,
+        // Matches the @@index([formId, submittedAt DESC]) exactly, so this is
+        // an index scan rather than a sort of the whole partition.
+        orderBy: [{ submittedAt: 'desc' }, { id: 'asc' }],
+        // The grid projection: answers included, but `userAgent` and
+        // `respondentIpHash` are not — those were being returned to every
+        // viewer with no consumer for them.
+        select: submissionGridSelect,
       }),
-      this.prisma.reader.formSubmission.count({ where: { formId } }),
+      this.prisma.reader.formSubmission.count({ where }),
     ]);
 
-    return {
-      submissions,
-      pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
-    };
+    return paginated('submissions', submissions, pagination, total);
   }
 
   /**
@@ -457,9 +609,22 @@ Respond ONLY with a valid JSON object matching this structure:
     });
     if (!form) throw new NotFoundException('Form not found');
 
+    // HARD CAP: this builds the whole export in memory. A form with 500k
+    // responses would OOM the pod. Anything above this must go through an async
+    // export job that streams a cursor to object storage — see EXPORT_MAX_ROWS.
+    const maxRows = parseInt(process.env.EXPORT_MAX_ROWS ?? '50000', 10);
+    const total = await this.prisma.reader.formSubmission.count({ where: { formId } });
+    if (total > maxRows) {
+      throw new BadRequestException(
+        `This form has ${total} submissions, which exceeds the ${maxRows}-row synchronous export limit. ` +
+          `Use the async export endpoint or narrow the date range.`,
+      );
+    }
+
     const submissions = await this.prisma.reader.formSubmission.findMany({
       where: { formId },
       orderBy: { submittedAt: 'desc' },
+      take: maxRows,
     });
 
     if (format === 'json') {
@@ -469,29 +634,29 @@ Respond ONLY with a valid JSON object matching this structure:
     // CSV format
     const questions = (form.versions[0]?.questionsJson as any[]) || [];
     // Extract labels or IDs for headers. Prioritize labels if available.
-    const questionHeaders = questions.map(q => q.label || q.id);
-    const headers = ['Submission ID', 'Submitted At', 'IP Address', ...questionHeaders];
-    
-    const csvRows = [headers.join(',')];
+    const questionHeaders = questions.map((q) => q.label || q.id);
+    const headers = ['Submission ID', 'Submitted At', 'Status', 'Country', ...questionHeaders];
+
+    const csvRows = [headers.map((h) => csvCell(h)).join(',')];
 
     for (const sub of submissions) {
       const answers = (sub.answers as Record<string, any>) || {};
       const row = [
-        sub.id,
-        sub.submittedAt.toISOString(),
-        sub.ipAddress || '',
-        ...questions.map(q => {
+        csvCell(sub.id),
+        csvCell(sub.submittedAt.toISOString()),
+        csvCell(sub.status),
+        csvCell(sub.country ?? ''),
+        ...questions.map((q) => {
           const val = answers[q.id];
           if (val === undefined || val === null) return '';
-          const str = typeof val === 'object' ? JSON.stringify(val) : String(val);
-          // Escape quotes for CSV
-          return `"${str.replace(/"/g, '""')}"`;
-        })
+          return csvCell(typeof val === 'object' ? JSON.stringify(val) : String(val));
+        }),
       ];
       csvRows.push(row.join(','));
     }
 
-    return csvRows.join('\n');
+    // CRLF is what Excel expects; a bare \n breaks multi-line cells there.
+    return csvRows.join('\r\n');
   }
 
   /**
@@ -576,9 +741,11 @@ Respond ONLY with a valid JSON object matching this structure:
         deletedAt: null 
       },
       include: {
+        // Fetch a small window rather than only the newest row so we can select
+        // the version the Form actually points at (currentVersion).
         versions: {
           orderBy: { version: 'desc' },
-          take: 1,
+          take: 5,
         },
         organization: {
           select: { id: true, name: true, logoUrl: true, isActive: true },
@@ -599,14 +766,45 @@ Respond ONLY with a valid JSON object matching this structure:
       throw new ForbiddenException('This form has expired');
     }
 
-    // Omit sensitive data like passwordHash
-    const { passwordHash, ...publicForm } = form;
+    // Serve the version the Form actually points at, not simply the newest row.
+    // These can differ mid-publish, and the respondent must fill against the
+    // same version the submission will later be graded and stored against.
+    const activeVersion =
+      form.versions.find((v: any) => v.version === form.currentVersion) ?? form.versions[0];
+
+    // Strip everything the respondent must not see: the access password hash,
+    // the draft columns (which may contain unpublished questions), and the
+    // notification recipient list.
+    const {
+      passwordHash,
+      pagesJson,
+      questionsJson,
+      logicJson,
+      notifyEmails,
+      versions,
+      ...rest
+    } = form as any;
+
+    const publicForm = {
+      ...rest,
+      // Explicit contract for the client. The runner must echo formVersionId
+      // back on submit so the answers bind to the exact structure shown.
+      formVersionId: activeVersion.id,
+      version: activeVersion.version,
+      pages: activeVersion.pagesJson ?? [],
+      questions: activeVersion.questionsJson ?? [],
+      logic: activeVersion.logicJson ?? [],
+      theme: activeVersion.themeJson ?? rest.themeConfig ?? {},
+      // Tell the client whether it must collect a password before submitting.
+      isPasswordProtected: form.isPasswordProtected,
+      requireAuth: form.requireAuth,
+    };
 
     // 3. Store in cache for future requests (expire in 5 minutes)
     try {
       await this.redis.set(cacheKey, JSON.stringify(publicForm), 300);
     } catch (err) {
-      console.warn('Redis write failed for public form cache:', err);
+      this.logger.warn('Redis write failed for public form cache', err as any);
     }
 
     return publicForm;
@@ -649,6 +847,65 @@ Respond ONLY with a valid JSON object matching this structure:
         progress: data.progress || 0,
       },
     });
+  }
+
+  /**
+   * Remove a saved draft — called after a successful submission so the
+   * respondent's progress does not reappear on their next visit.
+   */
+  async deleteDraft(slug: string, fingerprint: string) {
+    if (!fingerprint) return;
+    const form = await this.prisma.reader.form.findUnique({
+      where: { slug },
+      select: { id: true },
+    });
+    if (!form) return;
+
+    await this.prisma.writer.formDraft
+      .deleteMany({ where: { formId: form.id, fingerprint } })
+      .catch(() => undefined);
+  }
+
+  /**
+   * Increment a daily view/start counter.
+   *
+   * Buffered in Redis and flushed by AnalyticsFlushService rather than written
+   * per request: at form-view volumes an UPSERT per page load would be the
+   * heaviest write in the system, and these counters do not need to be exact
+   * in real time.
+   */
+  async trackEvent(slug: string, event: 'view' | 'start') {
+    if (event !== 'view' && event !== 'start') return;
+
+    const form = await this.getPublicFormIdBySlug(slug);
+    if (!form) return;
+
+    const day = new Date().toISOString().slice(0, 10);
+    try {
+      await this.redis.getClient().hincrby(`analytics:pending:${day}`, `${form}:${event}`, 1);
+    } catch (e) {
+      this.logger.warn('Failed to buffer analytics event', e as any);
+    }
+  }
+
+  /** Slug -> formId, cached; used by the high-traffic tracking endpoint. */
+  private async getPublicFormIdBySlug(slug: string): Promise<string | null> {
+    const key = `slug_to_id:${slug}`;
+    try {
+      const cached = await this.redis.get(key);
+      if (cached) return cached;
+    } catch {
+      /* fall through to DB */
+    }
+
+    const form = await this.prisma.reader.form.findUnique({
+      where: { slug },
+      select: { id: true, status: true, deletedAt: true },
+    });
+    if (!form || form.deletedAt || form.status !== 'PUBLISHED') return null;
+
+    await this.redis.set(key, form.id, 3600).catch(() => undefined);
+    return form.id;
   }
 
   /**

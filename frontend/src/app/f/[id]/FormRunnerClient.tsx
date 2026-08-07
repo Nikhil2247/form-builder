@@ -6,9 +6,17 @@ import { FormRunner } from '@/components/builder/FormRunner';
 import { FormConfig } from '@/types/form';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useSearchParams } from 'next/navigation';
+import { API_BASE_URL } from '@/lib/config';
+
+/**
+ * Single source of truth for the API origin.
+ * The default was :3100 here while the backend defaults to :3000 — the two
+ * never agreed out of the box.
+ */
+
 
 async function fetchForm(slug: string): Promise<FormConfig> {
-  const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3100/v1'}/public-forms/${slug}`);
+  const res = await fetch(`${API_BASE_URL}/public-forms/${slug}`);
   if (!res.ok) throw new Error('Failed to fetch form');
   const json = await res.json();
   return json.data ?? json;
@@ -30,7 +38,13 @@ export function FormRunnerClient({ slug, initialData }: { slug: string, initialD
     if (typeof window === 'undefined') return '';
     let fp = localStorage.getItem('form_fingerprint');
     if (!fp) {
-      fp = Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
+      // Was two Math.random() calls concatenated — not a fingerprint and not
+      // even collision-resistant. crypto.randomUUID is available in every
+      // browser that runs this app.
+      fp =
+        typeof crypto !== 'undefined' && 'randomUUID' in crypto
+          ? crypto.randomUUID()
+          : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
       localStorage.setItem('form_fingerprint', fp);
     }
     return fp;
@@ -46,7 +60,7 @@ export function FormRunnerClient({ slug, initialData }: { slug: string, initialD
       const fp = getFingerprint();
       if (fp) {
         try {
-          const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3100/v1'}/public-forms/${slug}/draft?fp=${fp}`);
+          const res = await fetch(`${API_BASE_URL}/public-forms/${slug}/draft?fp=${fp}`);
           if (res.ok) {
             const json = await res.json();
             const draft = json.data ?? json;
@@ -100,12 +114,11 @@ export function FormRunnerClient({ slug, initialData }: { slug: string, initialD
     return null; // wait for effect to process searchParams
   }
 
-
   const handleProgressSave = async (answers: Record<string, any>) => {
     try {
       const fp = getFingerprint();
       if (!fp) return;
-      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3100/v1'}/public-forms/${slug}/draft`, {
+      const res = await fetch(`${API_BASE_URL}/public-forms/${slug}/draft`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ fingerprint: fp, answers }),
@@ -115,27 +128,19 @@ export function FormRunnerClient({ slug, initialData }: { slug: string, initialD
     }
   };
 
-  if (!isReady || !formConfig) {
-    return (
-      <div className="flex flex-col space-y-4 max-w-3xl mx-auto p-4 sm:p-8 mt-10">
-        <Skeleton className="h-12 w-3/4" />
-        <Skeleton className="h-4 w-1/2" />
-        <Skeleton className="h-64 w-full mt-8" />
-      </div>
-    );
-  }
-
   // Unwrap data envelope if present
   const actualFormConfig = (formConfig as any).data ?? formConfig;
-  
-  // Extract the actual questions, pages, logic, and theme from the backend version snapshot
-  const version = actualFormConfig.versions?.[0] || {};
+
+  // The API now returns the active version already flattened (questions, pages,
+  // logic, theme) plus formVersionId. Fall back to the old `versions[0]` shape
+  // so a cached response from an older deploy still renders.
+  const legacyVersion = actualFormConfig.versions?.[0];
   const parsedForm = {
     ...actualFormConfig,
-    questions: version.questionsJson || [],
-    pages: version.pagesJson || [],
-    logic: version.logicJson || [],
-    theme: version.themeJson || actualFormConfig.themeConfig || {},
+    questions: actualFormConfig.questions ?? legacyVersion?.questionsJson ?? [],
+    pages: actualFormConfig.pages ?? legacyVersion?.pagesJson ?? [],
+    logic: actualFormConfig.logic ?? legacyVersion?.logicJson ?? [],
+    theme: actualFormConfig.theme ?? legacyVersion?.themeJson ?? actualFormConfig.themeConfig ?? {},
   };
 
   return (
@@ -146,24 +151,45 @@ export function FormRunnerClient({ slug, initialData }: { slug: string, initialD
         onProgressSave={handleProgressSave}
         layoutMode={actualFormConfig.layoutMode || 'DOCUMENT'}
         onSubmitResponse={async (submission) => {
-          try {
-            const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3100/v1'}/forms/${actualFormConfig.id}/submit`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ answers: submission.answers, completionTimeMs: submission.completionTimeMs })
-            });
-            
-            if (!res.ok) {
-              const errorData = await res.json().catch(() => null);
-              throw new Error(errorData?.message || 'Failed to submit form. Please try again.');
-            }
+          const res = await fetch(`${API_BASE_URL}/forms/${actualFormConfig.id}/submit`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              answers: submission.answers,
+              completionTimeMs: submission.completionTimeMs,
+              // Binds the answers to the exact schema the respondent saw, so a
+              // publish mid-session cannot re-attribute them to a new version.
+              formVersionId: actualFormConfig.formVersionId,
+              // Bot trap — must stay empty for a real user.
+              honeypot: (submission as any).honeypot ?? '',
+              fingerprint: getFingerprint(),
+              ...((submission as any).formPassword
+                ? { formPassword: (submission as any).formPassword }
+                : {}),
+            }),
+          });
 
-            // Clear draft after successful submission
-            const fp = getFingerprint();
-            if (fp) localStorage.removeItem(`draft_${slug}`);
-          } catch (e: any) {
-            console.error('Failed to submit form', e);
-            throw e; // Rethrow to let FormRunner handle and display it
+          if (!res.ok) {
+            const body = await res.json().catch(() => null);
+            const raw = body?.error?.message ?? body?.message;
+            const message = Array.isArray(raw) ? raw.join(', ') : raw;
+
+            // Field-level issues from the server-side answer validator.
+            const issues = body?.error?.issues ?? body?.issues;
+            const err = new Error(message || 'Failed to submit form. Please try again.');
+            (err as any).issues = issues;
+            (err as any).status = res.status;
+            throw err;
+          }
+
+          // Clear the server-side draft now that it has been submitted. The old
+          // code removed a localStorage key (`draft_${slug}`) that was never
+          // written, so drafts survived submission and reappeared on reload.
+          const fp = getFingerprint();
+          if (fp) {
+            fetch(`${API_BASE_URL}/public-forms/${slug}/draft?fp=${encodeURIComponent(fp)}`, {
+              method: 'DELETE',
+            }).catch(() => undefined);
           }
         }}
       />

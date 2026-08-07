@@ -1,109 +1,161 @@
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { fetchApi } from '@/lib/api';
-import { useUser } from './use-auth';
+import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query';
+import { DEFAULT_PAGE_SIZE } from './use-pagination';
+import { fetchApi, unwrap } from '@/lib/api';
+import { useOrgId } from './use-auth';
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Types
-// ─────────────────────────────────────────────────────────────────────────────
 export type { Form } from '../types/form';
 import type { Form } from '../types/form';
 
+export interface Paginated<T> {
+  pagination: { page: number; limit: number; total: number; totalPages: number };
+  forms?: T[];
+}
+
 export interface FormsResponse {
   forms: Form[];
-  pagination: {
-    page: number;
-    limit: number;
-    total: number;
-    totalPages: number;
-  };
+  pagination: { page: number; limit: number; total: number; totalPages: number };
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Hooks
-// ─────────────────────────────────────────────────────────────────────────────
-
-/** Get the org ID from the user session */
-function useOrgId(): string | undefined {
-  const { data: session } = useUser();
-  return session?.activeOrganization?.id;
+export interface FormsQuery {
+  page?: number;
+  limit?: number;
+  status?: string;
+  search?: string;
+  sort?: string | null;
+  direction?: 'asc' | 'desc';
 }
 
-/** List all forms for the current org */
-export function useForms(status?: string, page = 1, limit = 20) {
+/**
+ * List forms.
+ *
+ * `placeholderData: keepPreviousData` is what makes paging feel instant: the
+ * previous page stays on screen (dimmed by DataTable) while the next loads,
+ * instead of the table collapsing to a spinner and the page jumping to the top.
+ *
+ * Search is sent to the server. The forms page used to filter the current page
+ * locally, so searching for a form on page 3 of 5 found nothing unless you
+ * happened to be on the right page.
+ */
+export function useForms(query: FormsQuery = {}) {
   const orgId = useOrgId();
+  const { page = 1, limit = DEFAULT_PAGE_SIZE, status, search, sort, direction = 'desc' } = query;
+
   return useQuery<FormsResponse>({
-    queryKey: ['forms', orgId, status, page, limit],
+    queryKey: ['forms', orgId, { page, limit, status, search, sort, direction }],
     queryFn: async () => {
-      const params = new URLSearchParams();
-      if (status) params.set('status', status);
-      params.set('page', String(page));
-      params.set('limit', String(limit));
-      const res = await fetchApi(`/organizations/${orgId}/forms?${params.toString()}`);
-      return res.data ?? res;
+      const params = new URLSearchParams({ page: String(page), limit: String(limit) });
+      if (status && status !== 'ALL') params.set('status', status);
+      if (search) params.set('search', search);
+      if (sort) {
+        params.set('sortBy', sort);
+        params.set('sortOrder', direction);
+      }
+
+      const data = unwrap<FormsResponse>(
+        await fetchApi(`/organizations/${orgId}/forms?${params}`),
+      );
+      return {
+        forms: data.forms ?? [],
+        pagination: data.pagination ?? { page, limit, total: data.forms?.length ?? 0, totalPages: 1 },
+      };
     },
     enabled: !!orgId,
+    placeholderData: keepPreviousData,
   });
 }
 
-/** Get a single form by ID */
 export function useForm(formId: string | undefined) {
   const orgId = useOrgId();
   return useQuery<Form>({
     queryKey: ['form', orgId, formId],
     queryFn: async () => {
-      const res = await fetchApi(`/organizations/${orgId}/forms/${formId}`);
-      return res.data?.form ?? res.data ?? res;
+      const data = unwrap<any>(await fetchApi(`/organizations/${orgId}/forms/${formId}`));
+      return data?.form ?? data;
     },
     enabled: !!orgId && !!formId,
   });
 }
 
-/** Get trashed forms */
+/** Pre-aggregated analytics for a single form. */
+export function useFormAnalytics(formId: string | undefined, days = 30) {
+  const orgId = useOrgId();
+  return useQuery<any>({
+    queryKey: ['form-analytics', orgId, formId, days],
+    queryFn: async () =>
+      unwrap(await fetchApi(`/organizations/${orgId}/forms/${formId}/analytics?days=${days}`)),
+    enabled: !!orgId && !!formId,
+    // Analytics are flushed from Redis on an interval; polling faster than that
+    // just burns requests.
+    staleTime: 60_000,
+  });
+}
+
 export function useTrashedForms() {
   const orgId = useOrgId();
   return useQuery<Form[]>({
     queryKey: ['forms-trash', orgId],
     queryFn: async () => {
-      const res = await fetchApi(`/organizations/${orgId}/forms/trash`);
-      // Backend returns a plain array (not {forms: []})
-      return Array.isArray(res.data) ? res.data : res.data ?? res;
+      const data = unwrap<any>(await fetchApi(`/organizations/${orgId}/forms/trash`));
+      return Array.isArray(data) ? data : (data?.forms ?? []);
     },
     enabled: !!orgId,
   });
 }
 
-/** Create a new form */
-export function useCreateForm() {
+// ─────────────────────────────────────────────────────────────────────────────
+// Mutations
+//
+// Every mutation invalidates with the *prefix* ['forms', orgId], so it clears
+// every page, filter, and sort variant. The previous code invalidated the exact
+// key only, so deleting a form on page 2 left it visible on page 1.
+// ─────────────────────────────────────────────────────────────────────────────
+
+function useFormMutation<TArgs, TResult>(
+  fn: (orgId: string, args: TArgs) => Promise<TResult>,
+  extraKeys: string[] = [],
+) {
   const qc = useQueryClient();
-  const { data: session } = useUser();
-  const orgId = session?.activeOrganization?.id;
+  const orgId = useOrgId();
+
   return useMutation({
-    mutationFn: async (dto: { title: string; description?: string }) => {
-      const payload = { ...dto, themeConfig: {} };
-      const res = await fetchApi(`/organizations/${orgId}/forms`, {
-        method: 'POST',
-        body: JSON.stringify(payload),
-      });
-      return res.data?.form ?? res.data ?? res;
+    mutationFn: (args: TArgs) => {
+      if (!orgId) throw new Error('No active organization');
+      return fn(orgId, args);
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['forms', orgId] });
+      extraKeys.forEach((key) => qc.invalidateQueries({ queryKey: [key, orgId] }));
     },
   });
 }
 
-/** Update a form */
+export function useCreateForm() {
+  return useFormMutation<{ title: string; description?: string }, Form>(
+    async (orgId, dto) => {
+      const data = unwrap<any>(
+        await fetchApi(`/organizations/${orgId}/forms`, {
+          method: 'POST',
+          body: JSON.stringify({ ...dto, themeConfig: {} }),
+        }),
+      );
+      return data?.form ?? data;
+    },
+  );
+}
+
 export function useUpdateForm(formId: string) {
   const qc = useQueryClient();
-  const { data: session } = useUser();
-  const orgId = session?.activeOrganization?.id;
+  const orgId = useOrgId();
+
   return useMutation({
     mutationFn: async (dto: Partial<Form>) => {
-      const res = await fetchApi(`/organizations/${orgId}/forms/${formId}`, {
-        method: 'PUT',
-        body: JSON.stringify(dto),
-      });
-      return res.data?.form ?? res.data ?? res;
+      const data = unwrap<any>(
+        await fetchApi(`/organizations/${orgId}/forms/${formId}`, {
+          method: 'PUT',
+          body: JSON.stringify(dto),
+        }),
+      );
+      return data?.form ?? data;
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['forms', orgId] });
@@ -112,72 +164,44 @@ export function useUpdateForm(formId: string) {
   });
 }
 
-/** Delete (soft-delete) a form */
 export function useDeleteForm() {
-  const qc = useQueryClient();
-  const { data: session } = useUser();
-  const orgId = session?.activeOrganization?.id;
-  return useMutation({
-    mutationFn: async (formId: string) => {
-      await fetchApi(`/organizations/${orgId}/forms/${formId}`, { method: 'DELETE' });
-    },
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['forms', orgId] });
-    },
-  });
+  return useFormMutation<string, void>(async (orgId, formId) => {
+    await fetchApi(`/organizations/${orgId}/forms/${formId}`, { method: 'DELETE' });
+  }, ['forms-trash']);
 }
 
-/** Clone a form */
 export function useCloneForm() {
-  const qc = useQueryClient();
-  const { data: session } = useUser();
-  const orgId = session?.activeOrganization?.id;
-  return useMutation({
-    mutationFn: async (formId: string) => {
-      const res = await fetchApi(`/organizations/${orgId}/forms/${formId}/clone`, {
-        method: 'POST',
-      });
-      return res.data?.form ?? res.data ?? res;
-    },
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['forms', orgId] });
-    },
+  return useFormMutation<string, Form>(async (orgId, formId) => {
+    const data = unwrap<any>(
+      await fetchApi(`/organizations/${orgId}/forms/${formId}/clone`, { method: 'POST' }),
+    );
+    return data?.form ?? data;
   });
 }
 
-/** Restore a trashed form */
 export function useRestoreForm() {
-  const qc = useQueryClient();
-  const { data: session } = useUser();
-  const orgId = session?.activeOrganization?.id;
-  return useMutation({
-    mutationFn: async (formId: string) => {
-      const res = await fetchApi(`/organizations/${orgId}/forms/${formId}/restore`, {
-        method: 'POST',
-      });
-      return res.data?.form ?? res.data ?? res;
-    },
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['forms', orgId] });
-      qc.invalidateQueries({ queryKey: ['forms-trash', orgId] });
-    },
-  });
+  return useFormMutation<string, Form>(async (orgId, formId) => {
+    const data = unwrap<any>(
+      await fetchApi(`/organizations/${orgId}/forms/${formId}/restore`, { method: 'POST' }),
+    );
+    return data?.form ?? data;
+  }, ['forms-trash']);
 }
 
-/** Create form from template */
+/** Hard delete from trash. */
+export function usePurgeForm() {
+  return useFormMutation<string, void>(async (orgId, formId) => {
+    await fetchApi(`/organizations/${orgId}/forms/${formId}/permanent`, { method: 'DELETE' });
+  }, ['forms-trash']);
+}
+
 export function useCreateFromTemplate() {
-  const qc = useQueryClient();
-  const { data: session } = useUser();
-  const orgId = session?.activeOrganization?.id;
-  return useMutation({
-    mutationFn: async (templateId: string) => {
-      const res = await fetchApi(`/organizations/${orgId}/forms/from-template/${templateId}`, {
+  return useFormMutation<string, Form>(async (orgId, templateId) => {
+    const data = unwrap<any>(
+      await fetchApi(`/organizations/${orgId}/forms/from-template/${templateId}`, {
         method: 'POST',
-      });
-      return res.data?.form ?? res.data ?? res;
-    },
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['forms', orgId] });
-    },
+      }),
+    );
+    return data?.form ?? data;
   });
 }

@@ -4,22 +4,24 @@ import React, { useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import {
-  Plus,
-  Search,
+  BarChart2,
+  Clock,
+  Copy,
+  Edit,
+  Eye,
   FileBox,
+  Inbox,
   LayoutGrid,
   List,
   MoreHorizontal,
-  Edit,
-  Copy,
+  Plus,
   Trash2,
-  Eye,
-  BarChart2,
-  Clock,
-  Inbox,
 } from 'lucide-react';
+import { toast } from 'sonner';
+
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 import { Card } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import {
@@ -30,337 +32,500 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+  PageHeader,
+  PageShell,
+  DataTable,
+  DataTablePagination,
+  StatusBadge,
+  EmptyState,
+  Toolbar,
+  SearchInput,
+  FilterSelect,
+  RelativeTime,
+  Modal,
+  ModalActions,
+  ConfirmDialog,
+  type DataTableColumn,
+  ButtonLink,
+} from '@/components/shared';
+import { Can } from '@/components/auth/RoleGuard';
+import { usePermissions } from '@/hooks/use-auth';
+import { usePagination } from '@/hooks/use-pagination';
 import { useForms, useCreateForm, useDeleteForm, useCloneForm, type Form } from '@/hooks/use-forms';
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { formatDistanceToNow } from 'date-fns';
-import {
-  Pagination,
-  PaginationContent,
-  PaginationItem,
-  PaginationNext,
-  PaginationPrevious,
-} from '@/components/ui/pagination';
-import { useUser } from '@/hooks/use-auth';
 
-const STATUS_COLORS: Record<string, string> = {
-  DRAFT: 'bg-amber-500/10 text-amber-600 border-amber-500/20',
-  PUBLISHED: 'bg-emerald-500/10 text-emerald-600 border-emerald-500/20',
-  CLOSED: 'bg-slate-500/10 text-slate-500 border-slate-500/20',
-  ARCHIVED: 'bg-slate-400/10 text-slate-400 border-slate-400/20',
-};
+const STATUS_OPTIONS = [
+  { value: 'ALL', label: 'All statuses' },
+  { value: 'DRAFT', label: 'Draft' },
+  { value: 'PUBLISHED', label: 'Published' },
+  { value: 'CLOSED', label: 'Closed' },
+  { value: 'ARCHIVED', label: 'Archived' },
+];
 
 export default function FormsListPage() {
   const router = useRouter();
-  const [search, setSearch] = useState('');
-  const [statusFilter, setStatusFilter] = useState<string>('ALL');
-  const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
-  const [page, setPage] = useState(1);
+  const { can } = usePermissions();
+
+  const [viewMode, setViewMode] = useState<'grid' | 'list'>('list');
   const [isCreateOpen, setIsCreateOpen] = useState(false);
-  const [newFormTitle, setNewFormTitle] = useState('');
-  const [newFormDesc, setNewFormDesc] = useState('');
   const [deleteTarget, setDeleteTarget] = useState<Form | null>(null);
 
-  const { data: session } = useUser();
-  const orgRole = session?.activeOrganization?.role ?? 'VIEWER';
-  const canBuild = orgRole === 'ADMIN' || orgRole === 'EDITOR';
+  const pager = usePagination({ filterKeys: ['status'] });
 
-  const { data, isLoading } = useForms(statusFilter === 'ALL' ? undefined : statusFilter, page, 20);
+  const { data, isLoading, isFetching, error, refetch } = useForms({
+    page: pager.page,
+    limit: pager.pageSize,
+    status: pager.filters.status,
+    search: pager.search,
+    sort: pager.sort,
+    direction: pager.direction,
+  });
+
   const createForm = useCreateForm();
   const deleteForm = useDeleteForm();
   const cloneForm = useCloneForm();
 
-  const forms: Form[] = data?.forms ?? [];
-  
-  // Since backend doesn't filter by search term, we apply local search filtering.
-  // Ideally, search should be pushed to the backend `useForms` hook.
-  const filtered = search ? forms.filter((f) => f.title.toLowerCase().includes(search.toLowerCase())) : forms;
-  
-  // Use server's total if no search is applied, otherwise local filtered length
-  const total = search ? filtered.length : (data?.pagination?.total ?? forms.length);
-  
-  // The forms array is already paginated by the server (20 items max).
-  // If we are searching locally, we just show the filtered results.
-  const paginatedForms = filtered;
+  const forms = data?.forms ?? [];
+  const total = data?.pagination?.total ?? 0;
 
-  async function handleCreate() {
-    if (!newFormTitle.trim()) return;
-    const created = await createForm.mutateAsync({ title: newFormTitle, description: newFormDesc });
-    setIsCreateOpen(false);
-    setNewFormTitle('');
-    setNewFormDesc('');
-    router.push(`/forms/builder?id=${created.id}`);
+  async function handleClone(form: Form) {
+    try {
+      const clone = await cloneForm.mutateAsync(form.id);
+      toast.success(`Copied "${form.title}"`);
+      if (clone?.id) router.push(`/forms/builder?id=${clone.id}`);
+    } catch (err: any) {
+      toast.error(err?.message ?? 'Could not duplicate this form');
+    }
   }
 
-  return (
-    <div className="w-full space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
-      {/* Header */}
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between border-b border-border pb-4">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight text-foreground">My Forms</h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            {isLoading ? 'Loading...' : `${forms.length} form${forms.length !== 1 ? 's' : ''} in your organization`}
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          {canBuild && (
-            <Button className="gap-2" onClick={() => setIsCreateOpen(true)}>
-              <Plus size={16} /> Create Form
-            </Button>
-          )}
-          <Link href="/templates">
-            <Button variant="outline" size="sm" className="gap-2">
-              <FileBox size={15} /> Browse Templates
-            </Button>
-          </Link>
-        </div>
-      </div>
+  async function handleDelete() {
+    if (!deleteTarget) return;
+    try {
+      await deleteForm.mutateAsync(deleteTarget.id);
+      toast.success('Moved to trash');
+      setDeleteTarget(null);
+    } catch (err: any) {
+      toast.error(err?.message ?? 'Could not delete this form');
+    }
+  }
 
-      {/* Filters */}
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+  const columns: DataTableColumn<Form>[] = [
+    {
+      id: 'title',
+      header: 'Form',
+      isRowHeader: true,
+      sortable: true,
+      sortKey: 'title',
+      className: 'max-w-0',
+      cell: (form) => (
         <div className="flex items-center gap-3">
-          <div className="relative">
-            <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
-            <Input placeholder="Search forms..." value={search} onChange={(e) => { setSearch(e.target.value); setPage(1); }} className="h-9 pl-9 w-52 text-sm bg-muted/40" />
-          </div>
-          <Select value={statusFilter} onValueChange={(v) => { setStatusFilter(v ?? 'ALL'); setPage(1); }}>
-            <SelectTrigger className="h-9 w-36 text-sm bg-muted/40"><SelectValue /></SelectTrigger>
-            <SelectContent>
-              <SelectItem value="ALL">All Status</SelectItem>
-              <SelectItem value="DRAFT">Draft</SelectItem>
-              <SelectItem value="PUBLISHED">Published</SelectItem>
-              <SelectItem value="CLOSED">Closed</SelectItem>
-              <SelectItem value="ARCHIVED">Archived</SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
-        <div className="flex items-center gap-1 rounded-lg border border-border p-1">
-          <button onClick={() => setViewMode('grid')} className={`rounded-md p-1.5 transition-colors ${viewMode === 'grid' ? 'bg-accent text-accent-foreground' : 'text-muted-foreground hover:text-foreground'}`}><LayoutGrid size={15} /></button>
-          <button onClick={() => setViewMode('list')} className={`rounded-md p-1.5 transition-colors ${viewMode === 'list' ? 'bg-accent text-accent-foreground' : 'text-muted-foreground hover:text-foreground'}`}><List size={15} /></button>
-        </div>
-      </div>
-
-      {/* Content */}
-      {isLoading ? (
-        <div className={viewMode === 'grid' ? 'grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4' : 'space-y-3'}>
-          {Array.from({ length: 8 }).map((_, i) => <Skeleton key={i} className="h-40 rounded-xl" />)}
-        </div>
-      ) : filtered.length === 0 ? (
-        <div className="flex flex-col items-center justify-center rounded-2xl border border-dashed border-border py-20 text-center">
-          <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-full bg-muted"><FileBox size={24} className="text-muted-foreground" /></div>
-          <h3 className="text-base font-semibold">No forms found</h3>
-          <p className="mt-1 text-sm text-muted-foreground">{search ? 'Try adjusting your search.' : 'Create your first form to get started.'}</p>
-          {!search && canBuild && <Button className="mt-4 gap-2" onClick={() => setIsCreateOpen(true)}><Plus size={15} />Create Form</Button>}
-        </div>
-      ) : viewMode === 'grid' ? (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-          {canBuild && (
-            <button onClick={() => setIsCreateOpen(true)} className="group flex min-h-[160px] flex-col items-center justify-center rounded-xl border border-dashed border-border bg-card p-6 text-center transition-all hover:border-primary hover:bg-primary/5 hover:-translate-y-0.5 shadow-sm">
-              <div className="mb-3 flex h-10 w-10 items-center justify-center rounded-full bg-primary/10 text-primary transition-all group-hover:bg-primary group-hover:text-primary-foreground group-hover:scale-110"><Plus size={20} /></div>
-              <span className="text-sm font-semibold">New Form</span>
-              <span className="mt-1 text-xs text-muted-foreground">Create from scratch</span>
-            </button>
-          )}
-          {filtered.map((form) => (
-            <FormCard key={form.id} form={form} canBuild={canBuild} onDelete={() => setDeleteTarget(form)} onClone={() => cloneForm.mutate(form.id)} />
-          ))}
-        </div>
-      ) : (
-        <div className="rounded-xl border border-border overflow-hidden">
-          <Table>
-            <TableHeader className="bg-muted/50">
-              <TableRow>
-                <TableHead>Form Name</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead>Responses</TableHead>
-                <TableHead>Last Updated</TableHead>
-                <TableHead className="text-right">Actions</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {paginatedForms.map((form) => (
-                <FormRow key={form.id} form={form} canBuild={canBuild} onDelete={() => setDeleteTarget(form)} onClone={() => cloneForm.mutate(form.id)} />
-              ))}
-            </TableBody>
-          </Table>
-          {!isLoading && forms.length > 0 && (
-            <div className="p-4 border-t border-border">
-              {(() => {
-                const totalPages = Math.ceil(total / 20);
-                return (
-                  <Pagination>
-                    <PaginationContent>
-                      <PaginationItem>
-                        <PaginationPrevious 
-                          href="#" 
-                          onClick={(e) => { e.preventDefault(); setPage(Math.max(1, page - 1)); }} 
-                          className={page === 1 ? 'pointer-events-none opacity-50' : ''} 
-                        />
-                      </PaginationItem>
-                      <PaginationItem>
-                        <span className="text-sm font-medium mx-2">Page {page} of {totalPages || 1}</span>
-                      </PaginationItem>
-                      <PaginationItem>
-                        <PaginationNext 
-                          href="#" 
-                          onClick={(e) => { e.preventDefault(); setPage(Math.min(totalPages, page + 1)); }} 
-                          className={page === totalPages || totalPages === 0 ? 'pointer-events-none opacity-50' : ''} 
-                        />
-                      </PaginationItem>
-                    </PaginationContent>
-                  </Pagination>
-                );
-              })()}
+          <span className="flex size-8 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground">
+            <FileBox className="size-4" strokeWidth={1.5} />
+          </span>
+          <div className="min-w-0">
+            <div className="truncate font-medium text-foreground">{form.title}</div>
+            <div className="truncate text-xs text-muted-foreground">
+              {form.description || 'No description'}
             </div>
+          </div>
+        </div>
+      ),
+    },
+    {
+      id: 'status',
+      header: 'Status',
+      width: 'w-32',
+      cell: (form) => <StatusBadge status={form.status} dot />,
+    },
+    {
+      id: 'submissions',
+      header: 'Responses',
+      numeric: true,
+      width: 'w-28',
+      cell: (form) => (form._count?.submissions ?? 0).toLocaleString(),
+    },
+    {
+      id: 'updatedAt',
+      header: 'Last edited',
+      sortable: true,
+      sortKey: 'updatedAt',
+      width: 'w-40',
+      hideBelow: 'md',
+      cell: (form) => (
+        <span className="text-muted-foreground">
+          <RelativeTime value={form.updatedAt} />
+        </span>
+      ),
+    },
+    {
+      id: 'actions',
+      header: <span className="sr-only">Actions</span>,
+      width: 'w-12',
+      className: 'text-right',
+      headerClassName: 'text-right',
+      cell: (form) => <RowActions form={form} onClone={handleClone} onDelete={setDeleteTarget} />,
+    },
+  ];
+
+  const emptyState = (
+    <EmptyState
+      icon={FileBox}
+      variant="inline"
+      title={pager.search || pager.filters.status ? 'No forms match your filters' : 'No forms yet'}
+      description={
+        pager.search || pager.filters.status
+          ? 'Try a different search term or clear the status filter.'
+          : 'Create a form from scratch, or start from a template.'
+      }
+      action={
+        pager.search || pager.filters.status ? (
+          <Button variant="outline" size="sm" onClick={pager.reset}>
+            Clear filters
+          </Button>
+        ) : (
+          <Can permission="form:create">
+            <Button size="sm" className="gap-2" onClick={() => setIsCreateOpen(true)}>
+              <Plus className="size-4" /> Create form
+            </Button>
+          </Can>
+        )
+      }
+    />
+  );
+
+  return (
+    <PageShell>
+      <PageHeader
+        title="Forms"
+        description="Every form in your organization."
+        actions={
+          <>
+            <ButtonLink variant="outline" size="sm" className="gap-2" href="/templates">
+              <FileBox className="size-4" /> Templates
+            </ButtonLink>
+            <Can permission="form:create">
+              <Button size="sm" className="gap-2" onClick={() => setIsCreateOpen(true)}>
+                <Plus className="size-4" /> Create form
+              </Button>
+            </Can>
+          </>
+        }
+      />
+
+      <Toolbar
+        end={
+          <div
+            role="group"
+            aria-label="View mode"
+            className="flex items-center gap-1 rounded-lg border border-border p-0.5"
+          >
+            {(
+              [
+                ['list', List, 'Table view'],
+                ['grid', LayoutGrid, 'Card view'],
+              ] as const
+            ).map(([mode, Icon, label]) => (
+              <button
+                key={mode}
+                onClick={() => setViewMode(mode)}
+                aria-label={label}
+                aria-pressed={viewMode === mode}
+                className={`rounded-md p-1.5 transition-colors ${
+                  viewMode === mode
+                    ? 'bg-muted text-foreground'
+                    : 'text-muted-foreground hover:text-foreground'
+                }`}
+              >
+                <Icon className="size-4" />
+              </button>
+            ))}
+          </div>
+        }
+      >
+        <SearchInput
+          value={pager.search}
+          onChange={pager.setSearch}
+          placeholder="Search forms…"
+          aria-label="Search forms"
+        />
+        <FilterSelect
+          label="Status"
+          value={pager.filters.status ?? 'ALL'}
+          onChange={(value) => pager.setFilter('status', value === 'ALL' ? null : value)}
+          options={STATUS_OPTIONS}
+        />
+      </Toolbar>
+
+      {viewMode === 'list' ? (
+        <DataTable
+          caption="Forms in your organization"
+          columns={columns}
+          data={forms}
+          getRowId={(form) => form.id}
+          isLoading={isLoading || isFetching}
+          error={error}
+          onRetry={() => refetch()}
+          empty={emptyState}
+          rowHref={(form) => `/forms/${form.id}`}
+          sort={pager.sort ? { key: pager.sort, direction: pager.direction } : undefined}
+          onSortChange={pager.setSort}
+          pagination={pager.paginationProps(total, 'forms')}
+        />
+      ) : (
+        <div className="space-y-4">
+          {isLoading ? (
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+              {Array.from({ length: 8 }).map((_, i) => (
+                <Skeleton key={i} className="h-40 rounded-xl" />
+              ))}
+            </div>
+          ) : forms.length === 0 ? (
+            <div className="rounded-xl border border-dashed border-border-strong bg-card">
+              {emptyState}
+            </div>
+          ) : (
+            <>
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+                {can('form:create') && (
+                  <button
+                    onClick={() => setIsCreateOpen(true)}
+                    className="group flex min-h-40 flex-col items-center justify-center rounded-xl border
+                               border-dashed border-border-strong bg-card p-6 text-center transition-colors
+                               hover:border-foreground/30 hover:bg-muted/40"
+                  >
+                    <span className="mb-3 flex size-9 items-center justify-center rounded-full bg-muted text-muted-foreground transition-colors group-hover:bg-foreground group-hover:text-background">
+                      <Plus className="size-4" />
+                    </span>
+                    <span className="text-sm font-medium">New form</span>
+                    <span className="mt-0.5 text-xs text-muted-foreground">Start from scratch</span>
+                  </button>
+                )}
+                {forms.map((form) => (
+                  <FormCard
+                    key={form.id}
+                    form={form}
+                    onClone={handleClone}
+                    onDelete={setDeleteTarget}
+                  />
+                ))}
+              </div>
+
+              <div className="overflow-hidden rounded-xl border border-border bg-card">
+                <DataTablePagination
+                  {...pager.paginationProps(total, 'forms')}
+                  isLoading={isFetching}
+                  className="border-t-0"
+                />
+              </div>
+            </>
           )}
         </div>
       )}
 
-      {/* Create Dialog */}
-      <Dialog open={isCreateOpen} onOpenChange={setIsCreateOpen}>
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle>Create New Form</DialogTitle>
-            <DialogDescription>Give your form a name to get started in the builder.</DialogDescription>
-          </DialogHeader>
-          <div className="space-y-4 py-2">
-            <div className="space-y-1.5">
-              <label className="text-sm font-medium">Form Title</label>
-              <Input placeholder="e.g. Customer Feedback Survey" value={newFormTitle} onChange={(e) => setNewFormTitle(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleCreate()} autoFocus />
-            </div>
-            <div className="space-y-1.5">
-              <label className="text-sm font-medium">Description (optional)</label>
-              <Input placeholder="Brief description..." value={newFormDesc} onChange={(e) => setNewFormDesc(e.target.value)} />
-            </div>
-          </div>
-          <DialogFooter>
-            <Button variant="ghost" onClick={() => setIsCreateOpen(false)}>Cancel</Button>
-            <Button onClick={handleCreate} disabled={!newFormTitle.trim() || createForm.isPending}>
-              {createForm.isPending ? 'Creating...' : 'Create & Open Builder'}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <CreateFormModal
+        open={isCreateOpen}
+        onOpenChange={setIsCreateOpen}
+        isPending={createForm.isPending}
+        onCreate={async (values) => {
+          try {
+            const created = await createForm.mutateAsync(values);
+            setIsCreateOpen(false);
+            router.push(`/forms/builder?id=${created.id}`);
+          } catch (err: any) {
+            toast.error(err?.message ?? 'Could not create this form');
+          }
+        }}
+      />
 
-      {/* Delete Dialog */}
-      <Dialog open={!!deleteTarget} onOpenChange={() => setDeleteTarget(null)}>
-        <DialogContent className="sm:max-w-sm">
-          <DialogHeader>
-            <DialogTitle>Delete Form</DialogTitle>
-            <DialogDescription>Are you sure you want to delete &quot;{deleteTarget?.title}&quot;? It will be moved to trash.</DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button variant="ghost" onClick={() => setDeleteTarget(null)}>Cancel</Button>
-            <Button variant="destructive" onClick={async () => { if (deleteTarget) { await deleteForm.mutateAsync(deleteTarget.id); setDeleteTarget(null); } }} disabled={deleteForm.isPending}>
-              {deleteForm.isPending ? 'Deleting...' : 'Delete Form'}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-    </div>
+      <ConfirmDialog
+        open={!!deleteTarget}
+        onOpenChange={(open) => !open && setDeleteTarget(null)}
+        title="Move to trash"
+        description={
+          <>
+            &ldquo;{deleteTarget?.title}&rdquo; will be moved to trash. Its responses are kept and
+            it can be restored for 30 days.
+          </>
+        }
+        confirmLabel="Move to trash"
+        onConfirm={handleDelete}
+        isPending={deleteForm.isPending}
+      />
+    </PageShell>
   );
 }
 
-function FormCard({ form, canBuild, onDelete, onClone }: { form: Form; canBuild: boolean; onDelete: () => void; onClone: () => void }) {
-  const router = useRouter();
-  const timeAgo = formatDistanceToNow(new Date(form.updatedAt), { addSuffix: true });
+// ─────────────────────────────────────────────────────────────────────────────
+
+function RowActions({
+  form,
+  onClone,
+  onDelete,
+}: {
+  form: Form;
+  onClone: (form: Form) => void;
+  onDelete: (form: Form) => void;
+}) {
+  const { can } = usePermissions();
+
   return (
-    <Card className="group relative flex flex-col justify-between overflow-hidden rounded-xl border border-border bg-card p-5 shadow-sm transition-all hover:shadow-md hover:-translate-y-0.5 min-h-[160px]">
-      <div>
-        <div className="flex items-start justify-between gap-2 mb-2">
-          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary"><FileBox size={16} /></div>
+    <DropdownMenu>
+      <DropdownMenuTrigger
+        aria-label={`Actions for ${form.title}`}
+        className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+      >
+        <MoreHorizontal className="size-4" />
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end">
+        {/* Base UI composes via `render`, not Radix's `asChild`. */}
+        <DropdownMenuItem render={<Link href={`/forms/${form.id}`} />} className="cursor-pointer">
+          <Inbox className="mr-2 size-3.5" /> Responses
+        </DropdownMenuItem>
+        <DropdownMenuItem
+          render={<Link href={`/forms/${form.id}?tab=analytics`} />}
+          className="cursor-pointer"
+        >
+          <BarChart2 className="mr-2 size-3.5" /> Analytics
+        </DropdownMenuItem>
+        {can('form:edit') && (
+          <DropdownMenuItem
+            render={<Link href={`/forms/builder?id=${form.id}`} />}
+            className="cursor-pointer"
+          >
+            <Edit className="mr-2 size-3.5" /> Edit
+          </DropdownMenuItem>
+        )}
+        {can('form:create') && (
+          <DropdownMenuItem onClick={() => onClone(form)} className="cursor-pointer">
+            <Copy className="mr-2 size-3.5" /> Duplicate
+          </DropdownMenuItem>
+        )}
+        {can('form:delete') && (
+          <>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem
+              onClick={() => onDelete(form)}
+              className="cursor-pointer text-destructive focus:bg-destructive/10 focus:text-destructive"
+            >
+              <Trash2 className="mr-2 size-3.5" /> Move to trash
+            </DropdownMenuItem>
+          </>
+        )}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+function FormCard({
+  form,
+  onClone,
+  onDelete,
+}: {
+  form: Form;
+  onClone: (form: Form) => void;
+  onDelete: (form: Form) => void;
+}) {
+  return (
+    <Card className="flex min-h-40 flex-col justify-between p-4 transition-colors hover:border-border-strong">
+      <div className="min-w-0">
+        <div className="mb-3 flex items-start justify-between gap-2">
+          <span className="flex size-8 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground">
+            <FileBox className="size-4" strokeWidth={1.5} />
+          </span>
           <div className="flex items-center gap-1.5">
-            <span className={`rounded-full border px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider ${STATUS_COLORS[form.status] ?? ''}`}>{form.status}</span>
-            <DropdownMenu>
-              <DropdownMenuTrigger className="rounded-md p-1 text-muted-foreground opacity-0 group-hover:opacity-100 hover:bg-accent hover:text-foreground transition-all">
-                <MoreHorizontal size={15} />
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end">
-                {canBuild && <DropdownMenuItem onClick={() => router.push(`/forms/builder?id=${form.id}`)}><Edit size={14} className="mr-2" />Edit</DropdownMenuItem>}
-                <DropdownMenuItem onClick={() => router.push(`/forms/${form.id}`)}><Eye size={14} className="mr-2" />View Responses</DropdownMenuItem>
-                {canBuild && <DropdownMenuItem onClick={onClone}><Copy size={14} className="mr-2" />Clone</DropdownMenuItem>}
-                {canBuild && (
-                  <>
-                    <DropdownMenuSeparator />
-                    <DropdownMenuItem onClick={onDelete} className="text-destructive focus:text-destructive focus:bg-destructive/10"><Trash2 size={14} className="mr-2" />Delete</DropdownMenuItem>
-                  </>
-                )}
-              </DropdownMenuContent>
-            </DropdownMenu>
+            <StatusBadge status={form.status} />
+            <RowActions form={form} onClone={onClone} onDelete={onDelete} />
           </div>
         </div>
-        <h3 className="mt-2 text-sm font-semibold text-foreground line-clamp-2">{form.title}</h3>
-        {form.description && <p className="mt-1 text-xs text-muted-foreground line-clamp-2">{form.description}</p>}
+
+        <Link href={`/forms/${form.id}`} className="block rounded-sm">
+          <h3 className="line-clamp-2 text-sm font-medium text-foreground hover:underline">
+            {form.title}
+          </h3>
+        </Link>
+        {form.description && (
+          <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">{form.description}</p>
+        )}
       </div>
+
       <div className="mt-4 flex items-center justify-between border-t border-border pt-3 text-xs text-muted-foreground">
-        <span className="flex items-center gap-1"><Inbox size={11} />{form._count?.submissions ?? form.totalSubmissions ?? form.responseCount ?? 0} responses</span>
-        <span className="flex items-center gap-1"><Clock size={11} />{timeAgo}</span>
+        <span className="tabular flex items-center gap-1.5">
+          <Inbox className="size-3" />
+          {(form._count?.submissions ?? 0).toLocaleString()}
+        </span>
+        <span className="flex items-center gap-1.5">
+          <Clock className="size-3" />
+          <RelativeTime value={form.updatedAt} />
+        </span>
       </div>
     </Card>
   );
 }
 
-function FormRow({ form, canBuild, onDelete, onClone }: { form: Form; canBuild: boolean; onDelete: () => void; onClone: () => void }) {
-  const isPublished = form.status === 'PUBLISHED';
-  const timeAgo = form.updatedAt ? formatDistanceToNow(new Date(form.updatedAt), { addSuffix: true }) : '—';
+function CreateFormModal({
+  open,
+  onOpenChange,
+  onCreate,
+  isPending,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onCreate: (values: { title: string; description?: string }) => void;
+  isPending: boolean;
+}) {
+  const [title, setTitle] = useState('');
+  const [description, setDescription] = useState('');
+
+  React.useEffect(() => {
+    if (open) {
+      setTitle('');
+      setDescription('');
+    }
+  }, [open]);
+
+  const submit = () => {
+    if (!title.trim()) return;
+    onCreate({ title: title.trim(), description: description.trim() || undefined });
+  };
 
   return (
-    <TableRow className="group hover:bg-muted/50 transition-colors">
-      <TableCell className="font-medium">
-        <Link href={`/forms/${form.id}`} className="flex items-center gap-3 hover:underline">
-          <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary/10 text-primary">
-            <FileBox size={16} />
-          </div>
-          <div>
-            <div className="font-semibold text-foreground">{form.title}</div>
-            <div className="text-xs text-muted-foreground font-normal line-clamp-1">{form.description || 'No description'}</div>
-          </div>
-        </Link>
-      </TableCell>
-      <TableCell>
-        <span className={`inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold ${isPublished ? 'bg-emerald-500/10 text-emerald-600 border-emerald-500/20' : 'bg-muted text-muted-foreground border-border'}`}>
-          {form.status}
-        </span>
-      </TableCell>
-      <TableCell className="text-muted-foreground">{form._count?.submissions ?? form.responseCount ?? 0}</TableCell>
-      <TableCell className="text-muted-foreground">{timeAgo}</TableCell>
-      <TableCell className="text-right">
-        <DropdownMenu>
-          <DropdownMenuTrigger className="rounded-md p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground transition-colors">
-            <MoreHorizontal size={18} />
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end">
-            <DropdownMenuItem asChild>
-              <Link href={`/forms/${form.id}`} className="w-full cursor-pointer flex items-center">
-                <Inbox size={14} className="mr-2" /> View Responses
-              </Link>
-            </DropdownMenuItem>
-            {canBuild && (
-              <>
-                <DropdownMenuItem asChild>
-                  <Link href={`/forms/builder?id=${form.id}`} className="w-full cursor-pointer flex items-center">
-                    <Edit size={14} className="mr-2" /> Edit Form
-                  </Link>
-                </DropdownMenuItem>
-                <DropdownMenuItem onClick={onClone} className="cursor-pointer">
-                  <Copy size={14} className="mr-2" /> Clone
-                </DropdownMenuItem>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem onClick={onDelete} className="cursor-pointer text-destructive focus:text-destructive focus:bg-destructive/10">
-                  <Trash2 size={14} className="mr-2" /> Delete
-                </DropdownMenuItem>
-              </>
-            )}
-          </DropdownMenuContent>
-        </DropdownMenu>
-      </TableCell>
-    </TableRow>
+    <Modal
+      open={open}
+      onOpenChange={onOpenChange}
+      title="Create a form"
+      description="You can rename it any time."
+      footer={
+        <ModalActions
+          onCancel={() => onOpenChange(false)}
+          confirmLabel="Create and open builder"
+          onConfirm={submit}
+          isPending={isPending}
+          disabled={!title.trim()}
+        />
+      }
+    >
+      <div className="space-y-4">
+        <div className="space-y-1.5">
+          <Label htmlFor="form-title">Title</Label>
+          <Input
+            id="form-title"
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && submit()}
+            placeholder="Customer feedback survey"
+            autoFocus
+          />
+        </div>
+        <div className="space-y-1.5">
+          <Label htmlFor="form-description">Description (optional)</Label>
+          <Input
+            id="form-description"
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && submit()}
+            placeholder="Shown to respondents under the title"
+          />
+        </div>
+      </div>
+    </Modal>
   );
 }

@@ -5,6 +5,9 @@ import {
 import { AdminService } from './admin.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { SuperAdminGuard } from '../../common/guards/super-admin.guard';
+import { PaginationQueryDto } from '../../common/pagination/pagination-query.dto';
+import { AuditLogQueryDto } from '../../common/pagination/audit-query.dto';
+import { parsePagination } from '../../common/pagination/pagination';
 
 /**
  * Platform administration endpoints — accessible only by SUPER_ADMIN users.
@@ -34,16 +37,8 @@ export class AdminController {
   // ════════════════════════════════════════════════════════════════════════════
 
   @Get('organizations')
-  async listOrganizations(
-    @Query('page') page?: string,
-    @Query('limit') limit?: string,
-    @Query('search') search?: string,
-  ) {
-    return this.adminService.listOrganizations(
-      parseInt(page ?? '1', 10),
-      parseInt(limit ?? '20', 10),
-      search,
-    );
+  async listOrganizations(@Query() query: PaginationQueryDto) {
+    return this.adminService.listOrganizations(parsePagination(query), query.search);
   }
 
   @Get('organizations/:orgId')
@@ -86,16 +81,8 @@ export class AdminController {
   // ════════════════════════════════════════════════════════════════════════════
 
   @Get('users')
-  async listUsers(
-    @Query('page') page?: string,
-    @Query('limit') limit?: string,
-    @Query('search') search?: string,
-  ) {
-    return this.adminService.listUsers(
-      parseInt(page ?? '1', 10),
-      parseInt(limit ?? '20', 10),
-      search,
-    );
+  async listUsers(@Query() query: PaginationQueryDto) {
+    return this.adminService.listUsers(parsePagination(query), query.search);
   }
 
   // ════════════════════════════════════════════════════════════════════════════
@@ -103,15 +90,7 @@ export class AdminController {
   // ════════════════════════════════════════════════════════════════════════════
 
   @Get('audit-logs')
-  async getAuditLogs(
-    @Query('page') page?: string,
-    @Query('limit') limit?: string,
-    @Query('orgId') orgId?: string,
-  ) {
-    return this.adminService.getAuditLogs(
-      parseInt(page ?? '1', 10),
-      parseInt(limit ?? '50', 10),
-      orgId,
-    );
+  async getAuditLogs(@Query() query: AuditLogQueryDto) {
+    return this.adminService.getAuditLogs(parsePagination(query), query.orgId, query.action);
   }
 }

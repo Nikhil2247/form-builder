@@ -2,7 +2,7 @@ import React from 'react';
 import Link from 'next/link';
 import { Layers } from 'lucide-react';
 import { Button, buttonVariants } from '@/components/ui/button';
-import { ThemeToggle } from '@/components/ThemeToggle';
+import { ThemeToggle } from '@/components/theme/theme-toggle';
 
 export default function MarketingLayout({
   children,

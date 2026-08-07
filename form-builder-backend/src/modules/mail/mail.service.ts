@@ -2,6 +2,22 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as nodemailer from 'nodemailer';
 
+/**
+ * Escape untrusted text before interpolating it into an HTML email body.
+ *
+ * Submission answers and org/inviter names are attacker-controllable: a
+ * respondent could otherwise inject markup (or a phishing link) into the
+ * notification email delivered to the form owner.
+ */
+function escapeHtml(value: unknown): string {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 @Injectable()
 export class MailService {
   private transporter: nodemailer.Transporter | null = null;
@@ -37,13 +53,13 @@ export class MailService {
       await this.transporter.sendMail({
         from,
         to,
-        subject: `You've been invited to join ${orgName} on FormBuilder`,
+        subject: `You've been invited to join ${orgName} on FormBuilder`.slice(0, 200),
         html: `
           <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #eee; border-radius: 8px;">
             <h2 style="color: #333; text-align: center;">Welcome to FormBuilder!</h2>
             <p style="font-size: 16px; color: #555;">Hi there,</p>
             <p style="font-size: 16px; color: #555;">
-              <strong>${inviterName}</strong> has invited you to join the <strong>${orgName}</strong> organization on FormBuilder.
+              <strong>${escapeHtml(inviterName)}</strong> has invited you to join the <strong>${escapeHtml(orgName)}</strong> organization on FormBuilder.
             </p>
             <div style="text-align: center; margin: 30px 0;">
               <a href="${inviteUrl}" style="background-color: #007bff; color: white; padding: 12px 24px; text-decoration: none; border-radius: 4px; font-weight: bold; font-size: 16px;">
@@ -64,6 +80,56 @@ export class MailService {
       this.logger.log(`Invitation email sent to ${to}`);
     } catch (error) {
       this.logger.error(`Failed to send invitation email to ${to}`, error);
+    }
+  }
+
+  /**
+   * Email-address confirmation for a newly registered account.
+   *
+   * Previously registration reused sendPasswordResetEmail, so new users received
+   * a "Reset your password" message containing a /verify-email link.
+   */
+  async sendVerificationEmail(to: string, verifyUrl: string, firstName?: string) {
+    if (!this.transporter) {
+      this.logger.warn(`Skipping verification email to ${to} (SMTP not configured)`);
+      return;
+    }
+
+    const from = this.configService.get('smtp.from');
+    const greeting = firstName ? `Hi ${escapeHtml(firstName)},` : 'Hi there,';
+
+    try {
+      await this.transporter.sendMail({
+        from,
+        to,
+        subject: 'Confirm your FormBuilder email address',
+        html: `
+          <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #eee; border-radius: 8px;">
+            <h2 style="color: #333; text-align: center;">Confirm your email</h2>
+            <p style="font-size: 16px; color: #555;">${greeting}</p>
+            <p style="font-size: 16px; color: #555;">
+              Thanks for signing up for FormBuilder. Please confirm this email address to activate your account.
+            </p>
+            <div style="text-align: center; margin: 30px 0;">
+              <a href="${verifyUrl}" style="background-color: #007bff; color: white; padding: 12px 24px; text-decoration: none; border-radius: 4px; font-weight: bold; font-size: 16px;">
+                Confirm Email
+              </a>
+            </div>
+            <p style="font-size: 14px; color: #777;">
+              If the button doesn't work, copy and paste this link into your browser:<br>
+              <a href="${verifyUrl}">${verifyUrl}</a>
+            </p>
+            <p style="font-size: 14px; color: #777;">This link expires in 24 hours.</p>
+            <hr style="border: 0; border-top: 1px solid #eee; margin: 30px 0;">
+            <p style="font-size: 12px; color: #999; text-align: center;">
+              FormBuilder - The easiest way to build forms.
+            </p>
+          </div>
+        `,
+      });
+      this.logger.log(`Verification email sent to ${to}`);
+    } catch (error) {
+      this.logger.error(`Failed to send verification email to ${to}`, error);
     }
   }
 
@@ -118,9 +184,13 @@ export class MailService {
     const from = this.configService.get('smtp.from');
     
     // Create a simple HTML table of the top 10 answers
+    // Both key and value are respondent-controlled — escape both.
     const answersHtml = Object.entries(answers || {})
       .slice(0, 10)
-      .map(([key, value]) => `<tr><td style="padding: 8px; border-bottom: 1px solid #ddd; font-weight: bold;">${key}</td><td style="padding: 8px; border-bottom: 1px solid #ddd;">${typeof value === 'object' ? JSON.stringify(value) : value}</td></tr>`)
+      .map(
+        ([key, value]) =>
+          `<tr><td style="padding: 8px; border-bottom: 1px solid #ddd; font-weight: bold;">${escapeHtml(key)}</td><td style="padding: 8px; border-bottom: 1px solid #ddd;">${escapeHtml(typeof value === 'object' ? JSON.stringify(value) : value)}</td></tr>`,
+      )
       .join('');
 
     try {

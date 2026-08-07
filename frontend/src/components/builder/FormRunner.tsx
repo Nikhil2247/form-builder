@@ -27,6 +27,7 @@ import {
   X as XIcon
 } from 'lucide-react';
 import SignatureCanvas from 'react-signature-canvas';
+import { API_BASE_URL } from '@/lib/config';
 
 // Helper component for File Uploads
 function FileUploader({ 
@@ -52,7 +53,7 @@ function FileUploader({
     setError('');
 
     try {
-      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3100/v1'}/storage/presigned-url`, {
+      const res = await fetch(`${API_BASE_URL}/storage/presigned-url`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -60,12 +61,20 @@ function FileUploader({
           questionId,
           filename: file.name,
           mimeType: file.type || 'application/octet-stream',
-          fileSizeMb: file.size / (1024 * 1024),
+          // Bytes, not megabytes — the API validates an integer byte count and
+          // binds it into the S3 signature.
+          fileSizeBytes: file.size,
         }),
       });
 
       if (!res.ok) {
-        throw new Error('Failed to get presigned URL');
+        // Surface the real reason (type not permitted, over the size limit,
+        // quota exceeded) instead of a generic failure.
+        const body = await res.json().catch(() => null);
+        const raw = body?.error?.message ?? body?.message;
+        throw new Error(
+          (Array.isArray(raw) ? raw.join(', ') : raw) || 'Failed to start upload.',
+        );
       }
 
       const { data } = await res.json();

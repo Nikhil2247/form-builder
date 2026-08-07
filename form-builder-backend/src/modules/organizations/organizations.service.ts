@@ -4,6 +4,17 @@ import { MailService } from '../mail/mail.service';
 import { CreateOrganizationDto } from './dto/create-organization.dto';
 import { UpdateOrganizationDto } from './dto/update-organization.dto';
 import * as crypto from 'crypto';
+import {
+  parsePagination,
+  paginated,
+  type Pagination,
+} from '../../common/pagination/pagination';
+import {
+  memberSelect,
+  invitationSelect,
+  auditLogSelect,
+  organizationDetailSelect,
+} from '../../common/prisma/selects';
 
 @Injectable()
 export class OrganizationsService {
@@ -129,41 +140,23 @@ export class OrganizationsService {
   /**
    * List all members of an organization with their roles and user info.
    */
-  async listMembers(orgId: string, page = 1, limit = 50) {
-    const skip = (page - 1) * limit;
+  async listMembers(orgId: string, pagination: Pagination = parsePagination()) {
+    const where = { organizationId: orgId };
 
     const [members, total] = await Promise.all([
       this.prisma.reader.organizationMember.findMany({
-        where: { organizationId: orgId },
-        include: {
-          user: {
-            select: {
-              id: true,
-              email: true,
-              firstName: true,
-              lastName: true,
-              avatarUrl: true,
-            },
-          },
-          invitedBy: {
-            select: {
-              id: true,
-              firstName: true,
-              lastName: true,
-            },
-          },
-        },
-        orderBy: { joinedAt: 'asc' },
-        skip,
-        take: limit,
+        where,
+        select: memberSelect,
+        // `id` breaks ties on joinedAt — two members created in the same
+        // transaction share a timestamp and could otherwise swap between pages.
+        orderBy: [{ joinedAt: 'asc' }, { id: 'asc' }],
+        skip: pagination.skip,
+        take: pagination.take,
       }),
-      this.prisma.reader.organizationMember.count({ where: { organizationId: orgId } })
+      this.prisma.reader.organizationMember.count({ where }),
     ]);
 
-    return {
-      members,
-      pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
-    };
+    return paginated('members', members, pagination, total);
   }
 
   /**
@@ -397,32 +390,24 @@ export class OrganizationsService {
   /**
    * List all invitations for an organization.
    */
-  async listInvitations(orgId: string, page = 1, limit = 50) {
-    const skip = (page - 1) * limit;
+  async listInvitations(orgId: string, pagination: Pagination = parsePagination()) {
+    const where = { organizationId: orgId };
 
     const [invitations, total] = await Promise.all([
       this.prisma.reader.organizationInvitation.findMany({
-        where: { organizationId: orgId },
-        include: {
-          invitedBy: {
-            select: {
-              id: true,
-              firstName: true,
-              lastName: true,
-            },
-          },
-        },
-        orderBy: { createdAt: 'desc' },
-        skip,
-        take: limit,
+        where,
+        // Never selects `token`: it is the bearer credential that accepts the
+        // invitation, and the previous `include` returned it to every admin
+        // listing the page — and to anything logging that response.
+        select: invitationSelect,
+        orderBy: [{ createdAt: 'desc' }, { id: 'asc' }],
+        skip: pagination.skip,
+        take: pagination.take,
       }),
-      this.prisma.reader.organizationInvitation.count({ where: { organizationId: orgId } })
+      this.prisma.reader.organizationInvitation.count({ where }),
     ]);
 
-    return {
-      invitations,
-      pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
-    };
+    return paginated('invitations', invitations, pagination, total);
   }
 
   /**
@@ -446,23 +431,27 @@ export class OrganizationsService {
   /**
    * Get audit logs for the organization.
    */
-  async getAuditLogs(orgId: string, page = 1, limit = 50) {
-    const skip = (page - 1) * limit;
-    const where = { organizationId: orgId };
+  async getAuditLogs(
+    orgId: string,
+    pagination: Pagination = parsePagination(),
+    action?: string,
+  ) {
+    const where: any = { organizationId: orgId };
+    if (action) where.action = action;
 
     const [logs, total] = await Promise.all([
       this.prisma.reader.auditLog.findMany({
         where,
-        skip,
-        take: limit,
-        orderBy: { createdAt: 'desc' },
+        // Joins the actor. `userId` was stored but had no relation, so the UI
+        // could only ever show a bare UUID for who did what.
+        select: auditLogSelect,
+        skip: pagination.skip,
+        take: pagination.take,
+        orderBy: [{ createdAt: 'desc' }, { id: 'asc' }],
       }),
       this.prisma.reader.auditLog.count({ where }),
     ]);
 
-    return {
-      logs,
-      pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
-    };
+    return paginated('logs', logs, pagination, total);
   }
 }

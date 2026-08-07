@@ -278,11 +278,15 @@ export function FeatureShowcase() {
     <div className="flex flex-col lg:flex-row gap-12 lg:gap-16 items-start">
       {/* Accordion Left Side */}
       <div className="w-full lg:w-[45%]">
-        <Accordion 
-          type="single" 
-          value={activeItem} 
+        {/* Base UI's Accordion is always multi-value: `value` is an array and
+            `type="single"` is not part of its API. multiple={false} gives
+            the single-open behaviour this showcase wants. */}
+        <Accordion
+          multiple={false}
+          value={[activeItem]}
           onValueChange={(val) => {
-            if (val) setActiveItem(val as string);
+            const next = Array.isArray(val) ? val[0] : val;
+            if (next) setActiveItem(String(next));
           }}
           className="w-full space-y-3"
         >

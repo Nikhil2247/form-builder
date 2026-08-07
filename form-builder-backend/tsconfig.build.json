@@ -1,4 +1,32 @@
 {
   "extends": "./tsconfig.json",
-  "exclude": ["node_modules", "test", "dist", "**/*spec.ts"]
+  "compilerOptions": {
+    // Pin rootDir explicitly. Prisma 7 requires a root-level prisma.config.ts,
+    // and without this TypeScript infers rootDir as the project root, emitting
+    // dist/src/main.js instead of dist/main.js — silently breaking the
+    // Dockerfile CMD and the start:prod script.
+    "rootDir": "./src",
+
+    // Keep the incremental cache INSIDE the output directory.
+    //
+    // By default it is written to ./tsconfig.build.tsbuildinfo at the project
+    // root — outside dist. nest-cli.json sets `deleteOutDir: true`, so
+    // `nest start --watch` wipes dist on every start while that file survives.
+    // TypeScript then reads a cache claiming every output is current, reports
+    // "Found 0 errors", emits nothing, and the process dies with
+    // "Module not found: dist/main".
+    //
+    // Putting the cache in dist makes the two inseparable: whatever deletes the
+    // output deletes the record of it, so they cannot disagree.
+    "tsBuildInfoFile": "./dist/.tsbuildinfo"
+  },
+  "include": ["src/**/*"],
+  "exclude": [
+    "node_modules",
+    "test",
+    "dist",
+    "prisma",
+    "prisma.config.ts",
+    "**/*spec.ts"
+  ]
 }

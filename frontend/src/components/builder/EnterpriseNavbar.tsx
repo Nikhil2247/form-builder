@@ -2,17 +2,23 @@
 
 import React, { useState } from 'react';
 import Link from 'next/link';
-import { 
-  ArrowLeft, 
-  Eye, 
-  Palette, 
-  Save, 
-  Check, 
+import {
+  ArrowLeft,
+  Eye,
+  Palette,
+  Save,
+  Check,
   Menu,
-  GitFork
+  GitFork,
+  Rocket,
+  Loader2,
+  ExternalLink,
 } from 'lucide-react';
 import { Button, buttonVariants } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Badge } from '@/components/ui/badge';
+
+export type FormStatus = 'DRAFT' | 'PUBLISHED' | 'ARCHIVED' | 'CLOSED';
 
 interface EnterpriseNavbarProps {
   formTitle: string;
@@ -23,6 +29,17 @@ interface EnterpriseNavbarProps {
   hasUnsavedChanges: boolean;
   onSaveChanges: () => void;
   onToggleLeftPanel?: () => void;
+  /** Publish creates an immutable FormVersion — without it the form is not
+   *  reachable at its public URL and cannot accept submissions. */
+  onPublish: () => void;
+  isPublishing?: boolean;
+  isSaving?: boolean;
+  status?: FormStatus;
+  /** True when the draft has changed since the last publish. */
+  hasUnpublishedChanges?: boolean;
+  publicUrl?: string | null;
+  /** Timestamp of the last successful autosave, for the "Saved" affordance. */
+  lastSavedAt?: Date | null;
 }
 
 export function EnterpriseNavbar({
@@ -33,9 +50,17 @@ export function EnterpriseNavbar({
   onOpenLogic,
   hasUnsavedChanges,
   onSaveChanges,
-  onToggleLeftPanel
+  onToggleLeftPanel,
+  onPublish,
+  isPublishing = false,
+  isSaving = false,
+  status = 'DRAFT',
+  hasUnpublishedChanges = false,
+  publicUrl,
+  lastSavedAt = null,
 }: EnterpriseNavbarProps) {
   const [isEditing, setIsEditing] = useState(false);
+  const isPublished = status === 'PUBLISHED';
 
   return (
     <header className="w-full bg-background border-b border-border px-4 py-3 flex items-center justify-between shadow-sm">
@@ -77,6 +102,35 @@ export function EnterpriseNavbar({
               {formTitle}
             </span>
           )}
+
+          {/* Publish state is the single most important thing to surface here:
+              a DRAFT form 404s at its public URL and rejects all submissions. */}
+          <Badge
+            variant={isPublished ? 'default' : 'secondary'}
+            className="ml-1 hidden sm:inline-flex"
+          >
+            {status === 'PUBLISHED' ? 'Live' : status === 'DRAFT' ? 'Draft' : status}
+          </Badge>
+
+          {isPublished && hasUnpublishedChanges && (
+            <span
+              className="hidden text-xs font-medium text-warning lg:inline"
+              title="Your saved edits are not yet live. Publish to update the public form."
+            >
+              • Unpublished changes
+            </span>
+          )}
+
+          {/* Autosave is silent by design; without a timestamp the user has no
+              way to tell whether their work is safe. */}
+          {!hasUnsavedChanges && lastSavedAt && (
+            <span
+              className="hidden text-xs text-muted-foreground xl:inline"
+              title={lastSavedAt.toLocaleString()}
+            >
+              Saved {lastSavedAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+            </span>
+          )}
         </div>
       </div>
 
@@ -114,14 +168,61 @@ export function EnterpriseNavbar({
           <span className="hidden md:inline">Preview</span>
         </Button>
 
+        {isPublished && publicUrl && (
+          <a
+            href={publicUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            title="Open the live form"
+            className={buttonVariants({ variant: 'ghost', size: 'sm', className: 'gap-2' })}
+          >
+            <ExternalLink className="h-4 w-4" />
+            <span className="hidden lg:inline">View live</span>
+          </a>
+        )}
+
         <Button
-          variant={hasUnsavedChanges ? "default" : "secondary"}
+          variant={hasUnsavedChanges ? 'outline' : 'secondary'}
           size="sm"
           onClick={onSaveChanges}
+          disabled={isSaving || !hasUnsavedChanges}
           className="gap-2"
         >
-          {hasUnsavedChanges ? <Save className="h-4 w-4" /> : <Check className="h-4 w-4" />}
-          <span className="hidden md:inline">{hasUnsavedChanges ? 'Save Changes' : 'Saved'}</span>
+          {isSaving ? (
+            <Loader2 className="h-4 w-4 animate-spin" />
+          ) : hasUnsavedChanges ? (
+            <Save className="h-4 w-4" />
+          ) : (
+            <Check className="h-4 w-4" />
+          )}
+          <span className="hidden md:inline">
+            {isSaving ? 'Saving…' : hasUnsavedChanges ? 'Save Draft' : 'Saved'}
+          </span>
+        </Button>
+
+        {/* THE missing action. Saving only writes the draft columns; until this
+            runs, no FormVersion exists, so the public page 404s and the
+            submission worker has nothing to bind answers to. */}
+        <Button
+          variant="default"
+          size="sm"
+          onClick={onPublish}
+          disabled={isPublishing}
+          className="gap-2"
+          title={
+            isPublished
+              ? 'Publish a new version of this form'
+              : 'Make this form live at its public URL'
+          }
+        >
+          {isPublishing ? (
+            <Loader2 className="h-4 w-4 animate-spin" />
+          ) : (
+            <Rocket className="h-4 w-4" />
+          )}
+          <span className="hidden md:inline">
+            {isPublishing ? 'Publishing…' : isPublished ? 'Republish' : 'Publish'}
+          </span>
         </Button>
       </div>
     </header>

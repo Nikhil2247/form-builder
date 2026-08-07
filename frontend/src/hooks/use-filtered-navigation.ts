@@ -1,13 +1,27 @@
 'use client';
 
 import { useMemo } from 'react';
-import { allNavGroups, filterNavForRole, type NavGroup } from '@/config/navigation';
-import type { Role } from '@/config/roles';
+import { allNavGroups, filterNavigation, type NavGroup } from '@/config/navigation';
+import { usePermissions } from './use-auth';
 
 /**
- * Returns navigation groups filtered by the given user roles.
- * Memoized to avoid unnecessary re-computations on re-renders.
+ * The sidebar's navigation, filtered to what the current user can actually
+ * reach.
+ *
+ * The previous version took a `userRoles` array as an argument and memoised on
+ * it — but the caller built that array inline (`[systemRole, orgRole]`), so a
+ * new array identity arrived on every render and the memo never hit. It also
+ * special-cased SUPER_ADMIN by *replacing* the role list, which hid the
+ * workspace section from a super admin who was also a member of an
+ * organization.
  */
-export function useFilteredNavigation(userRoles: (Role | string | undefined)[]): NavGroup[] {
-  return useMemo(() => filterNavForRole(allNavGroups, userRoles), [userRoles]);
+export function useFilteredNavigation(): NavGroup[] {
+  const { can, permissions } = usePermissions();
+
+  return useMemo(
+    () => filterNavigation(allNavGroups, can),
+    // `permissions` is a Set rebuilt only when the resolved roles change, so
+    // this recomputes exactly when the answer can differ.
+    [can, permissions],
+  );
 }

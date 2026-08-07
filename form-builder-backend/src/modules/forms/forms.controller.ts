@@ -11,6 +11,9 @@ import { RoleGuard } from '../../common/guards/role.guard';
 import { RequiredRole } from '../../common/decorators/roles.decorator';
 import { OrgId } from '../../common/decorators/org-id.decorator';
 import type { Request, Response } from 'express';
+import { ListFormsQueryDto } from './dto/list-forms-query.dto';
+import { PaginationQueryDto } from '../../common/pagination/pagination-query.dto';
+import { parsePagination } from '../../common/pagination/pagination';
 
 /**
  * Organization-scoped form management endpoints.
@@ -59,19 +62,28 @@ export class FormsController {
     return this.formsService.generateFormWithAI(orgId, userId, body.prompt);
   }
 
+  /**
+   * GET /organizations/:orgId/forms
+   *
+   * Paging, search, and sort are all server-side. The DTO validates and clamps
+   * before the handler runs — `?page=abc` previously reached Prisma as NaN,
+   * which returns the entire table.
+   */
   @Get()
   @RequiredRole('VIEWER')
   getForms(
     @OrgId() orgId: string,
-    @Query('status') status?: string,
-    @Query('page') page?: string,
-    @Query('limit') limit?: string,
+    @Query() query: ListFormsQueryDto,
   ) {
     return this.formsService.getForms(
-      orgId, 
-      status, 
-      parseInt(page ?? '1', 10), 
-      parseInt(limit ?? '20', 10)
+      orgId,
+      {
+        status: query.status,
+        search: query.search,
+        sortBy: query.sortBy,
+        sortOrder: query.sortOrder,
+      },
+      parsePagination(query),
     );
   }
 
@@ -115,7 +127,9 @@ export class FormsController {
     @OrgId() orgId: string,
     @Param('formId') formId: string,
     @Body() body: { pages: any; questions: any; logic: any; theme: any },
+    @Req() req: Request,
   ) {
+    const userId = (req.user as any).sub;
     return this.formsService.publishForm(
       orgId,
       formId,
@@ -123,6 +137,7 @@ export class FormsController {
       body.questions,
       body.logic,
       body.theme,
+      userId,
     );
   }
 
@@ -135,15 +150,9 @@ export class FormsController {
   getSubmissions(
     @OrgId() orgId: string,
     @Param('formId') formId: string,
-    @Query('page') page?: string,
-    @Query('limit') limit?: string,
+    @Query() query: PaginationQueryDto,
   ) {
-    return this.formsService.getSubmissions(
-      orgId,
-      formId,
-      parseInt(page ?? '1', 10),
-      parseInt(limit ?? '50', 10),
-    );
+    return this.formsService.getSubmissions(orgId, formId, parsePagination(query));
   }
 
   /**

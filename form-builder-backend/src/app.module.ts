@@ -5,6 +5,7 @@ import { APP_INTERCEPTOR, APP_FILTER, APP_GUARD } from '@nestjs/core';
 import { CacheModule } from '@nestjs/cache-manager';
 import { redisStore } from 'cache-manager-ioredis-yet';
 import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
+import { ThrottlerStorageRedisService } from '@nest-lab/throttler-storage-redis';
 
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
@@ -31,6 +32,8 @@ import { LoggerModule } from './common/logger/logger.module';
 import { HttpLoggingInterceptor } from './common/interceptors/logging.interceptor';
 
 import { PrismaModule } from './common/prisma/prisma.module';
+import { RedisModule } from './common/redis/redis.module';
+import { CryptoModule } from './common/crypto/crypto.module';
 
 // ── Global error handling ──────────────────────────────────────────────────────
 import { HttpExceptionFilter } from './common/filters/http-exception.filter';
@@ -52,7 +55,13 @@ import { ResponseInterceptor } from './common/interceptors/response.interceptor'
 
     // ── Prisma Database (global) ──────────────────────────────────────────────
     PrismaModule,
-    
+
+    // ── Redis (global, single shared connection) ──────────────────────────────
+    RedisModule,
+
+    // ── Crypto: secret encryption at rest + TOTP (global) ─────────────────────
+    CryptoModule,
+
     // ── Audit Logging (global) ────────────────────────────────────────────────
     AuditModule,
 
@@ -71,11 +80,23 @@ import { ResponseInterceptor } from './common/interceptors/response.interceptor'
       }),
     }),
 
-    // ── Global Rate Limiting ──────────────────────────────────────────────────
-    ThrottlerModule.forRoot([{
-      ttl: 60000, // 60 seconds
-      limit: 100, // 100 requests per TTL
-    }]),
+    // ── Global Rate Limiting (Redis-backed) ───────────────────────────────────
+    // MUST be Redis-backed: the default in-memory storage gives each pod its own
+    // counters, so with N pods the effective limit is N x limit and every deploy
+    // resets it. Named throttlers let routes opt into stricter buckets via
+    // @Throttle({ strict: {...} }) — see AuthController.
+    ThrottlerModule.forRootAsync({
+      useFactory: () => ({
+        throttlers: [{ name: 'default', ttl: 60_000, limit: 100 }],
+        storage: new ThrottlerStorageRedisService(
+          process.env.REDIS_URL ?? 'redis://localhost:6379',
+        ),
+        // Trust the proxy-provided client IP. main.ts sets `trust proxy` so
+        // req.ips is populated from X-Forwarded-For.
+        getTracker: (req: any) =>
+          req.ips?.length ? req.ips[0] : (req.ip ?? req.socket?.remoteAddress ?? 'unknown'),
+      }),
+    }),
 
     // ── Feature Modules ───────────────────────────────────────────────────────
     AuthModule,

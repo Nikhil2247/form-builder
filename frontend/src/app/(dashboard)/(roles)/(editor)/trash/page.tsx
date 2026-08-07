@@ -1,106 +1,154 @@
 'use client';
 
-import React from 'react';
-import { Trash2, RotateCcw, AlertTriangle } from 'lucide-react';
-import { Card } from '@/components/ui/card';
-import { Button } from '@/components/ui/button';
-import { Badge } from '@/components/ui/badge';
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table';
-import { useTrashedForms, useRestoreForm } from '@/hooks/use-forms';
-import { useUser } from '@/hooks/use-auth';
+import React, { useState } from 'react';
+import { RotateCcw, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 
+import { Button } from '@/components/ui/button';
+import {
+  PageHeader,
+  PageShell,
+  DataTable,
+  EmptyState,
+  ConfirmDialog,
+  RelativeTime,
+  type DataTableColumn,
+} from '@/components/shared';
+import { useTrashedForms, useRestoreForm, type Form } from '@/hooks/use-forms';
+
+/** Matches the API's soft-delete retention window. */
+const RETENTION_DAYS = 30;
+
+function daysRemaining(deletedAt: string | null | undefined): number | null {
+  if (!deletedAt) return null;
+  const deleted = new Date(deletedAt).getTime();
+  if (!Number.isFinite(deleted)) return null;
+  const elapsedDays = (Date.now() - deleted) / 86_400_000;
+  return Math.max(0, Math.ceil(RETENTION_DAYS - elapsedDays));
+}
+
 export default function TrashPage() {
-  const { data: session } = useUser();
-  const orgId = session?.activeOrganization?.id;
+  const { data: forms, isLoading, error, refetch } = useTrashedForms();
+  const restoreForm = useRestoreForm();
+  const [restoreTarget, setRestoreTarget] = useState<Form | null>(null);
 
-  const { data: forms, isLoading } = useTrashedForms();
-  const restoreMutation = useRestoreForm();
-
-  const handleRestore = (id: string) => {
-    restoreMutation.mutate(id, {
-      onSuccess: () => {
-        toast.success('Form restored successfully');
+  const columns: DataTableColumn<Form>[] = [
+    {
+      id: 'title',
+      header: 'Form',
+      isRowHeader: true,
+      className: 'max-w-0',
+      cell: (form) => (
+        <div className="min-w-0">
+          <div className="truncate font-medium text-foreground">{form.title}</div>
+          <div className="truncate text-xs text-muted-foreground">
+            {form.description || 'No description'}
+          </div>
+        </div>
+      ),
+    },
+    {
+      id: 'submissions',
+      header: 'Responses',
+      numeric: true,
+      width: 'w-28',
+      hideBelow: 'sm',
+      cell: (form) => (form._count?.submissions ?? 0).toLocaleString(),
+    },
+    {
+      id: 'deletedAt',
+      header: 'Deleted',
+      width: 'w-40',
+      cell: (form) => (
+        <span className="text-muted-foreground">
+          <RelativeTime value={form.deletedAt} />
+        </span>
+      ),
+    },
+    {
+      id: 'expires',
+      header: 'Auto-deletes in',
+      width: 'w-36',
+      hideBelow: 'md',
+      cell: (form) => {
+        const remaining = daysRemaining(form.deletedAt);
+        if (remaining === null) return <span className="text-muted-foreground">—</span>;
+        return (
+          <span className={remaining <= 3 ? 'text-destructive' : 'text-muted-foreground'}>
+            {remaining === 0 ? 'Today' : `${remaining} day${remaining === 1 ? '' : 's'}`}
+          </span>
+        );
       },
-      onError: (err: any) => {
-        toast.error(err.message || 'Failed to restore form');
-      }
-    });
-  };
+    },
+    {
+      id: 'actions',
+      header: <span className="sr-only">Actions</span>,
+      width: 'w-28',
+      className: 'text-right',
+      headerClassName: 'text-right',
+      cell: (form) => (
+        <Button
+          variant="outline"
+          size="sm"
+          className="gap-1.5"
+          onClick={() => setRestoreTarget(form)}
+        >
+          <RotateCcw className="size-3.5" />
+          Restore
+        </Button>
+      ),
+    },
+  ];
 
   return (
-    <div className="w-full space-y-8">
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-border pb-6">
-        <div>
-          <h1 className="text-2xl font-bold text-foreground tracking-tight flex items-center gap-2">
-            <Trash2 className="text-muted-foreground" size={24} />
-            Trash
-          </h1>
-          <p className="text-sm text-muted-foreground mt-1">Deleted forms are kept here for 30 days before permanent removal.</p>
-        </div>
-      </div>
+    <PageShell>
+      <PageHeader
+        title="Trash"
+        description={`Deleted forms are kept for ${RETENTION_DAYS} days, then removed permanently along with their responses.`}
+      />
 
-      <div className="space-y-4">
-        <Table>
-          <TableHeader className="bg-muted/50">
-            <TableRow>
-              <TableHead className="font-medium text-muted-foreground">Form Name</TableHead>
-              <TableHead className="font-medium text-muted-foreground">Deleted On</TableHead>
-              <TableHead className="font-medium text-muted-foreground">Status</TableHead>
-              <TableHead className="text-right font-medium text-muted-foreground">Actions</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {isLoading ? (
-              <TableRow>
-                <TableCell colSpan={4} className="text-center py-12 text-muted-foreground">
-                  Loading...
-                </TableCell>
-              </TableRow>
-            ) : forms && forms.length > 0 ? (
-              forms.map((form) => (
-                <TableRow key={form.id}>
-                  <TableCell className="font-medium">{form.title}</TableCell>
-                  <TableCell>{new Date(form.deletedAt!).toLocaleDateString()}</TableCell>
-                  <TableCell>
-                    <Badge variant="outline" className="text-destructive border-destructive">Deleted</Badge>
-                  </TableCell>
-                  <TableCell className="text-right">
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => handleRestore(form.id)}
-                      disabled={restoreMutation.isPending}
-                      className="text-primary hover:text-primary/90"
-                    >
-                      <RotateCcw size={16} className="mr-2" />
-                      Restore
-                    </Button>
-                  </TableCell>
-                </TableRow>
-              ))
-            ) : (
-              <TableRow>
-                <TableCell colSpan={4} className="text-center text-muted-foreground py-12">
-                  <div className="flex flex-col items-center justify-center gap-3">
-                    <div className="w-12 h-12 rounded-full bg-muted flex items-center justify-center">
-                      <Trash2 size={20} className="text-muted-foreground opacity-50" />
-                    </div>
-                    <p>Trash is empty.</p>
-                  </div>
-                </TableCell>
-              </TableRow>
-            )}
-          </TableBody>
-        </Table>
-      </div>
-    </div>
+      <DataTable
+        caption="Deleted forms"
+        columns={columns}
+        data={forms}
+        getRowId={(form) => form.id}
+        isLoading={isLoading}
+        error={error}
+        onRetry={() => refetch()}
+        empty={
+          <EmptyState
+            variant="inline"
+            icon={Trash2}
+            title="Trash is empty"
+            description="Forms you delete will appear here, and can be restored for 30 days."
+          />
+        }
+      />
+
+      <ConfirmDialog
+        open={!!restoreTarget}
+        onOpenChange={(open) => !open && setRestoreTarget(null)}
+        title="Restore form"
+        description={
+          <>
+            &ldquo;{restoreTarget?.title}&rdquo; will return to your forms list as a draft. It will
+            not be live until you publish it again.
+          </>
+        }
+        confirmLabel="Restore"
+        variant="default"
+        isPending={restoreForm.isPending}
+        onConfirm={async () => {
+          if (!restoreTarget) return;
+          try {
+            await restoreForm.mutateAsync(restoreTarget.id);
+            toast.success(`Restored "${restoreTarget.title}"`);
+            setRestoreTarget(null);
+          } catch (err: any) {
+            toast.error(err?.message ?? 'Could not restore this form');
+          }
+        }}
+      />
+    </PageShell>
   );
 }

@@ -1,10 +1,11 @@
 'use client';
 
 import React from 'react';
-import { Search, Bell, Menu, LogOut, User, Building2, CreditCard } from 'lucide-react';
-import { usePathname, useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { ThemeToggle } from '@/components/ThemeToggle';
+import { usePathname } from 'next/navigation';
+import { Building2, LogOut, Menu, Search, Settings, User } from 'lucide-react';
+
+import { cn } from '@/lib/utils';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -13,16 +14,19 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
+import { Kbd } from '@/components/ui/kbd';
+import { ThemeToggle } from '@/components/theme/theme-toggle';
+import { StatusBadge } from '@/components/shared/status-badge';
 import { useSidebarStore } from '@/store/sidebar-store';
-import { useUser, useLogout } from '@/hooks/use-auth';
-import { cn } from '@/lib/utils';
+import { useUser, useLogout, usePermissions } from '@/hooks/use-auth';
+import { useCommandMenuStore } from '@/store/command-menu-store';
 
-// Human-readable route title map
-const ROUTE_TITLES: Record<string, string> = {
+/** Human-readable names for URL segments. */
+const SEGMENT_TITLES: Record<string, string> = {
   dashboard: 'Dashboard',
-  forms: 'My Forms',
-  builder: 'Form Builder',
-  submissions: 'Submissions',
+  forms: 'Forms',
+  builder: 'Builder',
+  submissions: 'Responses',
   analytics: 'Analytics',
   templates: 'Templates',
   integrations: 'Integrations',
@@ -33,159 +37,176 @@ const ROUTE_TITLES: Record<string, string> = {
   billing: 'Billing',
   profile: 'Profile',
   notifications: 'Notifications',
-  'org-audit': 'Audit Logs',
-  'global-audit': 'Global Audit Logs',
-  platform: 'Platform Overview',
+  'org-audit': 'Audit log',
+  'global-audit': 'Platform audit',
+  platform: 'Platform',
   organizations: 'Organizations',
   users: 'Users',
-  invite: 'Invite',
+  'audit-logs': 'Audit logs',
+  invite: 'Invitation',
+  accept: 'Accept',
 };
+
+/** Segments that are ids, not pages — never render them as a crumb label. */
+function isOpaqueId(segment: string) {
+  return (
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(segment) ||
+    /^[0-9a-f]{16,}$/i.test(segment)
+  );
+}
 
 export function Header() {
   const pathname = usePathname();
   const { open } = useSidebarStore();
+  const openCommandMenu = useCommandMenuStore((s) => s.open);
   const { data: session } = useUser();
+  const { can } = usePermissions();
   const logout = useLogout();
 
   const user = session?.user;
-  const displayName = user ? `${user.firstName} ${user.lastName}`.trim() || user.email : 'User';
+  const org = session?.activeOrganization;
+  const displayName = user
+    ? `${user.firstName ?? ''} ${user.lastName ?? ''}`.trim() || user.email
+    : '';
   const initials = user
-    ? `${user.firstName?.charAt(0) ?? ''}${user.lastName?.charAt(0) ?? ''}`.toUpperCase() || 'U'
+    ? `${user.firstName?.[0] ?? ''}${user.lastName?.[0] ?? ''}`.toUpperCase() ||
+      user.email?.[0]?.toUpperCase() ||
+      'U'
     : 'U';
 
-  // Build breadcrumbs from pathname
-  const pathSegments = pathname.split('/').filter(Boolean);
-  const breadcrumbs = pathSegments.map((segment, index) => {
-    const href = '/' + pathSegments.slice(0, index + 1).join('/');
-    const title = ROUTE_TITLES[segment] ?? segment.charAt(0).toUpperCase() + segment.slice(1);
-    return { title, href };
-  });
+  const segments = pathname.split('/').filter(Boolean);
+  const crumbs = segments
+    .map((segment, index) => ({
+      segment,
+      href: '/' + segments.slice(0, index + 1).join('/'),
+      // Unknown segments get title-cased rather than shown raw; ids are dropped
+      // entirely — the old breadcrumb rendered a full UUID as a clickable crumb.
+      label: SEGMENT_TITLES[segment] ?? (isOpaqueId(segment) ? null : titleCase(segment)),
+    }))
+    .filter((crumb) => crumb.label !== null);
 
   return (
-    <header className="sticky top-0 z-30 flex h-14 shrink-0 items-center gap-3 border-b border-border bg-card px-4 sm:px-6">
-      {/* Mobile hamburger */}
+    <header className="sticky top-0 z-30 flex h-14 shrink-0 items-center gap-3 border-b border-border bg-background/95 px-4 backdrop-blur supports-[backdrop-filter]:bg-background/80 sm:px-6">
       <button
         onClick={open}
-        className="rounded-md p-2 text-muted-foreground hover:bg-accent hover:text-accent-foreground md:hidden"
-        aria-label="Open sidebar"
+        aria-label="Open navigation"
+        className="rounded-md p-2 text-muted-foreground hover:bg-muted hover:text-foreground md:hidden"
       >
-        <Menu size={20} strokeWidth={1.5} />
+        <Menu className="size-5" strokeWidth={1.5} />
       </button>
 
-      {/* Breadcrumbs */}
-      <nav className="hidden flex-1 items-center gap-1 text-sm md:flex">
-        <Link href="/dashboard" className="text-muted-foreground hover:text-foreground transition-colors">
-          Home
-        </Link>
-        {breadcrumbs.map((crumb, index) => (
-          <React.Fragment key={crumb.href}>
-            <span className="text-muted-foreground/40">/</span>
-            <Link
-              href={crumb.href}
-              className={cn(
-                'transition-colors',
-                index === breadcrumbs.length - 1
-                  ? 'font-semibold text-foreground pointer-events-none'
-                  : 'text-muted-foreground hover:text-foreground',
-              )}
-            >
-              {crumb.title}
-            </Link>
-          </React.Fragment>
-        ))}
+      <nav aria-label="Breadcrumb" className="hidden min-w-0 flex-1 md:block">
+        <ol className="flex items-center gap-1.5 text-sm">
+          {crumbs.map((crumb, index) => {
+            const isLast = index === crumbs.length - 1;
+            return (
+              <li key={crumb.href} className="flex min-w-0 items-center gap-1.5">
+                {index > 0 && (
+                  <span aria-hidden className="text-border-strong">
+                    /
+                  </span>
+                )}
+                {isLast ? (
+                  <span className="truncate font-medium text-foreground" aria-current="page">
+                    {crumb.label}
+                  </span>
+                ) : (
+                  <Link
+                    href={crumb.href}
+                    className="truncate rounded-sm text-muted-foreground hover:text-foreground"
+                  >
+                    {crumb.label}
+                  </Link>
+                )}
+              </li>
+            );
+          })}
+        </ol>
       </nav>
 
-      {/* Right-side actions */}
-      <div className="flex items-center gap-2 ml-auto">
-        {/* Search — hidden on small screens */}
-        <div className="relative hidden sm:block">
-          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" strokeWidth={1.5} />
-          <input
-            type="search"
-            placeholder="Search..."
-            className="h-9 w-48 rounded-lg border border-input bg-muted/40 pl-8 pr-4 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring focus:bg-background transition-all lg:w-64"
-          />
-        </div>
+      <div className="ml-auto flex items-center gap-1.5">
+        {/* Opens the existing command palette. Previously this was an <input>
+            that accepted text and did nothing with it. */}
+        <button
+          onClick={openCommandMenu}
+          className="hidden h-8 items-center gap-2 rounded-md border border-input bg-muted/40 px-2.5 text-sm
+                     text-muted-foreground transition-colors hover:bg-muted hover:text-foreground sm:flex"
+        >
+          <Search className="size-3.5" strokeWidth={1.5} />
+          <span className="hidden lg:inline">Search…</span>
+          <Kbd className="hidden lg:inline-flex">⌘K</Kbd>
+        </button>
 
         <ThemeToggle />
 
-        {/* Notifications */}
         <DropdownMenu>
-          <DropdownMenuTrigger className="relative rounded-full p-2 text-muted-foreground hover:bg-accent hover:text-accent-foreground transition-colors outline-none">
-            <Bell size={18} strokeWidth={1.5} />
-            <span className="absolute top-1.5 right-1.5 h-2 w-2 rounded-full bg-primary ring-2 ring-background" />
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="w-80">
-            <DropdownMenuLabel className="flex items-center justify-between">
-              Notifications
-              <Link href="/notifications" className="text-xs text-primary hover:underline">
-                View all
-              </Link>
-            </DropdownMenuLabel>
-            <DropdownMenuSeparator />
-            <div className="flex flex-col gap-1 p-2">
-              <div className="flex flex-col gap-1 rounded-lg p-2.5 hover:bg-muted/50 cursor-pointer">
-                <span className="text-sm font-medium">New form submission</span>
-                <span className="text-xs text-muted-foreground">
-                  Feedback Survey received a new response.
-                </span>
-                <span className="text-[10px] text-muted-foreground mt-0.5">2 mins ago</span>
-              </div>
-              <div className="flex flex-col gap-1 rounded-lg p-2.5 hover:bg-muted/50 cursor-pointer">
-                <span className="text-sm font-medium">Weekly report ready</span>
-                <span className="text-xs text-muted-foreground">
-                  Your performance analytics are available.
-                </span>
-                <span className="text-[10px] text-muted-foreground mt-0.5">1 hr ago</span>
-              </div>
-            </div>
-          </DropdownMenuContent>
-        </DropdownMenu>
-
-        {/* User avatar dropdown */}
-        <DropdownMenu>
-          <DropdownMenuTrigger className="flex h-8 w-8 items-center justify-center rounded-full bg-gradient-to-br from-primary to-primary/60 text-primary-foreground text-xs font-bold ring-2 ring-transparent hover:ring-primary/30 transition-all outline-none">
+          <DropdownMenuTrigger
+            aria-label="Account menu"
+            className="flex size-8 items-center justify-center rounded-full bg-muted text-xs font-semibold
+                       text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+          >
             {initials}
           </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="w-56">
+          <DropdownMenuContent align="end" className="w-60">
             <DropdownMenuLabel>
-              <div className="flex flex-col">
-                <span className="font-semibold">{displayName}</span>
-                <span className="text-xs text-muted-foreground font-normal">
+              <div className="flex flex-col gap-0.5">
+                <span className="truncate text-sm font-medium">{displayName}</span>
+                <span className="truncate text-xs font-normal text-muted-foreground">
                   {user?.email}
                 </span>
+                {org && (
+                  <span className="mt-1.5 flex items-center gap-1.5">
+                    <span className="truncate text-xs font-normal text-muted-foreground">
+                      {org.name}
+                    </span>
+                    <StatusBadge status={org.role} />
+                  </span>
+                )}
               </div>
             </DropdownMenuLabel>
             <DropdownMenuSeparator />
-            <DropdownMenuItem>
-              <Link href="/profile" className="flex items-center gap-2 w-full">
-                <User size={14} strokeWidth={1.5} />
-                Profile
-              </Link>
+
+            <DropdownMenuItem render={<Link href="/profile" />} className="cursor-pointer">
+              <User className="mr-2 size-3.5" strokeWidth={1.5} /> Profile and security
             </DropdownMenuItem>
-            <DropdownMenuItem>
-              <Link href="/settings/organization" className="flex items-center gap-2 w-full">
-                <Building2 size={14} strokeWidth={1.5} />
-                Organization
-              </Link>
-            </DropdownMenuItem>
-            <DropdownMenuItem>
-              <Link href="/settings/billing" className="flex items-center gap-2 w-full">
-                <CreditCard size={14} strokeWidth={1.5} />
-                Billing
-              </Link>
-            </DropdownMenuItem>
+
+            {/* Gate the admin entries — the old menu showed Organization and
+                Billing to every user, and both 403'd for non-admins. */}
+            {can('org:manage') && (
+              <DropdownMenuItem
+                render={<Link href="/settings/organization" />}
+                className="cursor-pointer"
+              >
+                <Building2 className="mr-2 size-3.5" strokeWidth={1.5} /> Organization
+              </DropdownMenuItem>
+            )}
+            {can('billing:view') && (
+              <DropdownMenuItem render={<Link href="/settings/billing" />} className="cursor-pointer">
+                <Settings className="mr-2 size-3.5" strokeWidth={1.5} /> Billing
+              </DropdownMenuItem>
+            )}
+
             <DropdownMenuSeparator />
             <DropdownMenuItem
-              className="text-red-500 hover:text-red-600 focus:text-red-600 focus:bg-red-50 cursor-pointer"
               onClick={() => logout.mutate()}
+              disabled={logout.isPending}
+              className={cn(
+                'cursor-pointer text-destructive',
+                'focus:bg-destructive/10 focus:text-destructive',
+              )}
             >
-              <LogOut size={14} strokeWidth={1.5} className="mr-2" />
-              Log out
+              <LogOut className="mr-2 size-3.5" strokeWidth={1.5} />
+              {logout.isPending ? 'Signing out…' : 'Sign out'}
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
       </div>
     </header>
   );
+}
+
+function titleCase(segment: string) {
+  return segment
+    .replace(/-/g, ' ')
+    .replace(/\b\w/g, (character) => character.toUpperCase());
 }

@@ -1,292 +1,538 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
-import { User, Mail, Shield, Save, Loader2, CheckCircle2, Smartphone, ShieldCheck, KeyRound, ArrowRight, Zap, Bell, Monitor, LogOut } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import {
+  Check,
+  KeyRound,
+  Loader2,
+  Lock,
+  Mail,
+  Shield,
+  ShieldCheck,
+  Smartphone,
+  User,
+} from 'lucide-react';
+import { toast } from 'sonner';
+
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 import { Card } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { useUser, useSetupMfa, useVerifyMfa, useDisableMfa } from '@/hooks/use-auth';
-import { fetchApi } from '@/lib/api';
+import {
+  PageHeader,
+  PageShell,
+  StatusBadge,
+  Modal,
+  ModalActions,
+  CopyField,
+} from '@/components/shared';
+import {
+  useUser,
+  useSetupMfa,
+  useVerifyMfa,
+  useDisableMfa,
+  useChangePassword,
+} from '@/hooks/use-auth';
+import { fetchApi, ApiError } from '@/lib/api';
+import { useQueryClient } from '@tanstack/react-query';
 
 export default function ProfilePage() {
   const { data: session, isLoading } = useUser();
-  const setupMfa = useSetupMfa();
-  const verifyMfa = useVerifyMfa();
-  const disableMfa = useDisableMfa();
-
+  const queryClient = useQueryClient();
   const user = session?.user;
-  const [firstName, setFirstName] = useState('');
-  const [lastName, setLastName] = useState('');
-  const [email, setEmail] = useState('');
-  const [saved, setSaved] = useState(false);
+
+  return (
+    <PageShell width="narrow">
+      <PageHeader
+        title="Your account"
+        description="Personal details, password, and two-factor authentication."
+        badge={user && <StatusBadge status={user.systemRole} />}
+        isLoading={isLoading}
+      />
+
+      <Tabs defaultValue="profile" className="space-y-5">
+        <TabsList>
+          <TabsTrigger value="profile" className="gap-1.5">
+            <User className="size-3.5" /> Profile
+          </TabsTrigger>
+          <TabsTrigger value="security" className="gap-1.5">
+            <Shield className="size-3.5" /> Security
+          </TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="profile">
+          <ProfileDetails
+            isLoading={isLoading}
+            firstName={user?.firstName ?? ''}
+            lastName={user?.lastName ?? ''}
+            email={user?.email ?? ''}
+            emailVerified={user?.emailVerified}
+            onSaved={() => queryClient.invalidateQueries({ queryKey: ['user'] })}
+          />
+        </TabsContent>
+
+        <TabsContent value="security" className="space-y-5">
+          <PasswordCard />
+          <MfaCard enabled={!!user?.mfaEnabled} />
+        </TabsContent>
+      </Tabs>
+    </PageShell>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
+function SettingsCard({
+  title,
+  description,
+  icon: Icon,
+  children,
+  footer,
+}: {
+  title: string;
+  description?: string;
+  icon?: React.ElementType;
+  children: React.ReactNode;
+  footer?: React.ReactNode;
+}) {
+  return (
+    <Card className="overflow-hidden p-0">
+      <div className="border-b border-border px-5 py-4">
+        <h2 className="flex items-center gap-2 text-sm font-semibold">
+          {Icon && <Icon className="size-4 text-muted-foreground" strokeWidth={1.5} />}
+          {title}
+        </h2>
+        {description && <p className="mt-1 text-sm text-muted-foreground">{description}</p>}
+      </div>
+      <div className="space-y-4 px-5 py-5">{children}</div>
+      {footer && (
+        <div className="flex justify-end border-t border-border bg-muted/30 px-5 py-3">
+          {footer}
+        </div>
+      )}
+    </Card>
+  );
+}
+
+function ProfileDetails({
+  isLoading,
+  firstName: initialFirst,
+  lastName: initialLast,
+  email,
+  emailVerified,
+  onSaved,
+}: {
+  isLoading: boolean;
+  firstName: string;
+  lastName: string;
+  email: string;
+  emailVerified?: boolean;
+  onSaved: () => void;
+}) {
+  const [firstName, setFirstName] = useState(initialFirst);
+  const [lastName, setLastName] = useState(initialLast);
   const [isSaving, setIsSaving] = useState(false);
 
-  const [mfaCode, setMfaCode] = useState('');
-  const [mfaQr, setMfaQr] = useState<string | null>(null);
-  const [mfaSetupStep, setMfaSetupStep] = useState<'idle' | 'setup' | 'verify'>('idle');
-
   useEffect(() => {
-    if (user) {
-      setFirstName(user.firstName ?? '');
-      setLastName(user.lastName ?? '');
-      setEmail(user.email ?? '');
-    }
-  }, [user]);
+    setFirstName(initialFirst);
+    setLastName(initialLast);
+  }, [initialFirst, initialLast]);
 
-  async function handleSaveProfile() {
+  const dirty = firstName !== initialFirst || lastName !== initialLast;
+
+  async function save() {
     setIsSaving(true);
     try {
-      await fetchApi('/auth/me', { method: 'PATCH', body: JSON.stringify({ firstName, lastName }) });
-      setSaved(true);
-      setTimeout(() => setSaved(false), 2500);
+      await fetchApi('/auth/me', {
+        method: 'PATCH',
+        body: JSON.stringify({ firstName: firstName.trim(), lastName: lastName.trim() }),
+      });
+      toast.success('Profile updated');
+      onSaved();
+    } catch (error) {
+      // The previous version had no catch at all: a failed save flipped the
+      // button to a green "Saved Successfully!" regardless of the outcome.
+      toast.error(error instanceof ApiError ? error.message : 'Could not save your profile');
     } finally {
       setIsSaving(false);
     }
   }
 
-  async function handleSetupMfa() {
-    const res = await setupMfa.mutateAsync();
-    setMfaQr(res?.qrCode ?? res?.data?.qrCode ?? null);
-    setMfaSetupStep('setup');
-  }
-
-  async function handleVerifyMfa() {
-    await verifyMfa.mutateAsync(mfaCode);
-    setMfaSetupStep('idle');
-    setMfaQr(null);
-    setMfaCode('');
-  }
-
-  const hasMfa = (user as any)?.mfaEnabled;
-
   return (
-    <div className="w-full max-w-5xl mx-auto space-y-8 animate-in fade-in slide-in-from-bottom-6 duration-700 pb-12">
-      {/* Premium Banner */}
-      <div className="relative overflow-hidden rounded-3xl bg-gradient-to-r from-primary/10 via-primary/5 to-background border border-border p-8 sm:p-12 shadow-sm">
-        <div className="absolute top-0 right-0 -mt-16 -mr-16 w-64 h-64 bg-primary/20 rounded-full blur-[80px]" />
-        <div className="absolute bottom-0 left-0 -mb-16 -ml-16 w-64 h-64 bg-blue-500/20 rounded-full blur-[80px]" />
-        
-        <div className="relative z-10 flex flex-col sm:flex-row items-start sm:items-center gap-6 sm:gap-8">
-          <div className="relative">
-            <div className="absolute inset-0 bg-gradient-to-tr from-primary to-blue-500 rounded-full blur-md opacity-60 animate-pulse" />
-            <div className="relative flex h-24 w-24 sm:h-32 sm:w-32 items-center justify-center rounded-full bg-card border-4 border-background text-primary-foreground text-4xl sm:text-5xl font-black shadow-2xl overflow-hidden group">
-              <div className="absolute inset-0 bg-gradient-to-br from-primary to-blue-600 opacity-90 group-hover:opacity-100 transition-opacity" />
-              <span className="relative z-10 text-white drop-shadow-md">
-                {isLoading ? '?' : `${firstName.charAt(0)}${lastName.charAt(0)}`.toUpperCase() || 'U'}
-              </span>
-            </div>
-          </div>
-          
-          <div className="space-y-2 flex-1">
-            {isLoading ? (
-              <Skeleton className="h-8 w-48 mb-2 bg-background/50" />
-            ) : (
-              <h1 className="text-3xl sm:text-4xl font-extrabold tracking-tight text-foreground bg-clip-text text-transparent bg-gradient-to-r from-foreground to-foreground/70">
-                {firstName} {lastName}
-              </h1>
-            )}
-            
-            {isLoading ? (
-              <Skeleton className="h-4 w-64 bg-background/50" />
-            ) : (
-              <div className="flex flex-wrap items-center gap-3">
-                <span className="flex items-center text-sm font-medium text-muted-foreground bg-background/50 backdrop-blur-sm px-3 py-1 rounded-full border border-border/50">
-                  <Mail size={14} className="mr-2 text-primary" /> {email}
-                </span>
-                <span className="flex items-center text-[11px] font-bold uppercase tracking-wider text-primary bg-primary/10 px-3 py-1 rounded-full border border-primary/20">
-                  <ShieldCheck size={14} className="mr-1.5" /> {user?.systemRole ?? 'USER'}
-                </span>
-              </div>
-            )}
-          </div>
+    <SettingsCard
+      title="Profile details"
+      description="This name appears on forms you create and in your organization's member list."
+      icon={User}
+      footer={
+        <Button size="sm" onClick={save} disabled={!dirty || isSaving} className="gap-2">
+          {isSaving && <Loader2 className="size-3.5 animate-spin" />}
+          Save changes
+        </Button>
+      }
+    >
+      <div className="grid gap-4 sm:grid-cols-2">
+        <div className="space-y-1.5">
+          <Label htmlFor="first-name">First name</Label>
+          {isLoading ? (
+            <Skeleton className="h-9" />
+          ) : (
+            <Input
+              id="first-name"
+              value={firstName}
+              onChange={(e) => setFirstName(e.target.value)}
+              autoComplete="given-name"
+            />
+          )}
+        </div>
+        <div className="space-y-1.5">
+          <Label htmlFor="last-name">Last name</Label>
+          {isLoading ? (
+            <Skeleton className="h-9" />
+          ) : (
+            <Input
+              id="last-name"
+              value={lastName}
+              onChange={(e) => setLastName(e.target.value)}
+              autoComplete="family-name"
+            />
+          )}
         </div>
       </div>
 
-      <Tabs defaultValue="profile" className="space-y-6">
-        <div className="flex justify-center sm:justify-start">
-          <TabsList className="bg-muted/40 p-1.5 rounded-2xl inline-flex h-auto shadow-sm border border-border/50 backdrop-blur-md">
-            <TabsTrigger value="profile" className="rounded-xl px-6 py-2.5 data-[state=active]:bg-background data-[state=active]:shadow-sm data-[state=active]:text-primary transition-all duration-300">
-              <User size={16} className="mr-2" /> Personal Info
-            </TabsTrigger>
-            <TabsTrigger value="security" className="rounded-xl px-6 py-2.5 data-[state=active]:bg-background data-[state=active]:shadow-sm data-[state=active]:text-primary transition-all duration-300">
-              <Shield size={16} className="mr-2" /> Security
-            </TabsTrigger>
-          </TabsList>
+      <div className="space-y-1.5">
+        <Label htmlFor="email">Email address</Label>
+        <div className="relative">
+          <Mail
+            aria-hidden
+            className="pointer-events-none absolute left-3 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground"
+          />
+          <Input id="email" value={email} readOnly disabled className="pl-9" />
         </div>
+        <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
+          {emailVerified ? (
+            <>
+              <Check className="size-3 text-success" /> Verified
+            </>
+          ) : (
+            'Not yet verified — check your inbox for the verification link.'
+          )}
+          {' · '}Changing your email requires support verification.
+        </p>
+      </div>
+    </SettingsCard>
+  );
+}
 
-        {/* Profile Tab */}
-        <TabsContent value="profile" className="animate-in fade-in zoom-in-95 duration-500 outline-none">
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-            <Card className="lg:col-span-2 rounded-2xl border border-border/60 p-0 overflow-hidden bg-card/50 backdrop-blur-sm shadow-sm transition-all hover:shadow-md">
-              <div className="p-6 sm:p-8 border-b border-border/50 bg-muted/20">
-                <h3 className="text-lg font-bold text-foreground flex items-center gap-2">
-                  <User size={18} className="text-primary" /> Profile Details
-                </h3>
-                <p className="text-sm text-muted-foreground mt-1">Update your personal information and how we can reach you.</p>
-              </div>
-              
-              <div className="p-6 sm:p-8 space-y-6">
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
-                  <div className="space-y-2">
-                    <label className="text-sm font-semibold text-foreground/90">First Name</label>
-                    {isLoading ? <Skeleton className="h-11 rounded-xl" /> : (
-                      <Input 
-                        value={firstName} 
-                        onChange={(e) => setFirstName(e.target.value)} 
-                        className="h-11 rounded-xl bg-background border-border/60 focus-visible:ring-primary/20 focus-visible:border-primary transition-all shadow-sm" 
-                      />
-                    )}
-                  </div>
-                  <div className="space-y-2">
-                    <label className="text-sm font-semibold text-foreground/90">Last Name</label>
-                    {isLoading ? <Skeleton className="h-11 rounded-xl" /> : (
-                      <Input 
-                        value={lastName} 
-                        onChange={(e) => setLastName(e.target.value)} 
-                        className="h-11 rounded-xl bg-background border-border/60 focus-visible:ring-primary/20 focus-visible:border-primary transition-all shadow-sm" 
-                      />
-                    )}
-                  </div>
-                </div>
-                
-                <div className="space-y-2">
-                  <label className="text-sm font-semibold text-foreground/90 flex items-center gap-2">
-                    Email Address
-                  </label>
-                  {isLoading ? <Skeleton className="h-11 rounded-xl" /> : (
-                    <div className="relative">
-                      <Mail size={16} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-muted-foreground" />
-                      <Input 
-                        value={email} 
-                        readOnly 
-                        className="h-11 rounded-xl pl-10 bg-muted/30 border-border/40 text-muted-foreground cursor-not-allowed shadow-inner" 
-                      />
-                    </div>
-                  )}
-                  <p className="text-xs font-medium text-muted-foreground flex items-center gap-1.5 mt-2 bg-muted/40 p-2.5 rounded-lg border border-border/50 inline-flex">
-                    <Zap size={14} className="text-amber-500" /> Email changes require support verification for security.
-                  </p>
-                </div>
-              </div>
+function PasswordCard() {
+  const changePassword = useChangePassword();
+  const [current, setCurrent] = useState('');
+  const [next, setNext] = useState('');
+  const [confirm, setConfirm] = useState('');
 
-              <div className="p-6 border-t border-border/50 bg-muted/10 flex justify-end">
-                <Button 
-                  onClick={handleSaveProfile} 
-                  disabled={isSaving || isLoading} 
-                  className={`h-11 px-8 rounded-xl gap-2 font-semibold transition-all duration-300 ${saved ? 'bg-emerald-500 hover:bg-emerald-600 text-white shadow-emerald-500/20' : 'shadow-primary/20 hover:shadow-primary/30 hover:-translate-y-0.5'}`}
-                >
-                  {isSaving ? <><Loader2 size={16} className="animate-spin" />Saving...</> : saved ? <><CheckCircle2 size={16} />Saved Successfully!</> : <><Save size={16} />Save Changes</>}
-                </Button>
-              </div>
-            </Card>
+  const mismatch = confirm.length > 0 && next !== confirm;
+  const canSubmit = current.length > 0 && next.length >= 8 && !mismatch;
 
-            <div className="space-y-6">
-              <Card className="rounded-2xl border border-border/60 p-6 bg-card/50 backdrop-blur-sm shadow-sm">
-                <div className="w-10 h-10 rounded-full bg-blue-500/10 flex items-center justify-center mb-4">
-                  <Bell size={20} className="text-blue-500" />
-                </div>
-                <h4 className="font-bold text-foreground mb-2">Notifications</h4>
-                <p className="text-sm text-muted-foreground mb-4">Manage how you receive updates and alerts.</p>
-                <Button variant="outline" className="w-full rounded-xl gap-2 h-10">Manage Preferences <ArrowRight size={14} /></Button>
-              </Card>
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!canSubmit) return;
+    try {
+      await changePassword.mutateAsync({ currentPassword: current, newPassword: next });
+      toast.success('Password changed');
+      setCurrent('');
+      setNext('');
+      setConfirm('');
+    } catch (error) {
+      toast.error(error instanceof ApiError ? error.message : 'Could not change your password');
+    }
+  }
 
-              <Card className="rounded-2xl border border-border/60 p-6 bg-card/50 backdrop-blur-sm shadow-sm">
-                <div className="w-10 h-10 rounded-full bg-purple-500/10 flex items-center justify-center mb-4">
-                  <Monitor size={20} className="text-purple-500" />
-                </div>
-                <h4 className="font-bold text-foreground mb-2">Active Sessions</h4>
-                <p className="text-sm text-muted-foreground mb-4">You are currently signed in on this device.</p>
-                <Button variant="ghost" className="w-full rounded-xl gap-2 text-destructive hover:bg-destructive/10 hover:text-destructive h-10">
-                  <LogOut size={14} /> Sign out all other devices
-                </Button>
-              </Card>
+  return (
+    <form onSubmit={submit}>
+      <SettingsCard
+        title="Password"
+        description="Use at least 8 characters. A long passphrase beats a short complex one."
+        icon={Lock}
+        footer={
+          <Button
+            type="submit"
+            size="sm"
+            disabled={!canSubmit || changePassword.isPending}
+            className="gap-2"
+          >
+            {changePassword.isPending && <Loader2 className="size-3.5 animate-spin" />}
+            Update password
+          </Button>
+        }
+      >
+        <div className="space-y-1.5">
+          <Label htmlFor="current-password">Current password</Label>
+          <Input
+            id="current-password"
+            type="password"
+            value={current}
+            onChange={(e) => setCurrent(e.target.value)}
+            autoComplete="current-password"
+          />
+        </div>
+        <div className="grid gap-4 sm:grid-cols-2">
+          <div className="space-y-1.5">
+            <Label htmlFor="new-password">New password</Label>
+            <Input
+              id="new-password"
+              type="password"
+              value={next}
+              onChange={(e) => setNext(e.target.value)}
+              autoComplete="new-password"
+              minLength={8}
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="confirm-password">Confirm new password</Label>
+            <Input
+              id="confirm-password"
+              type="password"
+              value={confirm}
+              onChange={(e) => setConfirm(e.target.value)}
+              autoComplete="new-password"
+              aria-invalid={mismatch}
+              aria-describedby={mismatch ? 'confirm-error' : undefined}
+            />
+            {mismatch && (
+              <p id="confirm-error" className="text-xs text-destructive">
+                Passwords do not match.
+              </p>
+            )}
+          </div>
+        </div>
+      </SettingsCard>
+    </form>
+  );
+}
+
+function MfaCard({ enabled }: { enabled: boolean }) {
+  const setupMfa = useSetupMfa();
+  const verifyMfa = useVerifyMfa();
+  const disableMfa = useDisableMfa();
+
+  const [step, setStep] = useState<'idle' | 'enrol'>('idle');
+  const [qrUrl, setQrUrl] = useState<string | null>(null);
+  const [secret, setSecret] = useState<string | null>(null);
+  const [code, setCode] = useState('');
+  const [recoveryCodes, setRecoveryCodes] = useState<string[] | null>(null);
+  const [disableOpen, setDisableOpen] = useState(false);
+  const [disablePassword, setDisablePassword] = useState('');
+
+  async function beginEnrolment() {
+    try {
+      const res = await setupMfa.mutateAsync();
+      // The API returns `qrCodeUrl`; the old code read `res.qrCode` and
+      // `res.data.qrCode`, neither of which exists, so the <img> src was always
+      // null and the QR step rendered blank.
+      setQrUrl(res.qrCodeUrl ?? null);
+      setSecret(res.secret ?? null);
+      setStep('enrol');
+    } catch (error) {
+      toast.error(error instanceof ApiError ? error.message : 'Could not start 2FA setup');
+    }
+  }
+
+  async function confirmEnrolment() {
+    try {
+      const res = await verifyMfa.mutateAsync(code);
+      setStep('idle');
+      setQrUrl(null);
+      setCode('');
+      // Recovery codes are shown exactly once. Losing them and the phone means
+      // account recovery through support.
+      if (res.recoveryCodes?.length) setRecoveryCodes(res.recoveryCodes);
+      toast.success('Two-factor authentication is on');
+    } catch (error) {
+      toast.error(error instanceof ApiError ? error.message : 'That code was not accepted');
+    }
+  }
+
+  async function confirmDisable() {
+    try {
+      await disableMfa.mutateAsync({ currentPassword: disablePassword });
+      setDisableOpen(false);
+      setDisablePassword('');
+      toast.success('Two-factor authentication is off');
+    } catch (error) {
+      toast.error(error instanceof ApiError ? error.message : 'Could not disable 2FA');
+    }
+  }
+
+  return (
+    <>
+      <SettingsCard
+        title="Two-factor authentication"
+        description="Require a code from your authenticator app in addition to your password."
+        icon={Smartphone}
+      >
+        <div className="flex flex-wrap items-center justify-between gap-4 rounded-lg border border-border bg-muted/30 p-4">
+          <div className="flex items-center gap-3">
+            <span
+              className={`flex size-9 items-center justify-center rounded-full ${
+                enabled ? 'bg-success/10 text-success' : 'bg-muted text-muted-foreground'
+              }`}
+            >
+              <ShieldCheck className="size-4" />
+            </span>
+            <div>
+              <p className="text-sm font-medium">
+                {enabled ? 'Enabled' : 'Not enabled'}
+              </p>
+              <p className="text-xs text-muted-foreground">
+                {enabled
+                  ? 'You will be asked for a code when you sign in.'
+                  : 'Your account is protected by a password only.'}
+              </p>
             </div>
           </div>
-        </TabsContent>
 
-        {/* Security Tab */}
-        <TabsContent value="security" className="animate-in fade-in zoom-in-95 duration-500 outline-none">
-          <Card className="max-w-3xl rounded-2xl border border-border/60 p-0 overflow-hidden bg-card/50 backdrop-blur-sm shadow-sm">
-            <div className="p-6 sm:p-8 border-b border-border/50 bg-muted/20">
-              <h3 className="text-lg font-bold text-foreground flex items-center gap-2">
-                <Shield size={18} className="text-primary" /> Security Settings
-              </h3>
-              <p className="text-sm text-muted-foreground mt-1">Protect your account with advanced security features.</p>
+          {step === 'idle' &&
+            (enabled ? (
+              <Button variant="destructive" size="sm" onClick={() => setDisableOpen(true)}>
+                Turn off
+              </Button>
+            ) : (
+              <Button size="sm" onClick={beginEnrolment} disabled={setupMfa.isPending} className="gap-2">
+                {setupMfa.isPending && <Loader2 className="size-3.5 animate-spin" />}
+                Turn on
+              </Button>
+            ))}
+        </div>
+
+        {step === 'enrol' && (
+          <div className="space-y-5 rounded-lg border border-border p-5">
+            <div>
+              <h3 className="text-sm font-semibold">1. Scan this code</h3>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Open Google Authenticator, 1Password, or Authy and scan.
+              </p>
             </div>
-            
-            <div className="p-6 sm:p-8">
-              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-6 p-6 rounded-2xl border border-border/50 bg-background shadow-sm hover:shadow-md transition-all">
-                <div className="flex gap-4">
-                  <div className={`mt-1 flex h-12 w-12 shrink-0 items-center justify-center rounded-full shadow-inner ${hasMfa ? 'bg-emerald-500/10 text-emerald-600' : 'bg-muted text-muted-foreground'}`}>
-                    <Smartphone size={24} />
-                  </div>
-                  <div>
-                    <h3 className="text-base font-bold text-foreground flex items-center gap-2">
-                      Two-Factor Authentication (2FA)
-                      {hasMfa && <Badge variant="secondary" className="bg-emerald-500/10 text-emerald-600 border-emerald-500/20 text-[10px] uppercase">Active</Badge>}
-                    </h3>
-                    <p className="text-sm text-muted-foreground mt-1.5 max-w-md leading-relaxed">
-                      Add an extra layer of security to your account. We'll ask for a code from your authenticator app when you sign in.
-                    </p>
-                  </div>
-                </div>
 
-                <div className="shrink-0">
-                  {mfaSetupStep === 'idle' && (
-                    hasMfa ? (
-                      <Button variant="outline" className="rounded-xl h-11 px-6 border-destructive/20 text-destructive hover:bg-destructive/10 transition-colors" onClick={() => disableMfa.mutate()} disabled={disableMfa.isPending}>
-                        {disableMfa.isPending ? <Loader2 size={16} className="animate-spin mr-2" /> : <Shield size={16} className="mr-2" />}
-                        {disableMfa.isPending ? 'Disabling...' : 'Disable 2FA'}
-                      </Button>
-                    ) : (
-                      <Button className="rounded-xl h-11 px-6 shadow-primary/20 hover:shadow-primary/30 hover:-translate-y-0.5 transition-all" onClick={handleSetupMfa} disabled={setupMfa.isPending}>
-                        {setupMfa.isPending ? <Loader2 size={16} className="animate-spin mr-2" /> : <ShieldCheck size={16} className="mr-2" />}
-                        {setupMfa.isPending ? 'Setting up...' : 'Enable 2FA'}
-                      </Button>
-                    )
-                  )}
-                </div>
+            {qrUrl ? (
+              <div className="flex justify-center">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={qrUrl}
+                  alt="Two-factor authentication QR code"
+                  className="size-44 rounded-lg border border-border bg-white p-2"
+                />
               </div>
+            ) : (
+              <Skeleton className="mx-auto size-44" />
+            )}
 
-              {mfaSetupStep === 'setup' && mfaQr && (
-                <div className="mt-6 p-8 rounded-2xl border border-primary/20 bg-primary/5 animate-in slide-in-from-top-4 fade-in duration-500 text-center relative overflow-hidden">
-                  <div className="absolute top-0 right-0 p-4 opacity-10 pointer-events-none">
-                    <ShieldCheck size={120} />
-                  </div>
-                  <h4 className="text-lg font-bold text-foreground mb-2">Scan QR Code</h4>
-                  <p className="text-sm text-muted-foreground max-w-sm mx-auto mb-6">
-                    Open your authenticator app (like Google Authenticator or Authy) and scan this code to link your device.
-                  </p>
-                  <div className="inline-block p-4 rounded-2xl bg-white border border-border shadow-lg mb-6">
-                    <img src={mfaQr} alt="MFA QR Code" className="w-48 h-48" />
-                  </div>
-                  <div className="max-w-xs mx-auto space-y-4">
-                    <div className="relative">
-                      <KeyRound size={16} className="absolute left-4 top-1/2 -translate-y-1/2 text-muted-foreground" />
-                      <Input 
-                        placeholder="000 000" 
-                        value={mfaCode} 
-                        onChange={(e) => setMfaCode(e.target.value.replace(/[^0-9]/g, ''))} 
-                        maxLength={6} 
-                        className="h-12 rounded-xl pl-12 font-mono text-center text-xl tracking-[0.25em] bg-background border-border/60 focus-visible:ring-primary/20" 
-                      />
-                    </div>
-                    <Button 
-                      className="w-full h-11 rounded-xl text-base font-semibold shadow-primary/20 hover:shadow-primary/30" 
-                      onClick={handleVerifyMfa} 
-                      disabled={mfaCode.length !== 6 || verifyMfa.isPending}
-                    >
-                      {verifyMfa.isPending ? <><Loader2 size={18} className="animate-spin mr-2" />Verifying...</> : 'Verify & Enable'}
-                    </Button>
-                  </div>
-                </div>
-              )}
+            {secret && (
+              <CopyField
+                label="Or enter this key manually"
+                value={secret}
+                masked
+                description="Treat this like a password."
+              />
+            )}
+
+            <div className="space-y-2">
+              <Label htmlFor="mfa-code">2. Enter the 6-digit code</Label>
+              <div className="relative">
+                <KeyRound
+                  aria-hidden
+                  className="pointer-events-none absolute left-3 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground"
+                />
+                <Input
+                  id="mfa-code"
+                  value={code}
+                  onChange={(e) => setCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                  inputMode="numeric"
+                  autoComplete="one-time-code"
+                  placeholder="000000"
+                  className="tabular pl-9 text-center tracking-[0.3em]"
+                />
+              </div>
             </div>
-          </Card>
-        </TabsContent>
-      </Tabs>
-    </div>
+
+            <div className="flex justify-end gap-2">
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => {
+                  setStep('idle');
+                  setCode('');
+                  setQrUrl(null);
+                }}
+              >
+                Cancel
+              </Button>
+              <Button
+                size="sm"
+                onClick={confirmEnrolment}
+                disabled={code.length !== 6 || verifyMfa.isPending}
+                className="gap-2"
+              >
+                {verifyMfa.isPending && <Loader2 className="size-3.5 animate-spin" />}
+                Verify and enable
+              </Button>
+            </div>
+          </div>
+        )}
+      </SettingsCard>
+
+      {/* Recovery codes — shown once, immediately after enrolment. */}
+      <Modal
+        open={!!recoveryCodes}
+        onOpenChange={(open) => !open && setRecoveryCodes(null)}
+        title="Save your recovery codes"
+        description="Each code works once. Store them somewhere safe — they are the only way back in if you lose your device."
+        footer={
+          <Button size="sm" onClick={() => setRecoveryCodes(null)}>
+            I have saved them
+          </Button>
+        }
+      >
+        <div className="tabular grid grid-cols-2 gap-2 rounded-lg border border-border bg-muted/40 p-4 font-mono text-sm">
+          {recoveryCodes?.map((c) => (
+            <span key={c}>{c}</span>
+          ))}
+        </div>
+      </Modal>
+
+      {/* Disabling requires the password — the API rejects the request without
+          it, which is why the old one-click button always failed. */}
+      <Modal
+        open={disableOpen}
+        onOpenChange={(open) => {
+          setDisableOpen(open);
+          if (!open) setDisablePassword('');
+        }}
+        size="sm"
+        title="Turn off two-factor authentication"
+        description="Confirm with your account password. This makes your account password-only."
+        footer={
+          <ModalActions
+            onCancel={() => setDisableOpen(false)}
+            confirmLabel="Turn off 2FA"
+            variant="destructive"
+            onConfirm={confirmDisable}
+            isPending={disableMfa.isPending}
+            disabled={disablePassword.length === 0}
+          />
+        }
+      >
+        <div className="space-y-1.5">
+          <Label htmlFor="disable-password">Account password</Label>
+          <Input
+            id="disable-password"
+            type="password"
+            value={disablePassword}
+            onChange={(e) => setDisablePassword(e.target.value)}
+            autoComplete="current-password"
+          />
+        </div>
+      </Modal>
+    </>
   );
 }

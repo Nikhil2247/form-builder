@@ -1,226 +1,283 @@
 'use client';
 
 import React, { useState } from 'react';
-import {
-  Building2, Users, FileBox, Activity, TrendingUp, Globe,
-  Search, MoreHorizontal, ShieldAlert, ShieldCheck, Settings2, ChevronRight
-} from 'lucide-react';
-import { Input } from '@/components/ui/input';
-import { Button } from '@/components/ui/button';
-import { Skeleton } from '@/components/ui/skeleton';
-import { Badge } from '@/components/ui/badge';
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table';
-import {
-  DropdownMenu, DropdownMenuContent, DropdownMenuItem,
-  DropdownMenuSeparator, DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu';
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
-import { useAdminOrganizations, useSuspendOrganization, useActivateOrganization } from '@/hooks/use-admin';
-import { formatDistanceToNow } from 'date-fns';
-import {
-  Pagination,
-  PaginationContent,
-  PaginationItem,
-  PaginationNext,
-  PaginationPrevious,
-} from '@/components/ui/pagination';
+import { Building2, MoreHorizontal, ShieldAlert, ShieldCheck } from 'lucide-react';
+import { toast } from 'sonner';
 
-const ORG_STATUS: Record<string, { label: string; color: string }> = {
-  ACTIVE: { label: 'Active', color: 'bg-emerald-500/10 text-emerald-600 border-emerald-500/20' },
-  SUSPENDED: { label: 'Suspended', color: 'bg-red-500/10 text-red-500 border-red-500/20' },
-  PENDING: { label: 'Pending', color: 'bg-amber-500/10 text-amber-600 border-amber-500/20' },
-};
+import { Button } from '@/components/ui/button';
+import { Label } from '@/components/ui/label';
+import { Textarea } from '@/components/ui/textarea';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
+import {
+  PageHeader,
+  PageShell,
+  DataTable,
+  StatusBadge,
+  EmptyState,
+  Toolbar,
+  SearchInput,
+  Modal,
+  ModalActions,
+  ConfirmDialog,
+  RelativeTime,
+  type DataTableColumn,
+} from '@/components/shared';
+import { formatBytes } from '@/components/shared/formatters';
+import { usePagination } from '@/hooks/use-pagination';
+import {
+  useAdminOrganizations,
+  useSuspendOrganization,
+  useActivateOrganization,
+  type AdminOrganization,
+} from '@/hooks/use-admin';
 
 export default function PlatformOrganizationsPage() {
-  const [search, setSearch] = useState('');
-  const [page, setPage] = useState(1);
-  const [suspendTarget, setSuspendTarget] = useState<any>(null);
-  const [suspendReason, setSuspendReason] = useState('');
-  const [quotaTarget, setQuotaTarget] = useState<any>(null);
+  const pager = usePagination();
+  const { data, isLoading, isFetching, error, refetch } = useAdminOrganizations({
+    page: pager.page,
+    limit: pager.pageSize,
+    search: pager.search,
+  });
 
-  const { data, isLoading } = useAdminOrganizations(page, 20, search);
   const suspendOrg = useSuspendOrganization();
   const activateOrg = useActivateOrganization();
 
-  // Robust unwrapping: handles { organizations }, { data: { organizations } }, or array
-  const raw = data?.organizations ?? (data as any)?.data?.organizations ?? (Array.isArray(data) ? data : null) ?? [];
-  const rawOrgs: any[] = Array.isArray(raw) ? raw : [];
-  // Normalize backend fields: isActive + suspendedAt → status string
-  const orgs = rawOrgs.filter(Boolean).map((org: any) => ({
-    ...org,
-    status: org.status ?? (org.suspendedAt ? 'SUSPENDED' : org.isActive === false ? 'INACTIVE' : 'ACTIVE'),
-  }));
-  const total = data?.pagination?.total ?? (data as any)?.data?.pagination?.total ?? data?.total ?? 0;
+  const [suspendTarget, setSuspendTarget] = useState<AdminOrganization | null>(null);
+  const [activateTarget, setActivateTarget] = useState<AdminOrganization | null>(null);
+
+  const orgs = data?.items ?? [];
+  const total = data?.pagination.total ?? 0;
+
+  const columns: DataTableColumn<AdminOrganization>[] = [
+    {
+      id: 'name',
+      header: 'Organization',
+      isRowHeader: true,
+      className: 'max-w-0',
+      cell: (org) => (
+        <div className="flex items-center gap-3">
+          <span className="flex size-8 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground">
+            <Building2 className="size-4" strokeWidth={1.5} />
+          </span>
+          <div className="min-w-0">
+            <div className="truncate font-medium text-foreground">{org.name}</div>
+            <div className="truncate font-mono text-xs text-muted-foreground">{org.slug}</div>
+          </div>
+        </div>
+      ),
+    },
+    {
+      id: 'status',
+      header: 'Status',
+      width: 'w-32',
+      cell: (org) => (
+        <span title={org.suspendReason ?? undefined}>
+          <StatusBadge status={org.status} dot />
+        </span>
+      ),
+    },
+    {
+      id: 'members',
+      header: 'Members',
+      numeric: true,
+      width: 'w-24',
+      hideBelow: 'sm',
+      cell: (org) => (org._count?.members ?? 0).toLocaleString(),
+    },
+    {
+      id: 'forms',
+      header: 'Forms',
+      numeric: true,
+      width: 'w-24',
+      hideBelow: 'sm',
+      cell: (org) => (org._count?.forms ?? 0).toLocaleString(),
+    },
+    {
+      id: 'storage',
+      header: 'Storage',
+      numeric: true,
+      width: 'w-28',
+      hideBelow: 'lg',
+      // BigInt columns arrive as strings; Number() them before formatting.
+      cell: (org) => formatBytes(Number(org.storageUsedBytes ?? 0)),
+    },
+    {
+      id: 'createdAt',
+      header: 'Created',
+      width: 'w-36',
+      hideBelow: 'xl',
+      cell: (org) => (
+        <span className="text-muted-foreground">
+          <RelativeTime value={org.createdAt} />
+        </span>
+      ),
+    },
+    {
+      id: 'actions',
+      header: <span className="sr-only">Actions</span>,
+      width: 'w-12',
+      className: 'text-right',
+      headerClassName: 'text-right',
+      cell: (org) => (
+        <DropdownMenu>
+          <DropdownMenuTrigger
+            aria-label={`Actions for ${org.name}`}
+            className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+          >
+            <MoreHorizontal className="size-4" />
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            {org.status === 'SUSPENDED' ? (
+              <DropdownMenuItem onClick={() => setActivateTarget(org)} className="cursor-pointer">
+                <ShieldCheck className="mr-2 size-3.5" /> Reactivate
+              </DropdownMenuItem>
+            ) : (
+              <DropdownMenuItem
+                onClick={() => setSuspendTarget(org)}
+                className="cursor-pointer text-destructive focus:bg-destructive/10 focus:text-destructive"
+              >
+                <ShieldAlert className="mr-2 size-3.5" /> Suspend
+              </DropdownMenuItem>
+            )}
+          </DropdownMenuContent>
+        </DropdownMenu>
+      ),
+    },
+  ];
 
   return (
-    <div className="w-full space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
-      {/* Header */}
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between border-b border-border pb-4">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight text-foreground">Organizations</h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Manage all organizations on the platform
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          <span className="text-sm text-muted-foreground">{total} total</span>
-        </div>
-      </div>
+    <PageShell>
+      <PageHeader
+        title="Organizations"
+        description="Every tenant on this deployment."
+      />
 
-      {/* Filters */}
-      <div className="relative w-64">
-        <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
-        <Input
-          placeholder="Search organizations..."
-          value={search}
-          onChange={(e) => { setSearch(e.target.value); setPage(1); }}
-          className="h-9 pl-9 text-sm bg-muted/40"
+      <Toolbar>
+        <SearchInput
+          value={pager.search}
+          onChange={pager.setSearch}
+          placeholder="Search organizations…"
+          aria-label="Search organizations"
         />
-      </div>
+      </Toolbar>
 
-      {/* Table */}
-      <div className="rounded-xl border border-border overflow-hidden">
-        <Table>
-          <TableHeader className="bg-muted/50">
-            <TableRow>
-              <TableHead>Organization</TableHead>
-              <TableHead>Slug</TableHead>
-              <TableHead>Status</TableHead>
-              <TableHead>Members</TableHead>
-              <TableHead>Forms</TableHead>
-              <TableHead>Created</TableHead>
-              <TableHead className="text-right">Actions</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {isLoading ? (
-              Array.from({ length: 6 }).map((_, i) => (
-                <TableRow key={i}>
-                  {Array.from({ length: 7 }).map((_, j) => (
-                    <TableCell key={j}><Skeleton className="h-5 w-full rounded" /></TableCell>
-                  ))}
-                </TableRow>
-              ))
-            ) : orgs.length === 0 ? (
-              <TableRow>
-                <TableCell colSpan={7} className="text-center py-16 text-muted-foreground">
-                  No organizations found.
-                </TableCell>
-              </TableRow>
-            ) : (
-              orgs.map((org: any) => {
-                const statusInfo = ORG_STATUS[org.status ?? 'ACTIVE'] ?? ORG_STATUS.ACTIVE;
-                const createdAgo = org.createdAt ? formatDistanceToNow(new Date(org.createdAt), { addSuffix: true }) : '—';
-                return (
-                  <TableRow key={org.id} className="group hover:bg-muted/30 transition-colors">
-                    <TableCell>
-                      <div className="flex items-center gap-3">
-                        <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary font-bold text-sm">
-                          {org.name?.charAt(0)?.toUpperCase() ?? 'O'}
-                        </div>
-                        <span className="font-medium text-foreground">{org.name}</span>
-                      </div>
-                    </TableCell>
-                    <TableCell className="text-muted-foreground font-mono text-xs">{org.slug}</TableCell>
-                    <TableCell>
-                      <span className={`rounded-full border px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wider ${statusInfo.color}`}>
-                        {statusInfo.label}
-                      </span>
-                    </TableCell>
-                    <TableCell className="text-muted-foreground">{org._count?.members ?? org.memberCount ?? '—'}</TableCell>
-                    <TableCell className="text-muted-foreground">{org._count?.forms ?? org.formCount ?? '—'}</TableCell>
-                    <TableCell className="text-muted-foreground text-xs">{createdAgo}</TableCell>
-                    <TableCell className="text-right">
-                      <DropdownMenu>
-                        <DropdownMenuTrigger className="rounded-md p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground transition-colors">
-                          <MoreHorizontal size={15} />
-                        </DropdownMenuTrigger>
-                        <DropdownMenuContent align="end">
-                          <DropdownMenuItem onClick={() => setQuotaTarget(org)}>
-                            <Settings2 size={14} className="mr-2" /> Edit Quotas
-                          </DropdownMenuItem>
-                          <DropdownMenuSeparator />
-                          {org.status === 'SUSPENDED' || org.suspendedAt ? (
-                            <DropdownMenuItem onClick={() => activateOrg.mutate(org.id)} className="text-emerald-600 focus:text-emerald-600 focus:bg-emerald-50">
-                              <ShieldCheck size={14} className="mr-2" /> Activate
-                            </DropdownMenuItem>
-                          ) : (
-                            <DropdownMenuItem onClick={() => setSuspendTarget(org)} className="text-red-500 focus:text-red-600 focus:bg-red-50">
-                              <ShieldAlert size={14} className="mr-2" /> Suspend
-                            </DropdownMenuItem>
-                          )}
-                        </DropdownMenuContent>
-                      </DropdownMenu>
-                    </TableCell>
-                  </TableRow>
-                );
-              })
-            )}
-          </TableBody>
-        </Table>
-        {/* Pagination */}
-        <div className="p-4 border-t border-border">
-          {(() => {
-            const totalPages = Math.ceil(total / 20);
-            return (
-              <Pagination>
-                <PaginationContent>
-                  <PaginationItem>
-                    <PaginationPrevious 
-                      href="#" 
-                      onClick={(e) => { e.preventDefault(); setPage(Math.max(1, page - 1)); }} 
-                      className={page === 1 ? 'pointer-events-none opacity-50' : ''} 
-                    />
-                  </PaginationItem>
-                  <PaginationItem>
-                    <span className="text-sm font-medium mx-2">Page {page} of {totalPages || 1}</span>
-                  </PaginationItem>
-                  <PaginationItem>
-                    <PaginationNext 
-                      href="#" 
-                      onClick={(e) => { e.preventDefault(); setPage(Math.min(totalPages, page + 1)); }} 
-                      className={page === totalPages || totalPages === 0 ? 'pointer-events-none opacity-50' : ''} 
-                    />
-                  </PaginationItem>
-                </PaginationContent>
-              </Pagination>
-            );
-          })()}
-        </div>
-      </div>
+      <DataTable
+        caption="Platform organizations"
+        columns={columns}
+        data={orgs}
+        getRowId={(org) => org.id}
+        isLoading={isLoading || isFetching}
+        error={error}
+        onRetry={() => refetch()}
+        pagination={pager.paginationProps(total, 'organizations')}
+        empty={
+          <EmptyState
+            variant="inline"
+            icon={Building2}
+            title={pager.search ? 'No organizations match' : 'No organizations'}
+            description={
+              pager.search
+                ? 'Try a different search term.'
+                : 'Organizations appear here as users sign up.'
+            }
+          />
+        }
+      />
 
-      {/* Suspend Dialog */}
-      <Dialog open={!!suspendTarget} onOpenChange={() => setSuspendTarget(null)}>
-        <DialogContent className="sm:max-w-sm">
-          <DialogHeader>
-            <DialogTitle>Suspend Organization</DialogTitle>
-            <DialogDescription>Provide a reason for suspending &quot;{suspendTarget?.name}&quot;.</DialogDescription>
-          </DialogHeader>
-          <div className="py-2">
-            <Input placeholder="Reason for suspension..." value={suspendReason} onChange={(e) => setSuspendReason(e.target.value)} />
-          </div>
-          <DialogFooter>
-            <Button variant="ghost" onClick={() => setSuspendTarget(null)}>Cancel</Button>
-            <Button variant="destructive" onClick={async () => {
-              // Capture target before any state changes to avoid null access
-              const target = suspendTarget;
-              if (!target?.id) return;
-              setSuspendTarget(null);
-              setSuspendReason('');
-              await suspendOrg.mutateAsync({ orgId: target.id, reason: suspendReason || 'Suspended by administrator' });
-            }} disabled={suspendOrg.isPending}>
-              {suspendOrg.isPending ? 'Suspending...' : 'Suspend'}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-    </div>
+      <SuspendModal
+        org={suspendTarget}
+        onOpenChange={(open) => !open && setSuspendTarget(null)}
+        isPending={suspendOrg.isPending}
+        onConfirm={async (reason) => {
+          if (!suspendTarget) return;
+          try {
+            await suspendOrg.mutateAsync({ orgId: suspendTarget.id, reason });
+            toast.success(`${suspendTarget.name} suspended`);
+            setSuspendTarget(null);
+          } catch (err: any) {
+            toast.error(err?.message ?? 'Could not suspend this organization');
+          }
+        }}
+      />
+
+      <ConfirmDialog
+        open={!!activateTarget}
+        onOpenChange={(open) => !open && setActivateTarget(null)}
+        title="Reactivate organization"
+        description={
+          <>
+            {activateTarget?.name} will regain full access. Their forms will start accepting
+            submissions again.
+          </>
+        }
+        confirmLabel="Reactivate"
+        variant="default"
+        isPending={activateOrg.isPending}
+        onConfirm={async () => {
+          if (!activateTarget) return;
+          try {
+            await activateOrg.mutateAsync(activateTarget.id);
+            toast.success(`${activateTarget.name} reactivated`);
+            setActivateTarget(null);
+          } catch (err: any) {
+            toast.error(err?.message ?? 'Could not reactivate this organization');
+          }
+        }}
+      />
+    </PageShell>
+  );
+}
+
+function SuspendModal({
+  org,
+  onOpenChange,
+  onConfirm,
+  isPending,
+}: {
+  org: AdminOrganization | null;
+  onOpenChange: (open: boolean) => void;
+  onConfirm: (reason: string) => void;
+  isPending: boolean;
+}) {
+  const [reason, setReason] = useState('');
+
+  React.useEffect(() => {
+    if (org) setReason('');
+  }, [org]);
+
+  return (
+    <Modal
+      open={!!org}
+      onOpenChange={onOpenChange}
+      title="Suspend organization"
+      description={`${org?.name ?? 'This organization'} will lose access immediately and its published forms will stop accepting submissions.`}
+      footer={
+        <ModalActions
+          onCancel={() => onOpenChange(false)}
+          confirmLabel="Suspend organization"
+          variant="destructive"
+          onConfirm={() => onConfirm(reason.trim())}
+          isPending={isPending}
+          disabled={reason.trim().length < 5}
+        />
+      }
+    >
+      <div className="space-y-1.5">
+        <Label htmlFor="suspend-reason">Reason</Label>
+        <Textarea
+          id="suspend-reason"
+          value={reason}
+          onChange={(e) => setReason(e.target.value)}
+          rows={3}
+          placeholder="Recorded in the audit log and shown to the organization's admins."
+        />
+        <p className="text-xs text-muted-foreground">At least 5 characters.</p>
+      </div>
+    </Modal>
   );
 }

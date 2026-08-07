@@ -99,17 +99,63 @@ export interface FormPage {
   description?: string;
 }
 
+/**
+ * The form as the builder and runner work with it.
+ *
+ * NOTE: these fields were previously declared as pagesJson/questionsJson/
+ * logicJson/themeConfig — the database column names — while every consumer
+ * (builder page, FormCanvas, FormRunner, LogicBuilder, ThemeCustomizer,
+ * SubmissionsView, excelExport) accessed pages/questions/logic/theme. The type
+ * therefore never matched the code and the frontend did not typecheck.
+ *
+ * The API-shaped payload is `Form` below; mapping between the two happens where
+ * the form is loaded.
+ */
 export interface FormConfig {
   id: string;
   title: string;
   description: string;
   isQuizMode?: boolean;
-  pagesJson: FormPage[];
-  questionsJson: FormQuestion[];
-  logicJson: LogicRule[];
-  themeConfig: FormTheme;
+  pages: FormPage[];
+  questions: FormQuestion[];
+  logic: LogicRule[];
+  theme: FormTheme;
   createdAt: string;
   updatedAt: string;
+
+  // ── Present when loaded from the public endpoint ──────────────────────────
+  /** Immutable version the respondent is filling; echoed back on submit. */
+  formVersionId?: string;
+  version?: number;
+  slug?: string;
+  status?: 'DRAFT' | 'PUBLISHED' | 'CLOSED' | 'ARCHIVED';
+  layoutMode?: string;
+  isPasswordProtected?: boolean;
+  requireAuth?: boolean;
+}
+
+/**
+ * Map the API/persisted `Form` shape onto the domain `FormConfig` the builder
+ * and viewer components work with.
+ */
+export function toFormConfig(form: Form): FormConfig {
+  return {
+    id: form.id,
+    title: form.title,
+    description: form.description ?? '',
+    isQuizMode: form.isQuizMode,
+    pages: form.pagesJson ?? [],
+    questions: form.questionsJson ?? [],
+    logic: form.logicJson ?? [],
+    theme: form.themeConfig,
+    createdAt: form.createdAt,
+    updatedAt: form.updatedAt,
+    slug: form.slug,
+    status: form.status,
+    layoutMode: form.layoutMode,
+    isPasswordProtected: form.isPasswordProtected,
+    requireAuth: form.requireAuth,
+  };
 }
 
 export interface Form {

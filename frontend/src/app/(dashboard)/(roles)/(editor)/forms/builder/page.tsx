@@ -1,33 +1,52 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import {
   DndContext,
-  closestCenter,
+  DragOverlay,
   KeyboardSensor,
   MouseSensor,
   TouchSensor,
+  closestCenter,
   useSensor,
   useSensors,
-  DragEndEvent
+  type DragEndEvent,
+  type DragStartEvent,
 } from '@dnd-kit/core';
+import { restrictToVerticalAxis, restrictToParentElement } from '@dnd-kit/modifiers';
 import {
-  arrayMove,
   SortableContext,
   sortableKeyboardCoordinates,
-  verticalListSortingStrategy
+  verticalListSortingStrategy,
 } from '@dnd-kit/sortable';
-import { SAMPLE_FORMS } from '@/lib/mockData';
-import { FormConfig, FormQuestion, QuestionType } from '@/types/form';
-import { EnterpriseNavbar } from '@/components/builder/EnterpriseNavbar';
-import { LeftTreePanel } from '@/components/builder/LeftTreePanel';
-import { EnterpriseFieldCard } from '@/components/builder/EnterpriseFieldCard';
-import { FormRunner } from '@/components/builder/FormRunner';
-import { ThemeCustomizer } from '@/components/builder/ThemeCustomizer';
-import { LogicBuilder } from '@/components/builder/LogicBuilder';
-import { X, Sparkles, Plus, Type, AlignLeft, Mail, Phone, Hash, Link as LinkIcon, CheckCircle2, CheckSquare, ListFilter, Star, Gauge, Sliders, Calendar, UploadCloud, PenTool, Grid, Heading as HeadingIcon } from 'lucide-react';
+import {
+  AlignLeft,
+  Calendar,
+  CheckCircle2,
+  CheckSquare,
+  Gauge,
+  Grid,
+  Hash,
+  Heading as HeadingIcon,
+  Link as LinkIcon,
+  ListFilter,
+  Mail,
+  PenTool,
+  Phone,
+  Plus,
+  Sliders,
+  Sparkles,
+  Star,
+  Type,
+  UploadCloud,
+} from 'lucide-react';
 import { toast } from 'sonner';
 
+import { Button } from '@/components/ui/button';
+import { Card } from '@/components/ui/card';
+import { Input } from '@/components/ui/input';
+import { Spinner } from '@/components/ui/spinner';
 import {
   CommandDialog,
   CommandEmpty,
@@ -36,418 +55,531 @@ import {
   CommandItem,
   CommandList,
 } from '@/components/ui/command';
+import { Modal } from '@/components/shared';
+import { EnterpriseNavbar } from '@/components/builder/EnterpriseNavbar';
+import { LeftTreePanel } from '@/components/builder/LeftTreePanel';
+import { EnterpriseFieldCard } from '@/components/builder/EnterpriseFieldCard';
+import { FormRunner } from '@/components/builder/FormRunner';
+import { ThemeCustomizer } from '@/components/builder/ThemeCustomizer';
+import { LogicBuilder } from '@/components/builder/LogicBuilder';
+import { fetchApi, unwrap } from '@/lib/api';
+import { useOrgId } from '@/hooks/use-auth';
+import {
+  selectFormConfig,
+  useBuilderMeta,
+  useBuilderStore,
+  useQuestionOrder,
+} from '@/store/builder-store';
+import type { FormConfig, QuestionType } from '@/types/form';
 
-const COMMAND_ITEMS = [
-  { type: 'SHORT_TEXT', label: 'Short Text Input', keywords: ['text', 'short', 'input', 'string'], icon: Type },
-  { type: 'LONG_TEXT', label: 'Paragraph / Textarea', keywords: ['long', 'text', 'paragraph', 'textarea'], icon: AlignLeft },
-  { type: 'EMAIL', label: 'Email Address', keywords: ['email', 'mail', 'address'], icon: Mail },
-  { type: 'PHONE', label: 'Phone Number', keywords: ['phone', 'number', 'mobile'], icon: Phone },
-  { type: 'NUMBER', label: 'Numeric Limit Value', keywords: ['number', 'numeric', 'integer', 'amount'], icon: Hash },
-  { type: 'URL', label: 'Website Link URL', keywords: ['url', 'website', 'link'], icon: LinkIcon },
-  { type: 'SINGLE_CHOICE', label: 'Radio (Single Choice)', keywords: ['radio', 'single', 'choice', 'select'], icon: CheckCircle2 },
-  { type: 'MULTI_CHOICE', label: 'Checkbox (Multi Choice)', keywords: ['checkbox', 'multi', 'multiple', 'choice', 'select'], icon: CheckSquare },
-  { type: 'DROPDOWN', label: 'Dropdown Select', keywords: ['dropdown', 'select', 'menu', 'list'], icon: ListFilter },
-  { type: 'STAR_RATING', label: '5-Star Rating', keywords: ['star', 'rating', 'score'], icon: Star },
-  { type: 'NPS', label: 'NPS Score (0-10)', keywords: ['nps', 'score', 'rating', 'net', 'promoter'], icon: Gauge },
-  { type: 'SLIDER', label: 'Range Slider', keywords: ['slider', 'range', 'scale'], icon: Sliders },
-  { type: 'DATE', label: 'Date Picker', keywords: ['date', 'picker', 'calendar', 'time'], icon: Calendar },
-  { type: 'FILE_UPLOAD', label: 'MinIO File Upload', keywords: ['file', 'upload', 'minio', 'document', 'image'], icon: UploadCloud },
-  { type: 'SIGNATURE', label: 'Digital Signature', keywords: ['signature', 'digital', 'sign', 'draw'], icon: PenTool },
-  { type: 'MATRIX', label: 'Likert Scale Matrix', keywords: ['matrix', 'likert', 'scale', 'grid', 'table'], icon: Grid },
-  { type: 'SECTION_HEADER', label: 'Section Header Banner', keywords: ['section', 'header', 'banner', 'title'], icon: HeadingIcon },
-];
+const COMMAND_ITEMS: { type: QuestionType; label: string; keywords: string; icon: React.ElementType }[] =
+  [
+    { type: 'SHORT_TEXT', label: 'Short answer', keywords: 'text short input string', icon: Type },
+    { type: 'LONG_TEXT', label: 'Paragraph', keywords: 'long text paragraph textarea', icon: AlignLeft },
+    { type: 'EMAIL', label: 'Email address', keywords: 'email mail address', icon: Mail },
+    { type: 'PHONE', label: 'Phone number', keywords: 'phone mobile tel', icon: Phone },
+    { type: 'NUMBER', label: 'Number', keywords: 'number numeric integer amount', icon: Hash },
+    { type: 'URL', label: 'Website URL', keywords: 'url website link', icon: LinkIcon },
+    { type: 'SINGLE_CHOICE', label: 'Single choice', keywords: 'radio single choice select', icon: CheckCircle2 },
+    { type: 'MULTI_CHOICE', label: 'Multiple choice', keywords: 'checkbox multi multiple', icon: CheckSquare },
+    { type: 'DROPDOWN', label: 'Dropdown', keywords: 'dropdown select menu list', icon: ListFilter },
+    { type: 'STAR_RATING', label: 'Star rating', keywords: 'star rating score', icon: Star },
+    { type: 'NPS', label: 'NPS score', keywords: 'nps net promoter score', icon: Gauge },
+    { type: 'SLIDER', label: 'Slider', keywords: 'slider range scale', icon: Sliders },
+    { type: 'DATE', label: 'Date', keywords: 'date picker calendar', icon: Calendar },
+    { type: 'FILE_UPLOAD', label: 'File upload', keywords: 'file upload document image', icon: UploadCloud },
+    { type: 'SIGNATURE', label: 'Signature', keywords: 'signature sign draw', icon: PenTool },
+    { type: 'MATRIX', label: 'Matrix / Likert', keywords: 'matrix likert grid table', icon: Grid },
+    { type: 'SECTION_HEADER', label: 'Section header', keywords: 'section header banner title', icon: HeadingIcon },
+  ];
 
-import { useSearchParams, useRouter } from 'next/navigation';
-import { fetchApi } from '@/lib/api';
-import { Button } from '@/components/ui/button';
-import { Card } from '@/components/ui/card';
-import { Input } from '@/components/ui/input';
-import { useUser } from '@/hooks/use-auth';
+/** Draft is written this long after the last edit. */
+const AUTOSAVE_DELAY_MS = 1500;
 
 function FormBuilderInner() {
-  const searchParams = useSearchParams();
   const router = useRouter();
-  const formId = searchParams.get('id');
+  const searchParams = useSearchParams();
+  const routeFormId = searchParams.get('id');
+  const orgId = useOrgId();
 
-  const [form, setForm] = useState<FormConfig>(SAMPLE_FORMS[0]);
-  const [selectedQuestionId, setSelectedQuestionId] = useState<string | null>(null);
+  const meta = useBuilderMeta();
+  const order = useQuestionOrder();
+
+  const load = useBuilderStore((s) => s.load);
+  const reset = useBuilderStore((s) => s.reset);
+  const setLoading = useBuilderStore((s) => s.setLoading);
+  const setTitle = useBuilderStore((s) => s.setTitle);
+  const setDescription = useBuilderStore((s) => s.setDescription);
+  const addQuestion = useBuilderStore((s) => s.addQuestion);
+  const moveQuestion = useBuilderStore((s) => s.moveQuestion);
+  const addPage = useBuilderStore((s) => s.addPage);
+  const selectQuestion = useBuilderStore((s) => s.selectQuestion);
+  const setActiveView = useBuilderStore((s) => s.setActiveView);
+  const markSaved = useBuilderStore((s) => s.markSaved);
+  const markPublished = useBuilderStore((s) => s.markPublished);
+
   const [isPreviewOpen, setIsPreviewOpen] = useState(false);
   const [isThemeOpen, setIsThemeOpen] = useState(false);
-  const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
+  const [isPaletteOpen, setIsPaletteOpen] = useState(false);
   const [isLeftPanelOpen, setIsLeftPanelOpen] = useState(false);
-  const [isLoading, setIsLoading] = useState(true);
+  const [isSaving, setIsSaving] = useState(false);
+  const [isPublishing, setIsPublishing] = useState(false);
+  const [lastSavedAt, setLastSavedAt] = useState<Date | null>(null);
+  const [draggingId, setDraggingId] = useState<string | null>(null);
 
-  const [activeView, setActiveView] = useState<'BUILDER' | 'LOGIC'>('BUILDER');
-  const [showCommandPalette, setShowCommandPalette] = useState(false);
+  // `formId` lives in a ref as well as the URL because autosave fires from a
+  // timer and must see the id created by an in-flight first save.
+  const formIdRef = useRef<string | null>(routeFormId);
 
-  const { data: session } = useUser();
-  const orgId = session?.activeOrganization?.id;
+  // ── Load ──────────────────────────────────────────────────────────────────
+  useEffect(() => {
+    let cancelled = false;
 
-  // Keyboard shortcut listener for slash command
-  React.useEffect(() => {
-    if (activeView !== 'BUILDER') return;
-    const handleKeyDown = (e: KeyboardEvent) => {
-      const target = e.target as HTMLElement;
-      if (
-        target.tagName === 'INPUT' ||
-        target.tagName === 'TEXTAREA' ||
-        target.isContentEditable
-      ) {
-        return;
-      }
-
-      if (e.key === '/') {
-        e.preventDefault();
-        setShowCommandPalette(true);
-      }
-    };
-
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [activeView]);
-
-  // Load form on mount
-  React.useEffect(() => {
     async function loadForm() {
-      if (!formId || !orgId) {
-        setIsLoading(false);
+      if (!routeFormId) {
+        // Brand new form. Previously this seeded from SAMPLE_FORMS, so a new
+        // form opened pre-filled with mock questions the user could publish.
+        reset();
         return;
       }
+      if (!orgId) return;
+
+      setLoading(true);
       try {
-        const res = await fetchApi(`/organizations/${orgId}/forms/${formId}`);
-        const data = res.data?.form ?? res.data ?? res;
-        setForm({
-          id: data.id,
-          title: data.title,
-          description: data.description || '',
-          isQuizMode: data.isQuizMode,
-          theme: data.themeConfig || SAMPLE_FORMS[0].theme,
-          pages: (data.pagesJson || []).filter((p: any) => p && !Array.isArray(p)),
-          questions: (data.questionsJson || []).filter((q: any) => q && !Array.isArray(q) && q.id),
-          logic: (data.logicJson || []).filter((l: any) => l && !Array.isArray(l)),
-          createdAt: data.createdAt,
-          updatedAt: data.updatedAt,
-        });
-        if (data.questionsJson?.length > 0) {
-          setSelectedQuestionId(data.questionsJson[0].id);
-        }
-      } catch (error) {
-        toast.error('Failed to load form');
-      } finally {
-        setIsLoading(false);
+        const data = unwrap<any>(await fetchApi(`/organizations/${orgId}/forms/${routeFormId}`));
+        const form = data?.form ?? data;
+        if (cancelled) return;
+
+        const lastPublishedAt = form.versions?.[0]?.publishedAt;
+
+        load(
+          {
+            id: form.id,
+            title: form.title,
+            description: form.description ?? '',
+            isQuizMode: form.isQuizMode,
+            theme: form.themeConfig,
+            pages: form.pagesJson ?? [],
+            questions: form.questionsJson ?? [],
+            logic: form.logicJson ?? [],
+            createdAt: form.createdAt,
+            updatedAt: form.updatedAt,
+          } as FormConfig,
+          {
+            status: form.status ?? 'DRAFT',
+            slug: form.slug ?? null,
+            // The draft columns are written on save, a FormVersion only on
+            // publish. A newer updatedAt means the live version is stale.
+            hasUnpublishedChanges:
+              form.status === 'PUBLISHED' &&
+              !!lastPublishedAt &&
+              new Date(form.updatedAt).getTime() > new Date(lastPublishedAt).getTime(),
+          },
+        );
+        formIdRef.current = form.id;
+      } catch (error: any) {
+        if (cancelled) return;
+        setLoading(false);
+        toast.error(error?.message ?? 'Could not load this form');
       }
     }
-    if (orgId) {
-      loadForm();
-    }
-  }, [formId, orgId]);
 
-  const sensors = useSensors(
-    useSensor(MouseSensor, { activationConstraint: { distance: 4 } }),
-    useSensor(TouchSensor, { activationConstraint: { delay: 150, tolerance: 5 } }),
-    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
+    void loadForm();
+    return () => {
+      cancelled = true;
+    };
+  }, [routeFormId, orgId, load, reset, setLoading]);
+
+  // Leaving the builder must not leave the previous form in the store — opening
+  // a different form briefly rendered the old one's questions.
+  useEffect(() => () => reset(), [reset]);
+
+  // ── Save ──────────────────────────────────────────────────────────────────
+  const save = useCallback(
+    async (opts: { silent?: boolean } = {}): Promise<string | null> => {
+      if (!orgId) return null;
+
+      const form = selectFormConfig(useBuilderStore.getState());
+      const body = JSON.stringify({
+        title: form.title,
+        description: form.description,
+        isQuizMode: form.isQuizMode,
+        themeConfig: form.theme,
+        pages: form.pages,
+        questions: form.questions,
+        logic: form.logic,
+      });
+
+      setIsSaving(true);
+      try {
+        let id = formIdRef.current;
+
+        if (id) {
+          await fetchApi(`/organizations/${orgId}/forms/${id}`, { method: 'PUT', body });
+        } else {
+          const created = unwrap<any>(
+            await fetchApi(`/organizations/${orgId}/forms`, { method: 'POST', body }),
+          );
+          const form = created?.form ?? created;
+          id = form.id;
+          formIdRef.current = id;
+          // `replace`, not `push` — the empty-builder URL is not somewhere the
+          // back button should return to.
+          router.replace(`/forms/builder?id=${id}`);
+        }
+
+        markSaved();
+        setLastSavedAt(new Date());
+        if (!opts.silent) toast.success('Draft saved');
+        return id;
+      } catch (error: any) {
+        toast.error(error?.message ?? 'Could not save this form');
+        return null;
+      } finally {
+        setIsSaving(false);
+      }
+    },
+    [orgId, router, markSaved],
   );
 
-  const handleDragEnd = (event: DragEndEvent) => {
-    const { active, over } = event;
-    if (over && active.id !== over.id) {
-      setForm((prev) => {
-        const oldIndex = prev.questions.findIndex((q) => q.id === active.id);
-        const newIndex = prev.questions.findIndex((q) => q.id === over.id);
-        return {
-          ...prev,
-          questions: arrayMove(prev.questions, oldIndex, newIndex)
-        };
-      });
-      setHasUnsavedChanges(true);
-    }
-  };
+  // ── Autosave ──────────────────────────────────────────────────────────────
+  // Subscribes outside React so an edit does not re-render the page component
+  // just to reschedule a timer.
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
 
-  // Positional Add Question Handler
-  const handleAddQuestion = (type: QuestionType, afterIndex?: number) => {
-    const newId = `q-${Date.now()}`;
-    const newQuestion: FormQuestion = {
-      id: newId,
-      type,
-      label: type === 'SHORT_TEXT' ? 'Text Block' : type === 'SINGLE_CHOICE' ? 'Single Response' : `New ${type.replace(/_/g, ' ')}`,
-      placeholder: 'User input placeholder...',
-      required: false,
-      validation: { required: false },
-      colSpan: 2,
-      pageNumber: 1,
-      options: ['SINGLE_CHOICE', 'MULTI_CHOICE', 'DROPDOWN'].includes(type)
-        ? [
-            { id: `opt-1`, label: 'Option 1', value: 'option_1' },
-            { id: `opt-2`, label: 'Option 2', value: 'option_2' },
-          ]
-        : undefined,
-    };
+    const unsubscribe = useBuilderStore.subscribe((state, previous) => {
+      if (state.revision === previous.revision) return;
+      // Only autosave forms that already exist; creating one implicitly on the
+      // first keystroke would litter the list with abandoned drafts.
+      if (!formIdRef.current || !state.isDirty) return;
 
-    setForm((prev) => {
-      const questionsCopy = [...prev.questions];
-      if (typeof afterIndex === 'number' && afterIndex >= 0 && afterIndex < questionsCopy.length) {
-        // Insert right after the clicked card at position afterIndex + 1
-        questionsCopy.splice(afterIndex + 1, 0, newQuestion);
-      } else {
-        // Append at the end if no afterIndex is specified
-        questionsCopy.push(newQuestion);
-      }
-      return { ...prev, questions: questionsCopy };
+      clearTimeout(timer);
+      timer = setTimeout(() => void save({ silent: true }), AUTOSAVE_DELAY_MS);
     });
 
-    setSelectedQuestionId(newId);
-    setHasUnsavedChanges(true);
-    setIsLeftPanelOpen(false); // Close on mobile after adding
-  };
+    return () => {
+      clearTimeout(timer);
+      unsubscribe();
+    };
+  }, [save]);
 
-  const handleUpdateQuestion = (updated: FormQuestion) => {
-    setForm((prev) => ({
-      ...prev,
-      questions: prev.questions.map((q) => (q.id === updated.id ? updated : q)),
-    }));
-    setHasUnsavedChanges(true);
-  };
-
-  const handleDeleteQuestion = (id: string) => {
-    setForm((prev) => ({
-      ...prev,
-      questions: prev.questions.filter((q) => q.id !== id),
-    }));
-    if (selectedQuestionId === id) {
-      setSelectedQuestionId(null);
+  // ── Publish ───────────────────────────────────────────────────────────────
+  const publish = useCallback(async () => {
+    const state = useBuilderStore.getState();
+    if (state.order.length === 0) {
+      toast.error('Add at least one question before publishing.');
+      return;
     }
-    setHasUnsavedChanges(true);
-  };
 
-  const handleAddPage = () => {
-    const newPageNum = form.pages.length + 1;
-    setForm((prev) => ({
-      ...prev,
-      pages: [...prev.pages, { pageNumber: newPageNum, title: `Page ${newPageNum}`, description: '' }]
-    }));
-    setHasUnsavedChanges(true);
-  };
-
-  const handleSaveChanges = async () => {
+    setIsPublishing(true);
     try {
-      if (formId) {
-        await fetchApi(`/organizations/${orgId}/forms/${formId}`, {
-          method: 'PUT',
-          body: JSON.stringify({
-            title: form.title,
-            description: form.description,
-            themeConfig: form.theme,
-            pages: form.pages,
-            questions: form.questions,
-            logic: form.logic,
-          }),
-        });
-        toast.success('Form changes saved successfully!');
-      } else {
-        const res = await fetchApi(`/organizations/${orgId}/forms`, {
-          method: 'POST',
-          body: JSON.stringify({
-            title: form.title,
-            description: form.description,
-            themeConfig: form.theme,
-            pages: form.pages,
-            questions: form.questions,
-            logic: form.logic,
-          }),
-        });
-        const data = res.data?.form ?? res.data ?? res;
-        toast.success('New form created!');
-        router.replace(`/forms/builder?id=${data.id}`);
-      }
-      setHasUnsavedChanges(false);
-    } catch (error: any) {
-      toast.error(error.message || 'Failed to save form');
-    }
-  };
+      // Persist first so the published snapshot matches what is on screen.
+      const id = await save({ silent: true });
+      if (!id) return;
 
-  if (isLoading) {
-    return <div className="flex h-screen items-center justify-center bg-background text-foreground">Loading...</div>;
+      const form = selectFormConfig(useBuilderStore.getState());
+      await fetchApi(`/organizations/${orgId}/forms/${id}/publish`, {
+        method: 'POST',
+        body: JSON.stringify({
+          pages: form.pages,
+          questions: form.questions,
+          logic: form.logic,
+          theme: form.theme,
+        }),
+      });
+
+      const wasPublished = state.status === 'PUBLISHED';
+      markPublished();
+      toast.success(wasPublished ? 'New version published' : 'Your form is live');
+    } catch (error: any) {
+      toast.error(error?.message ?? 'Could not publish this form');
+    } finally {
+      setIsPublishing(false);
+    }
+  }, [orgId, save, markPublished]);
+
+  // ── Unsaved-changes guard ─────────────────────────────────────────────────
+  useEffect(() => {
+    if (!meta.isDirty) return;
+    const handler = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = '';
+    };
+    window.addEventListener('beforeunload', handler);
+    return () => window.removeEventListener('beforeunload', handler);
+  }, [meta.isDirty]);
+
+  // ── Keyboard ──────────────────────────────────────────────────────────────
+  useEffect(() => {
+    const isTypingTarget = (target: EventTarget | null) => {
+      const el = target as HTMLElement | null;
+      return (
+        !!el &&
+        (el.tagName === 'INPUT' ||
+          el.tagName === 'TEXTAREA' ||
+          el.tagName === 'SELECT' ||
+          el.isContentEditable)
+      );
+    };
+
+    const onKeyDown = (e: KeyboardEvent) => {
+      // Cmd/Ctrl+S works from anywhere, including inside a field.
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 's') {
+        e.preventDefault();
+        void save();
+        return;
+      }
+      if (isTypingTarget(e.target)) return;
+
+      if (e.key === '/' && useBuilderStore.getState().activeView === 'BUILDER') {
+        e.preventDefault();
+        setIsPaletteOpen(true);
+      }
+    };
+
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [save]);
+
+  // ── Drag and drop ─────────────────────────────────────────────────────────
+  const sensors = useSensors(
+    // 8px, up from 4 — at 4 a click that drifted by a pixel or two started a
+    // drag instead of selecting the card.
+    useSensor(MouseSensor, { activationConstraint: { distance: 8 } }),
+    useSensor(TouchSensor, { activationConstraint: { delay: 200, tolerance: 8 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+  );
+
+  const handleDragEnd = useCallback(
+    (event: DragEndEvent) => {
+      setDraggingId(null);
+      const { active, over } = event;
+      if (over && active.id !== over.id) {
+        moveQuestion(String(active.id), String(over.id));
+      }
+    },
+    [moveQuestion],
+  );
+
+  const handleDragStart = useCallback((event: DragStartEvent) => {
+    setDraggingId(String(event.active.id));
+  }, []);
+
+  // ── Adapters for the panels that still take (form, setForm) ───────────────
+  const formSnapshot = useMemo(
+    () => selectFormConfig(useBuilderStore.getState()),
+    // Recomputed whenever the document changes; these panels are not on the
+    // typing hot path, so a whole-document snapshot is fine here.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [meta.isDirty, meta.activeView, isThemeOpen, isPreviewOpen, order.length],
+  );
+
+  const setFormAdapter = useCallback<React.Dispatch<React.SetStateAction<FormConfig>>>((action) => {
+    const state = useBuilderStore.getState();
+    const current = selectFormConfig(state);
+    const next = typeof action === 'function' ? action(current) : action;
+
+    if (next.theme !== current.theme) state.setTheme(next.theme);
+    if (next.logic !== current.logic) state.setLogic(next.logic);
+    if (next.title !== current.title) state.setTitle(next.title);
+    if (next.description !== current.description) state.setDescription(next.description);
+  }, []);
+
+  if (meta.isLoading) {
+    return (
+      <div className="flex h-screen items-center justify-center gap-3 bg-background" role="status">
+        <Spinner className="size-5 text-muted-foreground" />
+        <span className="text-sm text-muted-foreground">Loading form…</span>
+      </div>
+    );
   }
 
   return (
-    <div className="flex flex-col h-screen w-full bg-background overflow-hidden relative">
-      {/* Top Navbar */}
+    <div className="relative flex h-screen w-full flex-col overflow-hidden bg-background">
       <EnterpriseNavbar
-        formTitle={form.title}
-        onTitleChange={(newTitle) => {
-          setForm((prev) => ({ ...prev, title: newTitle }));
-          setHasUnsavedChanges(true);
-        }}
+        formTitle={meta.title}
+        onTitleChange={setTitle}
         onPreview={() => setIsPreviewOpen(true)}
         onOpenTheme={() => setIsThemeOpen(true)}
-        onOpenLogic={() => setActiveView(v => v === 'LOGIC' ? 'BUILDER' : 'LOGIC')}
-        hasUnsavedChanges={hasUnsavedChanges}
-        onSaveChanges={handleSaveChanges}
+        onOpenLogic={() => setActiveView(meta.activeView === 'LOGIC' ? 'BUILDER' : 'LOGIC')}
+        hasUnsavedChanges={meta.isDirty}
+        onSaveChanges={() => void save()}
         onToggleLeftPanel={() => setIsLeftPanelOpen(true)}
+        onPublish={() => void publish()}
+        isPublishing={isPublishing}
+        isSaving={isSaving}
+        status={meta.status}
+        hasUnpublishedChanges={meta.hasUnpublishedChanges}
+        publicUrl={meta.slug ? `/f/${meta.slug}` : null}
+        lastSavedAt={lastSavedAt}
       />
 
-      {/* Main Two-Panel Layout */}
-      <div className="flex-1 flex overflow-hidden relative">
-        {/* Mobile Overlay for Left Panel */}
+      <div className="relative flex flex-1 overflow-hidden">
         {isLeftPanelOpen && (
-          <div 
-            className="fixed inset-0 bg-background/80 backdrop-blur-sm z-40 md:hidden" 
-            onClick={() => setIsLeftPanelOpen(false)} 
+          <div
+            role="presentation"
+            className="fixed inset-0 z-40 bg-foreground/20 backdrop-blur-sm md:hidden"
+            onClick={() => setIsLeftPanelOpen(false)}
           />
         )}
 
-        {/* Left Tree & Elements Palette Panel */}
-        <div className={`fixed inset-y-0 left-0 z-50 transform transition-transform duration-200 ease-in-out md:relative md:translate-x-0 ${isLeftPanelOpen ? 'translate-x-0' : '-translate-x-full'}`}>
+        <div
+          className={`fixed inset-y-0 left-0 z-50 transition-transform duration-200 ease-out
+                      md:relative md:translate-x-0
+                      ${isLeftPanelOpen ? 'translate-x-0' : '-translate-x-full'}`}
+        >
           <LeftTreePanel
-            questions={form.questions}
-            selectedQuestionId={selectedQuestionId}
-            onSelectQuestion={setSelectedQuestionId}
-            onAddQuestion={(type) => handleAddQuestion(type)}
-            onAddPage={handleAddPage}
+            onAddQuestion={(type) => {
+              addQuestion(type);
+              setIsLeftPanelOpen(false);
+            }}
+            onAddPage={addPage}
             onClose={() => setIsLeftPanelOpen(false)}
           />
         </div>
 
-        {/* Center Canvas / Logic View */}
-        <main className="flex-1 overflow-y-auto bg-muted/30 relative">
-          {activeView === 'LOGIC' ? (
-            <LogicBuilder 
-              form={form} 
-              setForm={setForm} 
-            />
+        <main id="main-content" className="relative flex-1 overflow-y-auto bg-muted/25">
+          {meta.activeView === 'LOGIC' ? (
+            <LogicBuilder form={formSnapshot} setForm={setFormAdapter} />
           ) : (
-            <div className="p-4 sm:p-6 lg:p-8 space-y-6 max-w-3xl mx-auto pb-20">
-              {/* Form Title Banner */}
-              <Card className="p-6 shadow-sm border-border space-y-4">
-              <Input
-                type="text"
-                value={form.title}
-                onChange={(e) => {
-                  setForm((prev) => ({ ...prev, title: e.target.value }));
-                  setHasUnsavedChanges(true);
-                }}
-                className="text-2xl font-bold text-foreground w-full bg-transparent border-0 focus-visible:ring-0 focus-visible:border-b-2 focus-visible:border-primary px-0 rounded-none shadow-none h-auto"
-              />
-              <Input
-                type="text"
-                value={form.description}
-                onChange={(e) => {
-                  setForm((prev) => ({ ...prev, description: e.target.value }));
-                  setHasUnsavedChanges(true);
-                }}
-                className="text-sm text-muted-foreground w-full bg-transparent border-0 focus-visible:ring-0 focus-visible:border-b-2 focus-visible:border-primary px-0 rounded-none shadow-none"
-                placeholder="Form description or subtext..."
-              />
-            </Card>
+            <div className="mx-auto max-w-3xl space-y-5 p-4 pb-24 sm:p-6 lg:p-8">
+              <Card className="space-y-3 p-5">
+                <Input
+                  value={meta.title}
+                  onChange={(e) => setTitle(e.target.value)}
+                  aria-label="Form title"
+                  placeholder="Form title"
+                  className="h-auto rounded-none border-0 bg-transparent px-0 text-xl font-semibold shadow-none
+                             focus-visible:border-b-2 focus-visible:border-foreground/30 focus-visible:ring-0"
+                />
+                <FormDescriptionInput onChange={setDescription} />
+              </Card>
 
-            {/* Questions List */}
-            {form.questions.length === 0 ? (
-              <div className="border-2 border-dashed border-border rounded-xl p-12 text-center bg-card space-y-4 shadow-sm">
-                <Sparkles size={32} className="mx-auto text-muted-foreground" />
-                <div className="text-base font-semibold text-foreground">Your Form Canvas is Empty</div>
-                <p className="text-sm text-muted-foreground">Click any field in the left palette to add your first question.</p>
-                <Button
-                  onClick={() => handleAddQuestion('SHORT_TEXT')}
-                  className="mt-4 gap-2"
-                >
-                  <Plus size={16} /> Add Text Block
-                </Button>
-              </div>
-            ) : (
-              <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
-                <SortableContext items={form.questions.map((q) => q.id)} strategy={verticalListSortingStrategy}>
-                  <div className="space-y-6">
-                    {form.questions.map((question, index) => (
-                      <EnterpriseFieldCard
-                        key={question.id}
-                        question={question}
-                        index={index}
-                        isSelected={selectedQuestionId === question.id}
-                        onSelect={() => setSelectedQuestionId(question.id)}
-                        onUpdate={handleUpdateQuestion}
-                        onDelete={() => handleDeleteQuestion(question.id)}
-                        allQuestions={form.questions}
-                        onAddInlineQuestion={(type, afterIndex) => handleAddQuestion(type, afterIndex)}
-                      />
-                    ))}
+              {order.length === 0 ? (
+                <div className="space-y-4 rounded-xl border border-dashed border-border-strong bg-card p-12 text-center">
+                  <Sparkles className="mx-auto size-7 text-muted-foreground" strokeWidth={1.5} />
+                  <div>
+                    <p className="text-sm font-semibold">This form has no questions yet</p>
+                    <p className="mt-1 text-sm text-muted-foreground">
+                      Pick a field from the palette, or press{' '}
+                      <kbd className="rounded border border-border bg-muted px-1.5 py-0.5 font-sans text-xs font-semibold">
+                        /
+                      </kbd>{' '}
+                      to search.
+                    </p>
                   </div>
-                </SortableContext>
-              </DndContext>
-            )}
-            
-            {/* Quick Add Hint */}
-            {form.questions.length > 0 && (
-              <div className="text-center pt-8 pb-4">
-                <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-background border border-border shadow-sm text-sm text-muted-foreground">
-                  <Sparkles size={14} className="text-primary" />
-                  <span>Press <kbd className="font-sans px-1.5 py-0.5 rounded-md bg-muted text-xs font-bold text-foreground">{"/"}</kbd> anywhere to quickly add a new field</span>
+                  <Button onClick={() => addQuestion('SHORT_TEXT')} className="gap-2">
+                    <Plus className="size-4" />
+                    Add your first question
+                  </Button>
                 </div>
-              </div>
-            )}
-          </div>
+              ) : (
+                <DndContext
+                  sensors={sensors}
+                  collisionDetection={closestCenter}
+                  modifiers={[restrictToVerticalAxis, restrictToParentElement]}
+                  onDragStart={handleDragStart}
+                  onDragEnd={handleDragEnd}
+                  onDragCancel={() => setDraggingId(null)}
+                >
+                  <SortableContext items={order} strategy={verticalListSortingStrategy}>
+                    <div className="space-y-2">
+                      {order.map((id, index) => (
+                        <EnterpriseFieldCard key={id} id={id} index={index} />
+                      ))}
+                    </div>
+                  </SortableContext>
+
+                  {/* A drag overlay keeps the moving card at full opacity and
+                      out of the list's layout, which removes the jitter the
+                      previous in-place transform caused. */}
+                  <DragOverlay dropAnimation={null}>
+                    {draggingId ? <DragPreview id={draggingId} /> : null}
+                  </DragOverlay>
+                </DndContext>
+              )}
+
+              {order.length > 0 && (
+                <div className="pt-2 text-center">
+                  <Button
+                    variant="outline"
+                    onClick={() => setIsPaletteOpen(true)}
+                    className="gap-2 rounded-full"
+                  >
+                    <Plus className="size-4" />
+                    Add question
+                  </Button>
+                </div>
+              )}
+            </div>
           )}
         </main>
       </div>
 
-      {/* Enhanced Live Preview Modal */}
-      {isPreviewOpen && (
-        <div className="fixed inset-0 z-50 bg-background/80 backdrop-blur-sm flex items-center justify-center p-4 sm:p-6">
-          <Card className="max-w-2xl w-full p-6 shadow-xl space-y-6 max-h-[95vh] overflow-y-auto relative animate-in fade-in zoom-in-95">
-            <div className="flex items-center justify-between border-b border-border pb-4">
-              <div className="flex items-center gap-2">
-                <span className="w-2.5 h-2.5 rounded-full bg-primary animate-pulse" />
-                <h3 className="font-semibold text-foreground text-sm">Interactive Live Form Preview</h3>
-              </div>
-              <Button
-                variant="ghost"
-                size="icon"
-                onClick={() => setIsPreviewOpen(false)}
-              >
-                <X size={18} />
-              </Button>
-            </div>
-            <FormRunner form={form} onSubmitResponse={() => toast.success('Response successfully submitted in Live Preview mode!')} />
-          </Card>
-        </div>
-      )}
+      {/* ── Preview ─────────────────────────────────────────────────────── */}
+      <Modal
+        open={isPreviewOpen}
+        onOpenChange={setIsPreviewOpen}
+        size="lg"
+        title="Preview"
+        description="Interactive preview — nothing submitted here is saved."
+      >
+        {isPreviewOpen && (
+          <FormRunner
+            form={formSnapshot}
+            onSubmitResponse={() => {
+              toast.success('Preview submission — no data was stored.');
+            }}
+          />
+        )}
+      </Modal>
 
-      {/* Theme Settings Modal */}
-      {isThemeOpen && (
-        <div className="fixed inset-0 z-50 bg-background/80 backdrop-blur-sm flex items-center justify-center p-4 sm:p-6">
-          <Card className="max-w-2xl w-full p-6 shadow-xl space-y-6 max-h-[95vh] overflow-y-auto relative animate-in fade-in zoom-in-95">
-            <div className="flex items-center justify-between border-b border-border pb-4">
-              <h3 className="font-semibold text-foreground text-sm">Form Theme & Styling Options</h3>
-              <Button
-                variant="ghost"
-                size="icon"
-                onClick={() => setIsThemeOpen(false)}
-              >
-                <X size={18} />
-              </Button>
-            </div>
-            <ThemeCustomizer form={form} setForm={setForm} />
-          </Card>
-        </div>
-      )}
-      {/* Slash Command Palette */}
-      <CommandDialog open={showCommandPalette} onOpenChange={setShowCommandPalette}>
-        <CommandInput placeholder="Type a command or search for a field type..." />
+      {/* ── Theme ───────────────────────────────────────────────────────── */}
+      <Modal
+        open={isThemeOpen}
+        onOpenChange={setIsThemeOpen}
+        size="lg"
+        title="Theme and styling"
+        description="Applies to the public form your respondents see."
+        footer={
+          <Button size="sm" onClick={() => setIsThemeOpen(false)}>
+            Done
+          </Button>
+        }
+      >
+        {isThemeOpen && <ThemeCustomizer form={formSnapshot} setForm={setFormAdapter} />}
+      </Modal>
+
+      {/* ── Field palette ───────────────────────────────────────────────── */}
+      <CommandDialog open={isPaletteOpen} onOpenChange={setIsPaletteOpen}>
+        <CommandInput placeholder="Search field types…" />
         <CommandList>
-          <CommandEmpty>No results found.</CommandEmpty>
-          <CommandGroup heading="Form Fields (Press Enter to add)">
+          <CommandEmpty>No field type matches.</CommandEmpty>
+          <CommandGroup heading="Add a field">
             {COMMAND_ITEMS.map((item) => {
               const Icon = item.icon;
               return (
                 <CommandItem
                   key={item.type}
-                  value={`${item.label} ${item.keywords.join(' ')}`}
+                  value={`${item.label} ${item.keywords}`}
                   onSelect={() => {
-                    handleAddQuestion(item.type as QuestionType);
-                    setShowCommandPalette(false);
+                    const newId = addQuestion(
+                      item.type,
+                      useBuilderStore.getState().selectedQuestionId,
+                    );
+                    setIsPaletteOpen(false);
+                    // Bring the new card into view — adding from the palette
+                    // while scrolled up gave no feedback at all.
+                    requestAnimationFrame(() => {
+                      document
+                        .querySelector(`[data-question-id="${newId}"]`)
+                        ?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+                    });
                   }}
-                  className="gap-2 cursor-pointer"
+                  className="cursor-pointer gap-2"
                 >
-                  <Icon className="h-4 w-4 text-muted-foreground" />
+                  <Icon className="size-4 text-muted-foreground" />
                   <span>{item.label}</span>
                 </CommandItem>
               );
@@ -459,9 +591,56 @@ function FormBuilderInner() {
   );
 }
 
+/**
+ * The description field keeps its value locally and pushes to the store on a
+ * debounce. Unlike the title (which the navbar mirrors live) nothing else
+ * displays it, so there is no reason for each keystroke to touch global state.
+ */
+function FormDescriptionInput({ onChange }: { onChange: (value: string) => void }) {
+  const initial = useBuilderStore.getState().description;
+  const [value, setValue] = useState(initial);
+
+  useEffect(() => {
+    if (value === useBuilderStore.getState().description) return;
+    const timer = setTimeout(() => onChange(value), 250);
+    return () => clearTimeout(timer);
+  }, [value, onChange]);
+
+  return (
+    <Input
+      value={value}
+      onChange={(e) => setValue(e.target.value)}
+      aria-label="Form description"
+      placeholder="Add a short description (optional)"
+      className="rounded-none border-0 bg-transparent px-0 text-sm text-muted-foreground shadow-none
+                 focus-visible:border-b focus-visible:border-border-strong focus-visible:ring-0"
+    />
+  );
+}
+
+/** Minimal ghost shown under the cursor while dragging. */
+function DragPreview({ id }: { id: string }) {
+  const question = useBuilderStore((s) => s.byId[id]);
+  const index = useBuilderStore((s) => s.order.indexOf(id));
+  if (!question) return null;
+
+  return (
+    <Card className="flex items-center gap-3 border-foreground/25 p-4 shadow-overlay">
+      <span className="tabular text-xs font-semibold text-muted-foreground">Q{index + 1}</span>
+      <span className="truncate text-sm font-medium">{question.label}</span>
+    </Card>
+  );
+}
+
 export default function FormBuilderStudioPage() {
   return (
-    <React.Suspense fallback={<div className="flex h-screen items-center justify-center bg-background text-foreground">Loading Studio...</div>}>
+    <React.Suspense
+      fallback={
+        <div className="flex h-screen items-center justify-center bg-background">
+          <Spinner className="size-5 text-muted-foreground" />
+        </div>
+      }
+    >
       <FormBuilderInner />
     </React.Suspense>
   );

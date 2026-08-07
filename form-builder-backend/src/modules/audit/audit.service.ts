@@ -43,7 +43,10 @@ export class AuditService {
           action: params.action,
           resource: params.resource,
           resourceId: params.resourceId ?? null,
-          metadata: params.metadata ?? null,
+          // Prisma distinguishes "SQL NULL" from "JSON null" for Json columns;
+          // a bare `null` is not a valid input. Omitting the key leaves the
+          // column NULL, which is what we want for "no metadata".
+          ...(params.metadata ? { metadata: params.metadata } : {}),
           ipAddress: params.ipAddress ?? null,
         },
       })

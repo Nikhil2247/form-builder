@@ -1,207 +1,508 @@
 'use client';
 
 import React, { useState } from 'react';
-import { Plus, Webhook, Trash2, Check, Filter } from 'lucide-react';
+import { KeyRound, Plus, RefreshCw, Trash2, Webhook } from 'lucide-react';
+import { toast } from 'sonner';
+
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Card } from '@/components/ui/card';
-import { Skeleton } from '@/components/ui/skeleton';
+import { Label } from '@/components/ui/label';
 import {
-  Dialog, DialogContent, DialogDescription,
-  DialogFooter, DialogHeader, DialogTitle,
-} from '@/components/ui/dialog';
-import {
-  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
-} from '@/components/ui/select';
-import { useWebhooks, useCreateWebhook, useDeleteWebhook, WEBHOOK_EVENTS } from '@/hooks/use-webhooks';
+  PageHeader,
+  PageShell,
+  DataTable,
+  StatusBadge,
+  EmptyState,
+  Toolbar,
+  FilterSelect,
+  Modal,
+  ModalActions,
+  ConfirmDialog,
+  CopyField,
+  RelativeTime,
+  type DataTableColumn,
+} from '@/components/shared';
+import { RoleGuard } from '@/components/auth/RoleGuard';
 import { useForms } from '@/hooks/use-forms';
-import { formatDistanceToNow } from 'date-fns';
+import {
+  useWebhooks,
+  useCreateWebhook,
+  useDeleteWebhook,
+  useRotateWebhookSecret,
+  useWebhookDeliveries,
+  type Webhook as WebhookRecord,
+} from '@/hooks/use-webhooks';
 
+/**
+ * Webhook management.
+ *
+ * Wrapped in its own guard: the route lives in the (editor) group, but the API
+ * marks every webhook route `@RequiredRole('ADMIN')`. Without this an editor
+ * reached the page and every request on it 403'd with no explanation.
+ */
 export default function IntegrationsPage() {
-  const [selectedFormId, setSelectedFormId] = useState<string>('');
-  const [isCreateOpen, setIsCreateOpen] = useState(false);
-  const [newUrl, setNewUrl] = useState('');
-  const [newName, setNewName] = useState('');
-  const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
-
-  const { data: formsData } = useForms();
-  const forms = formsData?.forms ?? [];
-
-  const { data: webhooks, isLoading } = useWebhooks(selectedFormId || undefined);
-  const createWebhook = useCreateWebhook(selectedFormId || undefined);
-  const deleteWebhook = useDeleteWebhook(selectedFormId || undefined);
-
-  const list = webhooks ?? [];
-
-  async function handleCreate() {
-    if (!newUrl.trim() || !selectedFormId) return;
-    await createWebhook.mutateAsync({ url: newUrl, name: newName || 'Webhook' });
-    setIsCreateOpen(false);
-    setNewUrl('');
-    setNewName('');
-  }
-
   return (
-    <div className="w-full space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
-      {/* Header */}
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between border-b border-border pb-4">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight text-foreground">Integrations</h1>
-          <p className="mt-1 text-sm text-muted-foreground">Connect your forms to external services via webhooks.</p>
-        </div>
-        <Button className="gap-2" onClick={() => setIsCreateOpen(true)} disabled={!selectedFormId}>
-          <Plus size={15} /> Add Webhook
-        </Button>
-      </div>
-
-      {/* Form selector */}
-      <div className="flex items-center gap-3">
-        <Filter size={15} className="text-muted-foreground shrink-0" />
-        <Select value={selectedFormId} onValueChange={setSelectedFormId}>
-          <SelectTrigger className="w-72 bg-muted/40 h-9">
-            <SelectValue placeholder="Select a form to manage webhooks..." />
-          </SelectTrigger>
-          <SelectContent>
-            {forms.map((f: any) => (
-              <SelectItem key={f.id} value={f.id}>{f.title}</SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        {selectedFormId && (
-          <span className="text-xs text-muted-foreground">
-            {isLoading ? 'Loading...' : `${list.length} webhook${list.length !== 1 ? 's' : ''}`}
-          </span>
-        )}
-      </div>
-
-      {/* Webhook info banner */}
-      <div className="rounded-xl border border-primary/20 bg-primary/5 p-4 flex items-start gap-3">
-        <Webhook size={18} className="text-primary mt-0.5 shrink-0" />
-        <div>
-          <p className="text-sm font-medium text-foreground">How webhooks work</p>
-          <p className="text-xs text-muted-foreground mt-0.5">
-            Webhooks are per-form. Select a form above and we&apos;ll send a POST request to your endpoint whenever that form receives a submission.
-          </p>
-        </div>
-      </div>
-
-      {/* No form selected */}
-      {!selectedFormId ? (
-        <div className="flex flex-col items-center justify-center rounded-2xl border border-dashed border-border py-16 text-center">
-          <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-muted">
-            <Webhook size={22} className="text-muted-foreground" />
-          </div>
-          <h3 className="text-sm font-semibold">Select a form to get started</h3>
-          <p className="mt-1 text-xs text-muted-foreground">Webhooks are scoped per form. Choose a form from the dropdown above.</p>
-        </div>
-      ) : isLoading ? (
-        <div className="space-y-3">
-          {Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-28 rounded-xl" />)}
-        </div>
-      ) : list.length === 0 ? (
-        <div className="flex flex-col items-center justify-center rounded-2xl border border-dashed border-border py-16 text-center">
-          <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-muted">
-            <Webhook size={22} className="text-muted-foreground" />
-          </div>
-          <h3 className="text-sm font-semibold">No webhooks configured</h3>
-          <p className="mt-1 text-xs text-muted-foreground">Add a webhook to receive real-time events for this form.</p>
-          <Button className="mt-4 gap-2" size="sm" onClick={() => setIsCreateOpen(true)}>
-            <Plus size={13} /> Add First Webhook
-          </Button>
-        </div>
-      ) : (
-        <div className="space-y-3">
-          {list.map((webhook) => (
-            <WebhookCard
-              key={webhook.id}
-              webhook={webhook}
-              onDelete={() => setDeleteTarget(webhook.id)}
-            />
-          ))}
-        </div>
-      )}
-
-      {/* Create Webhook Dialog */}
-      <Dialog open={isCreateOpen} onOpenChange={setIsCreateOpen}>
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle>Add Webhook</DialogTitle>
-            <DialogDescription>Configure a webhook endpoint to receive submission events for the selected form.</DialogDescription>
-          </DialogHeader>
-          <div className="space-y-4 py-2">
-            <div className="space-y-1.5">
-              <label className="text-sm font-medium">Webhook Name (optional)</label>
-              <Input
-                placeholder="e.g. Slack Notifications"
-                value={newName}
-                onChange={(e) => setNewName(e.target.value)}
-              />
-            </div>
-            <div className="space-y-1.5">
-              <label className="text-sm font-medium">Endpoint URL</label>
-              <Input
-                placeholder="https://your-server.com/webhook"
-                value={newUrl}
-                onChange={(e) => setNewUrl(e.target.value)}
-                type="url"
-                autoFocus
-              />
-            </div>
-          </div>
-          <DialogFooter>
-            <Button variant="ghost" onClick={() => setIsCreateOpen(false)}>Cancel</Button>
-            <Button onClick={handleCreate} disabled={!newUrl.trim() || createWebhook.isPending}>
-              {createWebhook.isPending ? 'Creating...' : 'Create Webhook'}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* Delete Dialog */}
-      <Dialog open={!!deleteTarget} onOpenChange={() => setDeleteTarget(null)}>
-        <DialogContent className="sm:max-w-sm">
-          <DialogHeader>
-            <DialogTitle>Delete Webhook</DialogTitle>
-            <DialogDescription>This will permanently delete the webhook and stop sending events to this endpoint.</DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button variant="ghost" onClick={() => setDeleteTarget(null)}>Cancel</Button>
-            <Button variant="destructive" onClick={async () => {
-              if (deleteTarget) { await deleteWebhook.mutateAsync(deleteTarget); setDeleteTarget(null); }
-            }} disabled={deleteWebhook.isPending}>
-              {deleteWebhook.isPending ? 'Deleting...' : 'Delete Webhook'}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-    </div>
+    <RoleGuard
+      require="webhook:manage"
+      forbiddenTitle="Webhooks are admin-only"
+      forbiddenDescription="Webhooks can forward every response to an external URL, so managing them requires the Admin role."
+    >
+      <IntegrationsContent />
+    </RoleGuard>
   );
 }
 
-function WebhookCard({ webhook, onDelete }: { webhook: any; onDelete: () => void }) {
-  const updatedAgo = webhook.updatedAt ? formatDistanceToNow(new Date(webhook.updatedAt), { addSuffix: true }) : '—';
+function IntegrationsContent() {
+  const [formId, setFormId] = useState('');
+  const [isCreateOpen, setIsCreateOpen] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<WebhookRecord | null>(null);
+  const [secretTarget, setSecretTarget] = useState<WebhookRecord | null>(null);
+  const [revealedSecret, setRevealedSecret] = useState<string | null>(null);
+  const [deliveriesFor, setDeliveriesFor] = useState<WebhookRecord | null>(null);
+
+  // Only published forms can fire webhooks, but drafts are still listed so a
+  // hook can be configured ahead of launch.
+  const forms = useForms({ page: 1, limit: 100, sort: 'updatedAt', direction: 'desc' });
+
+  const webhooks = useWebhooks(formId || undefined);
+  const createWebhook = useCreateWebhook(formId || undefined);
+  const deleteWebhook = useDeleteWebhook(formId || undefined);
+  const rotateSecret = useRotateWebhookSecret(formId || undefined);
+
+  const formOptions = (forms.data?.forms ?? []).map((form) => ({
+    value: form.id,
+    label: form.title,
+  }));
+
+  const columns: DataTableColumn<WebhookRecord>[] = [
+    {
+      id: 'url',
+      header: 'Endpoint',
+      isRowHeader: true,
+      className: 'max-w-0',
+      cell: (hook) => (
+        <div className="min-w-0">
+          {hook.name && <div className="truncate font-medium">{hook.name}</div>}
+          <div className="truncate font-mono text-xs text-muted-foreground">{hook.url}</div>
+        </div>
+      ),
+    },
+    {
+      id: "trigger",
+      header: "Fires on",
+      hideBelow: "md",
+      cell: () => (
+        <span className="rounded border border-border bg-muted/50 px-1.5 py-0.5 text-xs">
+          form.submitted
+        </span>
+      ),
+    },
+    {
+      id: "status",
+      header: 'Status',
+      width: 'w-32',
+      cell: (hook) => (
+        <span
+          title={
+            hook.isActive
+              ? undefined
+              : 'Deactivated — the endpoint failed repeatedly or resolved to a blocked address.'
+          }
+        >
+          <StatusBadge status={hook.isActive ? 'ACTIVE' : 'FAILED'} dot />
+        </span>
+      ),
+    },
+    {
+      id: "deliveries",
+      header: "Deliveries",
+      numeric: true,
+      width: "w-28",
+      hideBelow: "lg",
+      cell: (hook) => (hook._count?.deliveries ?? 0).toLocaleString(),
+    },
+    {
+      id: 'actions',
+      header: <span className="sr-only">Actions</span>,
+      width: 'w-56',
+      className: 'text-right',
+      headerClassName: 'text-right',
+      cell: (hook) => (
+        <div className="flex justify-end gap-1">
+          <Button variant="ghost" size="sm" onClick={() => setDeliveriesFor(hook)}>
+            Deliveries
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            aria-label="Rotate signing secret"
+            title="Rotate signing secret"
+            onClick={() => setSecretTarget(hook)}
+          >
+            <RefreshCw className="size-3.5" />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            aria-label="Delete webhook"
+            title="Delete webhook"
+            onClick={() => setDeleteTarget(hook)}
+            className="text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+          >
+            <Trash2 className="size-3.5" />
+          </Button>
+        </div>
+      ),
+    },
+  ];
+
   return (
-    <Card className="rounded-xl border border-border bg-card p-4 space-y-3 shadow-sm hover:shadow-md transition-shadow">
-      <div className="flex items-start justify-between gap-3">
-        <div className="flex items-center gap-2.5 min-w-0">
-          <div className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${webhook.isActive ? 'bg-emerald-500/10 text-emerald-600' : 'bg-muted text-muted-foreground'}`}>
-            <Webhook size={15} />
-          </div>
-          <div className="min-w-0">
-            {webhook.name && <p className="text-xs font-semibold text-muted-foreground mb-0.5">{webhook.name}</p>}
-            <p className="text-sm font-medium text-foreground truncate font-mono">{webhook.url}</p>
-            <p className="text-xs text-muted-foreground">Updated {updatedAgo}</p>
-          </div>
-        </div>
-        <div className="flex items-center gap-2 shrink-0">
-          <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider ${webhook.isActive ? 'bg-emerald-500/10 text-emerald-600' : 'bg-muted text-muted-foreground'}`}>
-            {webhook.isActive ? 'Active' : 'Inactive'}
-          </span>
-          <button onClick={onDelete} className="rounded-md p-1.5 text-muted-foreground hover:bg-red-100 hover:text-red-500 transition-colors">
-            <Trash2 size={14} />
-          </button>
-        </div>
+    <PageShell>
+      <PageHeader
+        title="Integrations"
+        description="Forward responses to your own services over signed HTTPS webhooks."
+        actions={
+          <Button
+            size="sm"
+            className="gap-2"
+            onClick={() => setIsCreateOpen(true)}
+            disabled={!formId}
+            title={!formId ? 'Choose a form first' : undefined}
+          >
+            <Plus className="size-4" /> Add webhook
+          </Button>
+        }
+      />
+
+      <Toolbar>
+        <FilterSelect
+          label="Form"
+          value={formId}
+          onChange={setFormId}
+          options={formOptions}
+          placeholder="Choose a form…"
+          className="min-w-64"
+        />
+      </Toolbar>
+
+      <div className="rounded-lg border border-border bg-muted/30 p-4 text-sm">
+        <p className="font-medium">How delivery works</p>
+        <ul className="mt-2 space-y-1 text-muted-foreground">
+          <li>
+            Each request carries an <code className="font-mono text-xs">X-Signature</code> header of
+            the form <code className="font-mono text-xs">t=&lt;timestamp&gt;,sha256=&lt;hmac&gt;</code>.
+            Verify it against your signing secret and reject stale timestamps.
+          </li>
+          <li>
+            Only public HTTPS endpoints are accepted. Loopback, private, link-local, and cloud
+            metadata addresses are rejected at save time and re-checked on every delivery.
+          </li>
+          <li>Redirects are not followed. Repeated failures deactivate the webhook.</li>
+        </ul>
       </div>
-    </Card>
+
+      {!formId ? (
+        <EmptyState
+          icon={Webhook}
+          title="Choose a form"
+          description="Webhooks are configured per form. Pick one above to see and manage its endpoints."
+        />
+      ) : (
+        <DataTable
+          caption="Webhooks for the selected form"
+          columns={columns}
+          data={webhooks.data}
+          getRowId={(hook) => hook.id}
+          isLoading={webhooks.isLoading}
+          error={webhooks.error}
+          onRetry={() => webhooks.refetch()}
+          empty={
+            <EmptyState
+              variant="inline"
+              icon={Webhook}
+              title="No webhooks for this form"
+              description="Add an endpoint to receive a signed POST whenever this form is submitted."
+              action={
+                <Button size="sm" className="gap-2" onClick={() => setIsCreateOpen(true)}>
+                  <Plus className="size-4" /> Add webhook
+                </Button>
+              }
+            />
+          }
+        />
+      )}
+
+      <CreateWebhookModal
+        open={isCreateOpen}
+        onOpenChange={setIsCreateOpen}
+        isPending={createWebhook.isPending}
+        onCreate={async (values) => {
+          try {
+            const created = await createWebhook.mutateAsync(values);
+            setIsCreateOpen(false);
+            // The secret is returned exactly once. Show it immediately or it is
+            // gone — reads never include it.
+            if (created?.secret) setRevealedSecret(created.secret);
+            toast.success('Webhook created');
+          } catch (err: any) {
+            toast.error(err?.message ?? 'Could not create this webhook');
+          }
+        }}
+      />
+
+      <Modal
+        open={!!revealedSecret}
+        onOpenChange={(open) => !open && setRevealedSecret(null)}
+        title="Save your signing secret"
+        description="This is the only time it will be shown. Store it in your receiving service to verify signatures."
+        footer={
+          <Button size="sm" onClick={() => setRevealedSecret(null)}>
+            I have saved it
+          </Button>
+        }
+      >
+        {revealedSecret && <CopyField value={revealedSecret} monospace />}
+      </Modal>
+
+      <ConfirmDialog
+        open={!!secretTarget}
+        onOpenChange={(open) => !open && setSecretTarget(null)}
+        title="Rotate signing secret"
+        description={
+          <>
+            A new secret is generated immediately and the old one stops working. Deliveries will
+            fail signature verification until you update your receiving service.
+          </>
+        }
+        confirmLabel="Rotate secret"
+        variant="default"
+        isPending={rotateSecret.isPending}
+        onConfirm={async () => {
+          if (!secretTarget) return;
+          try {
+            const result = await rotateSecret.mutateAsync(secretTarget.id);
+            setSecretTarget(null);
+            if (result?.secret) setRevealedSecret(result.secret);
+          } catch (err: any) {
+            toast.error(err?.message ?? 'Could not rotate the secret');
+          }
+        }}
+      />
+
+      <ConfirmDialog
+        open={!!deleteTarget}
+        onOpenChange={(open) => !open && setDeleteTarget(null)}
+        title="Delete webhook"
+        description={<>Deliveries to {deleteTarget?.url} will stop immediately.</>}
+        confirmLabel="Delete webhook"
+        isPending={deleteWebhook.isPending}
+        onConfirm={async () => {
+          if (!deleteTarget) return;
+          try {
+            await deleteWebhook.mutateAsync(deleteTarget.id);
+            toast.success('Webhook deleted');
+            setDeleteTarget(null);
+          } catch (err: any) {
+            toast.error(err?.message ?? 'Could not delete this webhook');
+          }
+        }}
+      />
+
+      <DeliveriesModal
+        formId={formId}
+        webhook={deliveriesFor}
+        onOpenChange={(open) => !open && setDeliveriesFor(null)}
+      />
+    </PageShell>
+  );
+}
+
+function CreateWebhookModal({
+  open,
+  onOpenChange,
+  onCreate,
+  isPending,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onCreate: (values: { url: string; name?: string }) => void;
+  isPending: boolean;
+}) {
+  const [url, setUrl] = useState('');
+  const [name, setName] = useState('');
+
+  React.useEffect(() => {
+    if (open) {
+      setUrl('');
+      setName('');
+    }
+  }, [open]);
+
+  // Mirror the API's rule so the user is told before the round-trip, not after.
+  const urlError = (() => {
+    if (!url.trim()) return null;
+    try {
+      const parsed = new URL(url.trim());
+      if (parsed.protocol !== 'https:') return 'The endpoint must use HTTPS.';
+      if (parsed.username || parsed.password) return 'The URL must not contain credentials.';
+      return null;
+    } catch {
+      return 'Enter a full URL, including https://';
+    }
+  })();
+
+  const valid = url.trim().length > 0 && !urlError;
+
+  return (
+    <Modal
+      open={open}
+      onOpenChange={onOpenChange}
+      title="Add a webhook"
+      description="We will POST a signed JSON payload to this endpoint."
+      footer={
+        <ModalActions
+          onCancel={() => onOpenChange(false)}
+          confirmLabel="Create webhook"
+          onConfirm={() => onCreate({ url: url.trim(), name: name.trim() || undefined })}
+          isPending={isPending}
+          disabled={!valid}
+        />
+      }
+    >
+      <div className="space-y-4">
+        <div className="space-y-1.5">
+          <Label htmlFor="webhook-url">Endpoint URL</Label>
+          <Input
+            id="webhook-url"
+            value={url}
+            onChange={(e) => setUrl(e.target.value)}
+            placeholder="https://api.example.com/hooks/forms"
+            autoFocus
+            aria-invalid={!!urlError}
+            aria-describedby={urlError ? 'webhook-url-error' : undefined}
+          />
+          {urlError && (
+            <p id="webhook-url-error" className="text-xs text-destructive">
+              {urlError}
+            </p>
+          )}
+        </div>
+
+        <div className="space-y-1.5">
+          <Label htmlFor="webhook-name">Label (optional)</Label>
+          <Input
+            id="webhook-name"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="Slack notifications"
+          />
+        </div>
+
+        {/* No event picker: FormWebhook has no per-hook event selection — every
+            webhook fires on submission. The previous checkbox group offered
+            four events and discarded the choice, because the API never accepted
+            an `events` field. */}
+        <p className="rounded-md border border-border bg-muted/40 p-3 text-xs text-muted-foreground">
+          This endpoint receives a POST for every response submitted to this form.
+        </p>
+      </div>
+    </Modal>
+  );
+}
+
+function DeliveriesModal({
+  formId,
+  webhook,
+  onOpenChange,
+}: {
+  formId: string;
+  webhook: WebhookRecord | null;
+  onOpenChange: (open: boolean) => void;
+}) {
+  const deliveries = useWebhookDeliveries(formId || undefined, webhook?.id);
+
+  const columns: DataTableColumn<NonNullable<typeof deliveries.data>[number]>[] = [
+    {
+      id: 'deliveredAt',
+      header: 'When',
+      width: 'w-40',
+      isRowHeader: true,
+      cell: (delivery) => <RelativeTime value={delivery.deliveredAt} />,
+    },
+    {
+      id: 'result',
+      header: 'Result',
+      width: 'w-36',
+      cell: (delivery) => (
+        <StatusBadge
+          status={delivery.success ? 'SUCCESS' : 'FAILED'}
+          // A null status code means the request never completed — DNS failure,
+          // timeout, or a destination the SSRF guard rejected at delivery time.
+          label={
+            delivery.statusCode
+              ? `${delivery.success ? 'Delivered' : 'Failed'} ${delivery.statusCode}`
+              : 'No response'
+          }
+          dot
+        />
+      ),
+    },
+    {
+      id: 'attempt',
+      header: 'Attempt',
+      numeric: true,
+      width: 'w-24',
+      hideBelow: 'sm',
+      cell: (delivery) => delivery.attempt,
+    },
+    {
+      id: 'responseBody',
+      header: 'Response',
+      className: 'max-w-0',
+      cell: (delivery) => (
+        <span
+          className="block truncate font-mono text-xs text-muted-foreground"
+          title={delivery.responseBody ?? ''}
+        >
+          {delivery.responseBody || '—'}
+        </span>
+      ),
+    },
+  ];
+
+  return (
+    <Modal
+      open={!!webhook}
+      onOpenChange={onOpenChange}
+      size="lg"
+      padded={false}
+      title="Recent deliveries"
+      description={webhook?.url}
+      footer={
+        <Button size="sm" onClick={() => onOpenChange(false)}>
+          Close
+        </Button>
+      }
+    >
+      <DataTable
+        caption="Webhook delivery history"
+        columns={columns}
+        data={deliveries.data}
+        getRowId={(delivery) => delivery.id}
+        isLoading={deliveries.isLoading}
+        error={deliveries.error}
+        onRetry={() => deliveries.refetch()}
+        skeletonRows={5}
+        className="rounded-none border-0 shadow-none"
+        empty={
+          <EmptyState
+            variant="inline"
+            icon={KeyRound}
+            title="No deliveries yet"
+            description="Delivery attempts appear here once this form receives a response."
+          />
+        }
+      />
+    </Modal>
   );
 }

@@ -1,34 +1,45 @@
-// Navigation configuration for all roles in the Form Builder platform
+// Sidebar navigation.
+//
+// Items declare the *permission* they need, not a role. That keeps this file in
+// step with the route guards (which check the same permissions), so a link can
+// no longer appear for someone whose page then refuses to render — the previous
+// role-array approach had exactly that drift: /integrations was listed for
+// EDITOR and ADMIN while its layout gated on a different set.
 
 import {
-  LayoutDashboard,
-  FileBox,
-  Layers,
   BarChart2,
-  Inbox,
-  BookTemplate,
-  Webhook,
-  Trash2,
-  Users,
-  Building2,
-  CreditCard,
-  ClipboardList,
-  Shield,
-  Globe,
-  User,
   Bell,
+  BookTemplate,
+  Building2,
+  ClipboardList,
+  CreditCard,
+  FileBox,
+  Globe,
+  Inbox,
+  Layers,
+  LayoutDashboard,
   Settings,
+  Shield,
+  Trash2,
+  User,
+  Users,
+  Webhook,
   type LucideIcon,
 } from 'lucide-react';
-import { ROLES, type Role } from './roles';
+import type { Permission } from './roles';
 
 export interface NavItem {
   title: string;
   href: string;
   icon: LucideIcon;
-  roles: Role[];
+  /** Every listed permission is required for the item to appear. */
+  permissions?: Permission[];
+  /** At least one of these is required. */
+  anyPermission?: Permission[];
   badge?: string;
   children?: NavItem[];
+  /** Match the active state on the exact path only (for index routes). */
+  exact?: boolean;
 }
 
 export interface NavGroup {
@@ -36,199 +47,135 @@ export interface NavGroup {
   items: NavItem[];
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Platform Navigation — VIEWER and above
-// ─────────────────────────────────────────────────────────────────────────────
-export const platformNav: NavGroup = {
-  title: 'Platform',
+export const workspaceNav: NavGroup = {
+  title: 'Workspace',
   items: [
     {
       title: 'Dashboard',
       href: '/dashboard',
       icon: LayoutDashboard,
-      roles: [ROLES.VIEWER, ROLES.EDITOR, ROLES.ADMIN],
+      permissions: ['form:view'],
+      exact: true,
     },
-    {
-      title: 'My Forms',
-      href: '/forms',
-      icon: FileBox,
-      roles: [ROLES.VIEWER, ROLES.EDITOR, ROLES.ADMIN],
-    },
-    {
-      title: 'Submissions',
-      href: '/submissions',
-      icon: Inbox,
-      roles: [ROLES.VIEWER, ROLES.EDITOR, ROLES.ADMIN],
-    },
-    {
-      title: 'Analytics',
-      href: '/analytics',
-      icon: BarChart2,
-      roles: [ROLES.VIEWER, ROLES.EDITOR, ROLES.ADMIN],
-    },
-    {
-      title: 'Templates',
-      href: '/templates',
-      icon: BookTemplate,
-      roles: [ROLES.VIEWER, ROLES.EDITOR, ROLES.ADMIN],
-    },
+    { title: 'Forms', href: '/forms', icon: FileBox, permissions: ['form:view'] },
+    { title: 'Responses', href: '/submissions', icon: Inbox, permissions: ['submission:view'] },
+    { title: 'Analytics', href: '/analytics', icon: BarChart2, permissions: ['analytics:view'] },
+    { title: 'Templates', href: '/templates', icon: BookTemplate, permissions: ['template:view'] },
   ],
 };
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Builder Navigation — EDITOR and above
-// ─────────────────────────────────────────────────────────────────────────────
-export const builderNav: NavGroup = {
-  title: 'Builder',
+export const buildNav: NavGroup = {
+  title: 'Build',
   items: [
-    {
-      title: 'Form Builder',
-      href: '/forms/builder',
-      icon: Layers,
-      roles: [ROLES.EDITOR, ROLES.ADMIN],
-    },
-    {
-      title: 'Integrations',
-      href: '/integrations',
-      icon: Webhook,
-      roles: [ROLES.EDITOR, ROLES.ADMIN],
-    },
-    {
-      title: 'Trash',
-      href: '/trash',
-      icon: Trash2,
-      roles: [ROLES.EDITOR, ROLES.ADMIN],
-    },
+    { title: 'Form builder', href: '/forms/builder', icon: Layers, permissions: ['form:create'] },
+    { title: 'Integrations', href: '/integrations', icon: Webhook, permissions: ['webhook:view'] },
+    { title: 'Trash', href: '/trash', icon: Trash2, permissions: ['form:restore'] },
   ],
 };
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Organization Navigation — ADMIN and above
-// ─────────────────────────────────────────────────────────────────────────────
 export const organizationNav: NavGroup = {
   title: 'Organization',
   items: [
-    {
-      title: 'Team',
-      href: '/team',
-      icon: Users,
-      roles: [ROLES.ADMIN],
-    },
+    { title: 'Team', href: '/team', icon: Users, permissions: ['member:view'] },
     {
       title: 'Settings',
       href: '/settings',
       icon: Settings,
-      roles: [ROLES.ADMIN],
+      permissions: ['org:manage'],
       children: [
-        {
-          title: 'Profile',
-          href: '/settings',
-          icon: User,
-          roles: [ROLES.ADMIN],
-        },
+        { title: 'General', href: '/settings', icon: Settings, permissions: ['org:manage'], exact: true },
         {
           title: 'Organization',
           href: '/settings/organization',
           icon: Building2,
-          roles: [ROLES.ADMIN],
+          permissions: ['org:manage'],
         },
         {
           title: 'Billing',
           href: '/settings/billing',
           icon: CreditCard,
-          roles: [ROLES.ADMIN],
+          permissions: ['billing:view'],
         },
       ],
     },
-    {
-      title: 'Audit Logs',
-      href: '/org-audit',
-      icon: ClipboardList,
-      roles: [ROLES.ADMIN],
-    },
+    { title: 'Audit log', href: '/org-audit', icon: ClipboardList, permissions: ['audit:view'] },
   ],
 };
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Super Admin Navigation — SUPER_ADMIN only
-// ─────────────────────────────────────────────────────────────────────────────
-export const superAdminNav: NavGroup = {
-  title: 'Super Admin',
+export const platformNav: NavGroup = {
+  title: 'Platform',
   items: [
     {
-      title: 'Platform Overview',
+      title: 'Overview',
       href: '/platform',
       icon: Globe,
-      roles: [ROLES.SUPER_ADMIN],
+      permissions: ['platform:access'],
+      exact: true,
     },
     {
       title: 'Organizations',
       href: '/platform/organizations',
       icon: Building2,
-      roles: [ROLES.SUPER_ADMIN],
+      permissions: ['platform:access'],
     },
+    { title: 'Users', href: '/platform/users', icon: Users, permissions: ['platform:access'] },
     {
-      title: 'Users',
-      href: '/platform/users',
-      icon: Users,
-      roles: [ROLES.SUPER_ADMIN],
-    },
-    {
-      title: 'Global Audit',
-      href: '/global-audit',
+      title: 'Audit logs',
+      href: '/platform/audit-logs',
       icon: Shield,
-      roles: [ROLES.SUPER_ADMIN],
+      permissions: ['platform:access'],
     },
   ],
 };
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Account Navigation — all roles
-// ─────────────────────────────────────────────────────────────────────────────
 export const accountNav: NavGroup = {
   title: 'Account',
   items: [
-    {
-      title: 'Profile',
-      href: '/profile',
-      icon: User,
-      roles: [ROLES.VIEWER, ROLES.EDITOR, ROLES.ADMIN, ROLES.SUPER_ADMIN],
-    },
-    {
-      title: 'Notifications',
-      href: '/notifications',
-      icon: Bell,
-      roles: [ROLES.VIEWER, ROLES.EDITOR, ROLES.ADMIN, ROLES.SUPER_ADMIN],
-    },
+    { title: 'Profile', href: '/profile', icon: User },
+    { title: 'Notifications', href: '/notifications', icon: Bell },
   ],
 };
 
-// All navigation groups in display order
 export const allNavGroups: NavGroup[] = [
-  platformNav,
-  builderNav,
+  workspaceNav,
+  buildNav,
   organizationNav,
-  superAdminNav,
+  platformNav,
   accountNav,
 ];
 
 /**
- * Filter navigation groups and items based on user role.
- * Items not accessible to the user's roles are hidden.
+ * Drop items the user cannot use, then drop groups left empty.
+ *
+ * Items with no permissions declared (Profile, Notifications) are always
+ * visible to a signed-in user.
  */
-export function filterNavForRole(groups: NavGroup[], userRoles: (Role | string | undefined)[]): NavGroup[] {
-  const validRoles = userRoles.filter(Boolean) as Role[];
-  if (validRoles.length === 0) return [];
+export function filterNavigation(
+  groups: NavGroup[],
+  can: (permission: Permission) => boolean,
+): NavGroup[] {
+  const allowed = (item: NavItem): boolean => {
+    if (item.permissions?.length && !item.permissions.every(can)) return false;
+    if (item.anyPermission?.length && !item.anyPermission.some(can)) return false;
+    return true;
+  };
 
   return groups
     .map((group) => ({
       ...group,
-      items: group.items
-        .filter((item) => item.roles.some((r) => validRoles.includes(r)))
-        .map((item) => ({
-          ...item,
-          children: item.children?.filter((child) => child.roles.some((r) => validRoles.includes(r))),
-        })),
+      items: group.items.filter(allowed).map((item) => ({
+        ...item,
+        children: item.children?.filter(allowed),
+      })),
     }))
     .filter((group) => group.items.length > 0);
+}
+
+/** Whether `href` should be highlighted for the current pathname. */
+export function isNavItemActive(item: NavItem, pathname: string): boolean {
+  if (item.exact) return pathname === item.href;
+  // `/forms` must not light up on `/forms/builder` when both are in the nav,
+  // and `/platform` must not light up on `/platform/users`.
+  if (pathname === item.href) return true;
+  return pathname.startsWith(`${item.href}/`);
 }
