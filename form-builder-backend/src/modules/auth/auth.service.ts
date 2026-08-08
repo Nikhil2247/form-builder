@@ -1,6 +1,7 @@
 import { Injectable, Logger, UnauthorizedException, ConflictException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { PrismaService } from '../../common/prisma/prisma.service';
+import { resolveActiveOrganization } from '../../common/tenancy/active-organization';
 import { userCredentialsSelect } from '../../common/prisma/selects';
 import * as argon2 from 'argon2';
 import * as crypto from 'crypto';
@@ -211,15 +212,16 @@ export class AuthService {
       // membership are needed to issue a token.
       select: {
         ...userCredentialsSelect,
+        lastActiveOrganizationId: true,
         memberships: {
           select: {
             organizationId: true,
             role: true,
+            joinedAt: true,
             organization: {
               select: { isActive: true, suspendedAt: true },
             },
           },
-          take: 1,
         },
       },
     });
@@ -232,10 +234,14 @@ export class AuthService {
       throw new UnauthorizedException('Invalid credentials');
     }
 
-    const membership = user.memberships[0];
+    const { active: membership, allSuspended } = resolveActiveOrganization(
+      user.memberships,
+      user.lastActiveOrganizationId,
+    );
 
-    // Check if org is suspended
-    if (membership?.organization && (!membership.organization.isActive || membership.organization.suspendedAt)) {
+    // Only refuse the login when every org is suspended — a user with one
+    // suspended workspace and one healthy one still has somewhere to land.
+    if (allSuspended) {
       throw new UnauthorizedException('Your organization has been suspended. Contact support.');
     }
 
@@ -273,8 +279,12 @@ export class AuthService {
       where: { id: payload.sub },
       include: {
         memberships: {
-          select: { organizationId: true, role: true },
-          take: 1,
+          select: {
+            organizationId: true,
+            role: true,
+            joinedAt: true,
+            organization: { select: { isActive: true, suspendedAt: true } },
+          },
         },
       },
     });
@@ -295,7 +305,10 @@ export class AuthService {
       throw new UnauthorizedException('Invalid MFA code');
     }
 
-    const membership = user.memberships[0];
+    const { active: membership } = resolveActiveOrganization(
+      user.memberships,
+      user.lastActiveOrganizationId,
+    );
     return this.generateTokens(
       user.id,
       user.email,
@@ -326,8 +339,12 @@ export class AuthService {
       where: { id: tokenRecord.userId },
       include: {
         memberships: {
-          select: { organizationId: true, role: true },
-          take: 1,
+          select: {
+            organizationId: true,
+            role: true,
+            joinedAt: true,
+            organization: { select: { isActive: true, suspendedAt: true } },
+          },
         },
       },
     });
@@ -336,7 +353,10 @@ export class AuthService {
       throw new UnauthorizedException('User not found');
     }
 
-    const membership = user.memberships[0];
+    const { active: membership } = resolveActiveOrganization(
+      user.memberships,
+      user.lastActiveOrganizationId,
+    );
 
     // Issue new tokens
     return this.generateTokens(
@@ -378,11 +398,13 @@ export class AuthService {
         // mfaEnabled: undefined and the UI could never show MFA as active.
         mfaEnabled: true,
         createdAt: true,
+        lastActiveOrganizationId: true,
         memberships: {
           select: {
             id: true,
             role: true,
             joinedAt: true,
+            organizationId: true,
             organization: {
               select: {
                 id: true,
@@ -390,10 +412,10 @@ export class AuthService {
                 slug: true,
                 logoUrl: true,
                 isActive: true,
+                suspendedAt: true,
               },
             },
           },
-          take: 1,
         },
       },
     });
@@ -402,20 +424,31 @@ export class AuthService {
       throw new UnauthorizedException('User not found');
     }
 
-    const membership = user.memberships[0];
+    const { active, usable } = resolveActiveOrganization(
+      user.memberships,
+      user.lastActiveOrganizationId,
+    );
+
+    const toWorkspace = (membership: (typeof user.memberships)[number]) => ({
+      id: membership.organization.id,
+      name: membership.organization.name,
+      slug: membership.organization.slug,
+      logoUrl: membership.organization.logoUrl,
+      isActive: membership.organization.isActive,
+      role: membership.role,
+      joinedAt: membership.joinedAt,
+    });
 
     return {
       ...user,
       memberships: undefined,
-      organization: membership ? {
-        id: membership.organization.id,
-        name: membership.organization.name,
-        slug: membership.organization.slug,
-        logoUrl: membership.organization.logoUrl,
-        isActive: membership.organization.isActive,
-        role: membership.role,
-        joinedAt: membership.joinedAt,
-      } : null,
+      lastActiveOrganizationId: undefined,
+      /// Every workspace this user can switch into, oldest membership first.
+      organizations: usable.map(toWorkspace),
+      activeOrganization: active ? toWorkspace(active) : null,
+      /// Retained under its original name so existing callers keep working
+      /// while the frontend migrates to `activeOrganization`.
+      organization: active ? toWorkspace(active) : null,
       mfaEnabled: user.mfaEnabled,
     };
   }

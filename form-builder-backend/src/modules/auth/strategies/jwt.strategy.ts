@@ -2,6 +2,7 @@ import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { PassportStrategy } from '@nestjs/passport';
 import { ExtractJwt, Strategy } from 'passport-jwt';
 import { PrismaService } from '../../../common/prisma/prisma.service';
+import { resolveActiveOrganization } from '../../../common/tenancy/active-organization';
 
 export interface JwtPayload {
   sub: string;
@@ -31,15 +32,16 @@ export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
         email: true,
         systemRole: true,
         deletedAt: true,
+        lastActiveOrganizationId: true,
         memberships: {
           select: {
             organizationId: true,
             role: true,
+            joinedAt: true,
             organization: {
               select: { isActive: true, suspendedAt: true },
             },
           },
-          take: 1, // User can only have one membership
         },
       },
     });
@@ -48,19 +50,26 @@ export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
       throw new UnauthorizedException('User not found or deleted.');
     }
 
-    const membership = user.memberships[0];
+    const { active, allSuspended } = resolveActiveOrganization(
+      user.memberships,
+      user.lastActiveOrganizationId,
+    );
 
-    // Check if org is active (not suspended)
-    if (membership?.organization && (!membership.organization.isActive || membership.organization.suspendedAt)) {
+    // Only lock the session out when EVERY org the user belongs to is
+    // suspended. Under multi-org, rejecting the token because one workspace is
+    // suspended would strand the user in their other, healthy workspaces.
+    if (allSuspended) {
       throw new UnauthorizedException('Your organization has been suspended. Contact support.');
     }
 
+    // organizationId/orgRole describe the default workspace only. Authorization
+    // for any org-scoped route comes from :orgId + OrgMemberGuard, never these.
     return {
       sub: user.id,
       email: user.email,
       systemRole: user.systemRole,
-      organizationId: membership?.organizationId ?? undefined,
-      orgRole: membership?.role ?? undefined,
+      organizationId: active?.organizationId ?? undefined,
+      orgRole: active?.role ?? undefined,
     };
   }
 }

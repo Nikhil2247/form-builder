@@ -1,12 +1,29 @@
 import { Injectable, ExecutionContext, UnauthorizedException } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
+import { Reflector } from '@nestjs/core';
+import { Observable } from 'rxjs';
 import { AppLogger } from '../logger/app-logger.service';
+import { IS_PUBLIC_KEY } from '../decorators/public.decorator';
 
 @Injectable()
 export class JwtAuthGuard extends AuthGuard('jwt') {
-  constructor(private readonly logger: AppLogger) {
+  constructor(
+    private readonly logger: AppLogger,
+    private readonly reflector: Reflector,
+  ) {
     super();
     this.logger.setContext(JwtAuthGuard.name);
+  }
+
+  canActivate(context: ExecutionContext): boolean | Promise<boolean> | Observable<boolean> {
+    // getAllAndOverride would also consult the controller class. Read the
+    // handler alone, so @Public() can never be hoisted to a whole controller
+    // and quietly unauthenticate every route on it.
+    const isPublic = this.reflector.get<boolean | undefined>(IS_PUBLIC_KEY, context.getHandler());
+
+    if (isPublic) return true;
+
+    return super.canActivate(context);
   }
 
   handleRequest(err: any, user: any, info: any, context: ExecutionContext) {

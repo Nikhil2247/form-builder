@@ -133,8 +133,12 @@ export class FormsService {
    * Create a new form from an existing template.
    */
   async createFromTemplate(orgId: string, createdById: string, templateId: string) {
-    const template = await this.prisma.reader.formTemplate.findUnique({
-      where: { id: templateId }
+    // `isPublic` must be part of the lookup, not an afterthought: templates are
+    // global rows with no organizationId, so a bare findUnique let any editor
+    // clone a private template's full formData — and bump its usageCount — by
+    // guessing an id. Mirrors the same filter in TemplatesService.getTemplateById.
+    const template = await this.prisma.reader.formTemplate.findFirst({
+      where: { id: templateId, isPublic: true },
     });
     if (!template) throw new NotFoundException('Template not found');
 

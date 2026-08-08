@@ -11,6 +11,8 @@ import { OrgMemberGuard } from '../../common/guards/org-member.guard';
 import { RoleGuard } from '../../common/guards/role.guard';
 import { RequiredRole } from '../../common/decorators/roles.decorator';
 import { OrgId } from '../../common/decorators/org-id.decorator';
+import { Public } from '../../common/decorators/public.decorator';
+import { Throttle } from '@nestjs/throttler';
 import { PaginationQueryDto } from '../../common/pagination/pagination-query.dto';
 import { AuditLogQueryDto } from '../../common/pagination/audit-query.dto';
 import { parsePagination } from '../../common/pagination/pagination';
@@ -35,13 +37,39 @@ export class OrganizationsController {
   // ════════════════════════════════════════════════════════════════════════════
 
   /**
-   * GET /organizations/me — Get the current user's organization.
-   * No orgId required since users belong to exactly one org.
+   * GET /organizations — Every workspace the caller belongs to.
+   * Backs the org switcher; also reports which one is currently active.
+   */
+  @Get()
+  async listMyOrganizations(@Req() req: Request) {
+    const userId = (req.user as any).sub;
+    return this.orgsService.listMyOrganizations(userId);
+  }
+
+  /**
+   * GET /organizations/me — The caller's currently-active organization.
+   *
+   * Declared before :orgId so Nest does not match "me" as an org id.
    */
   @Get('me')
   async getMyOrganization(@Req() req: Request) {
     const userId = (req.user as any).sub;
     return this.orgsService.getMyOrganization(userId);
+  }
+
+  /**
+   * POST /organizations/:orgId/activate — Switch the active workspace.
+   *
+   * Guarded like every other :orgId route. The guard is not what makes this
+   * safe (the service re-checks membership, and nothing is authorized off the
+   * stored pointer) — it is here so the rule "every :orgId route proves
+   * membership" holds without exception.
+   */
+  @Post(':orgId/activate')
+  @UseGuards(OrgMemberGuard)
+  async setActiveOrganization(@OrgId() orgId: string, @Req() req: Request) {
+    const userId = (req.user as any).sub;
+    return this.orgsService.setActiveOrganization(userId, orgId);
   }
 
   /**
@@ -167,6 +195,20 @@ export class OrganizationsController {
     @Param('invitationId') invitationId: string,
   ) {
     return this.orgsService.revokeInvitation(orgId, invitationId);
+  }
+
+  /**
+   * GET /organizations/invitations/:token — Preview an invitation.
+   *
+   * Unauthenticated: the recipient may not have an account yet, and the accept
+   * screen has to be able to name the organization and role before they sign
+   * up. Returns display fields only. The token is the secret.
+   */
+  @Public()
+  @Get('invitations/:token')
+  @Throttle({ default: { limit: 20, ttl: 60_000 } })
+  async previewInvitation(@Param('token') token: string) {
+    return this.orgsService.previewInvitation(token);
   }
 
   /**

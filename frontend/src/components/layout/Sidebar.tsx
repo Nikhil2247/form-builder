@@ -11,6 +11,7 @@ import { useUser } from '@/hooks/use-auth';
 import { useFilteredNavigation } from '@/hooks/use-filtered-navigation';
 import { isNavItemActive, type NavGroup, type NavItem } from '@/config/navigation';
 import { StatusBadge } from '@/components/shared/status-badge';
+import { OrgSwitcher } from '@/components/layout/OrgSwitcher';
 
 export function Sidebar() {
   const pathname = usePathname();
@@ -68,12 +69,6 @@ export function Sidebar() {
               <span className="block truncate text-sm font-semibold leading-tight">
                 FormBuilder
               </span>
-              {/* The active organization belongs in the chrome — a user with
-                  access to more than one workspace otherwise has no way to tell
-                  which one they are looking at. */}
-              <span className="block truncate text-xs leading-tight text-muted-foreground">
-                {org?.name ?? 'No organization'}
-              </span>
             </span>
           </Link>
 
@@ -96,6 +91,14 @@ export function Sidebar() {
           >
             <X className="size-4" strokeWidth={1.5} />
           </button>
+        </div>
+
+        {/* ── Workspace ─────────────────────────────────────────────────────
+            Its own row rather than nested under the brand link: a dropdown
+            trigger inside an anchor is both an accessibility violation and
+            ambiguous to click. */}
+        <div className="shrink-0 border-b border-sidebar-border py-1">
+          <OrgSwitcher isCollapsed={isCollapsed} />
         </div>
 
         {/* ── Navigation ────────────────────────────────────────────────── */}

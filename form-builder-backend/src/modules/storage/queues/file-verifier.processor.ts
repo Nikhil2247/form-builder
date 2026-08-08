@@ -49,7 +49,20 @@ export class FileVerifierProcessor extends WorkerHost {
       return;
     }
 
-    if (file.status === 'VERIFIED') return; // Idempotent — job retried after success.
+    if (file.status === 'VERIFIED') {
+      // Already verified — but verification and ownership arrive on different
+      // jobs now. The presign-scheduled job knows the bytes landed; only the
+      // submission-triggered job knows which submission claims them. Returning
+      // unconditionally here would strand the file with submissionId = NULL,
+      // which is what breaks the download path and the retention sweep.
+      if (submissionId && !file.submissionId) {
+        await this.prisma.writer.formSubmissionFile.updateMany({
+          where: { id: fileId, submissionId: null },
+          data: { submissionId },
+        });
+      }
+      return;
+    }
 
     const storage = createStorageClient();
 
@@ -112,16 +125,36 @@ export class FileVerifierProcessor extends WorkerHost {
     // Both in one transaction so usage can never drift from verified files.
     const orgId = this.orgIdFromObjectKey(file.objectKey);
 
+    // Two jobs can legitimately target the same file — one scheduled at presign
+    // time, one when a submission references it. The early VERIFIED check above
+    // is not enough on its own: both can read "not yet verified" and then both
+    // increment, permanently inflating the org's usage.
+    //
+    // updateMany with the status in the WHERE clause makes the transition the
+    // lock. Exactly one job gets count === 1; the loser charges nothing.
     await this.prisma.writer.$transaction(async (tx: any) => {
-      await tx.formSubmissionFile.update({
-        where: { id: fileId },
+      const { count } = await tx.formSubmissionFile.updateMany({
+        where: { id: fileId, status: { not: 'VERIFIED' } },
         data: {
           status: 'VERIFIED',
           verifiedAt: new Date(),
           sizeBytes: actualSize,
-          ...(submissionId ? { submissionId } : {}),
         },
       });
+
+      // Ownership is recorded regardless of who won the verify race — losing
+      // the race must not cost the file its submission link.
+      if (submissionId) {
+        await tx.formSubmissionFile.updateMany({
+          where: { id: fileId, submissionId: null },
+          data: { submissionId },
+        });
+      }
+
+      if (count === 0) {
+        this.logger.debug(`File ${fileId} already verified by a concurrent job.`);
+        return;
+      }
 
       if (orgId) {
         await tx.organization.update({

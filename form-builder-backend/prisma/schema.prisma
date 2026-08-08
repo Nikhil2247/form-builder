@@ -273,10 +273,16 @@ model Organization {
 
 /// Joins a User to an Organization with a specific role.
 ///
-/// SINGLE-ORG CONSTRAINT:
-///  A user can belong to exactly ONE organization at a time.
-///  This is enforced by the @@unique([userId]) constraint below.
-///  If a user needs to switch orgs, they must leave their current org first.
+/// MULTI-ORG:
+///  A user may belong to any number of organizations, with a different role in
+///  each — the agency/consultant/contractor case. Only the (organizationId,
+///  userId) pair is unique; there is deliberately no unique constraint on
+///  userId alone.
+///
+///  Which org a session is "in" is NOT a property of this table: it is
+///  User.lastActiveOrganizationId, and every org-scoped route takes :orgId from
+///  the URL and re-checks membership via OrgMemberGuard. The active org is a UI
+///  convenience, never an authorization decision.
 ///
 /// ROLE HIERARCHY (enforced at guard level, not schema level):
 ///  ADMIN > EDITOR > VIEWER
@@ -299,8 +305,8 @@ model OrganizationMember {
 
   // One membership per user per org (standard many-to-many guard)
   @@unique([organizationId, userId])
-  // SINGLE-ORG ENFORCEMENT: A user can only have one membership total
-  @@unique([userId])
+  // Lists every org for a user — drives the org switcher and /organizations.
+  @@index([userId])
   @@index([organizationId])
   @@map("organization_members")
 }
@@ -385,6 +391,15 @@ model User {
   /// USER = standard user (org access via OrganizationMember).
   /// SUPER_ADMIN = platform administrator with global access.
   systemRole    SystemRole @default(USER) @map("system_role")
+
+  // ── Active Organization ────────────────────────────────────────────────────
+  /// The org this user last worked in, used to pick a default workspace on
+  /// login and to restore context across devices. A pointer only — never an
+  /// authorization input. It may reference an org the user has since been
+  /// removed from, so every read must re-verify membership and fall back.
+  /// Intentionally not a foreign key: an org deletion should blank this
+  /// lazily rather than cascade into the user row.
+  lastActiveOrganizationId String? @map("last_active_organization_id") @db.Uuid
 
   // ── Storage Preferences ────────────────────────────────────────────────────
   // NULL = inherit global STORAGE_PROVIDER env var (default: MINIO)

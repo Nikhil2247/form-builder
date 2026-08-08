@@ -15,6 +15,7 @@ import {
   auditLogSelect,
   organizationDetailSelect,
 } from '../../common/prisma/selects';
+import { resolveActiveOrganization } from '../../common/tenancy/active-organization';
 
 @Injectable()
 export class OrganizationsService {
@@ -39,11 +40,49 @@ export class OrganizationsService {
   // ... (keeping other methods as they are)
 
   /**
-   * Get the organization for the current user.
-   * Users belong to exactly one org.
+   * Every organization the current user belongs to. Drives the org switcher.
+   */
+  async listMyOrganizations(userId: string) {
+    const memberships = await this.prisma.reader.organizationMember.findMany({
+      where: { userId },
+      include: {
+        organization: {
+          include: {
+            _count: { select: { members: true, forms: true } },
+          },
+        },
+      },
+    });
+
+    const user = await this.prisma.reader.user.findUnique({
+      where: { id: userId },
+      select: { lastActiveOrganizationId: true },
+    });
+
+    const { active, usable } = resolveActiveOrganization(
+      memberships,
+      user?.lastActiveOrganizationId,
+    );
+
+    return {
+      organizations: usable.map((membership) => ({
+        ...membership.organization,
+        myRole: membership.role,
+        joinedAt: membership.joinedAt,
+        isActive: membership.organizationId === active?.organizationId,
+      })),
+      activeOrganizationId: active?.organizationId ?? null,
+    };
+  }
+
+  /**
+   * The user's currently-active organization.
+   *
+   * Kept for callers that want a single org rather than the full list. The
+   * choice of "which one" is User.lastActiveOrganizationId, not row order.
    */
   async getMyOrganization(userId: string) {
-    const membership = await this.prisma.reader.organizationMember.findUnique({
+    const memberships = await this.prisma.reader.organizationMember.findMany({
       where: { userId },
       include: {
         organization: {
@@ -59,12 +98,55 @@ export class OrganizationsService {
       },
     });
 
-    if (!membership) {
+    const user = await this.prisma.reader.user.findUnique({
+      where: { id: userId },
+      select: { lastActiveOrganizationId: true },
+    });
+
+    const { active } = resolveActiveOrganization(memberships, user?.lastActiveOrganizationId);
+
+    if (!active) {
       throw new NotFoundException('You are not a member of any organization.');
     }
 
     return {
-      ...membership.organization,
+      ...active.organization,
+      myRole: active.role,
+    };
+  }
+
+  /**
+   * Switch the user's active workspace.
+   *
+   * Purely a UI preference: it changes which org the dashboard opens in and
+   * nothing else. Membership is still re-checked per request by OrgMemberGuard,
+   * so this cannot be used to gain access — but it is verified here anyway so
+   * the pointer can never reference an org the user does not belong to.
+   */
+  async setActiveOrganization(userId: string, orgId: string) {
+    const membership = await this.prisma.reader.organizationMember.findUnique({
+      where: { organizationId_userId: { organizationId: orgId, userId } },
+      include: {
+        organization: { select: { id: true, name: true, isActive: true, suspendedAt: true } },
+      },
+    });
+
+    if (!membership) {
+      throw new NotFoundException('You are not a member of this organization.');
+    }
+
+    if (!membership.organization.isActive || membership.organization.suspendedAt) {
+      throw new BadRequestException('This organization has been suspended.');
+    }
+
+    await this.prisma.writer.user.update({
+      where: { id: userId },
+      data: { lastActiveOrganizationId: orgId },
+    });
+
+    return {
+      activeOrganizationId: orgId,
+      name: membership.organization.name,
       myRole: membership.role,
     };
   }
@@ -239,15 +321,17 @@ export class OrganizationsService {
     });
 
     if (existingUser) {
+      // Only membership in THIS org blocks the invite. Belonging to other
+      // organizations is expected under multi-org — and reporting it would
+      // leak one tenant's membership roster to another.
       const existingMembership = await this.prisma.reader.organizationMember.findUnique({
-        where: { userId: existingUser.id },
+        where: {
+          organizationId_userId: { organizationId: orgId, userId: existingUser.id },
+        },
       });
 
       if (existingMembership) {
-        if (existingMembership.organizationId === orgId) {
-          throw new ConflictException('This user is already a member of your organization.');
-        }
-        throw new ConflictException('This user already belongs to another organization.');
+        throw new ConflictException('This user is already a member of your organization.');
       }
     }
 
@@ -315,6 +399,54 @@ export class OrganizationsService {
   }
 
   /**
+   * Read an invitation without consuming it, so the accept screen can name the
+   * organization and role the user is agreeing to.
+   *
+   * Unauthenticated by necessity — the recipient may not have an account yet,
+   * and the link has to be meaningful before they sign up. The token is the
+   * secret: holding it already implies the right to see these fields, and
+   * nothing here is more sensitive than what the invite email said. Returns
+   * only display data — never the member roster or org settings.
+   */
+  async previewInvitation(rawToken: string) {
+    const hashedToken = crypto.createHash('sha256').update(rawToken).digest('hex');
+
+    const invitation = await this.prisma.reader.organizationInvitation.findUnique({
+      where: { token: hashedToken },
+      select: {
+        email: true,
+        role: true,
+        status: true,
+        expiresAt: true,
+        organization: { select: { name: true, logoUrl: true, isActive: true } },
+        invitedBy: { select: { firstName: true, lastName: true } },
+      },
+    });
+
+    if (!invitation) {
+      throw new NotFoundException('Invalid invitation link.');
+    }
+
+    const isExpired = invitation.expiresAt < new Date();
+
+    return {
+      email: invitation.email,
+      role: invitation.role,
+      organizationName: invitation.organization.name,
+      organizationLogoUrl: invitation.organization.logoUrl,
+      invitedByName: invitation.invitedBy
+        ? `${invitation.invitedBy.firstName} ${invitation.invitedBy.lastName}`.trim()
+        : null,
+      expiresAt: invitation.expiresAt,
+      // Pre-computed so the client renders one honest state rather than
+      // re-deriving validity from three fields and getting it subtly wrong.
+      isAcceptable:
+        invitation.status === 'PENDING' && !isExpired && invitation.organization.isActive,
+      status: isExpired && invitation.status === 'PENDING' ? 'EXPIRED' : invitation.status,
+    };
+  }
+
+  /**
    * Accept an invitation using the raw token.
    * Creates the OrganizationMember record.
    */
@@ -351,13 +483,16 @@ export class OrganizationsService {
       throw new BadRequestException('This organization is no longer active.');
     }
 
-    // Check if user already belongs to an org
+    // Joining additional organizations is the normal case now — only a
+    // duplicate membership in THIS org is a conflict.
     const existingMembership = await this.prisma.reader.organizationMember.findUnique({
-      where: { userId },
+      where: {
+        organizationId_userId: { organizationId: invitation.organizationId, userId },
+      },
     });
 
     if (existingMembership) {
-      throw new ConflictException('You already belong to an organization. Leave your current org first.');
+      throw new ConflictException('You are already a member of this organization.');
     }
 
     // Transaction: create membership + update invitation
@@ -374,6 +509,14 @@ export class OrganizationsService {
       await tx.organizationInvitation.update({
         where: { id: invitation.id },
         data: { status: 'ACCEPTED', acceptedAt: new Date() },
+      });
+
+      // Drop the user into the workspace they just joined — accepting an
+      // invite and then having to hunt for the new org in a switcher is a
+      // confusing first impression.
+      await tx.user.update({
+        where: { id: userId },
+        data: { lastActiveOrganizationId: invitation.organizationId },
       });
     });
 

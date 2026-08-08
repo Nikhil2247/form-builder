@@ -30,11 +30,20 @@ export interface ActiveOrganization {
   slug: string;
   role: string;
   status?: string;
+  logoUrl?: string | null;
 }
 
 export interface UserSession {
   user: User;
   activeOrganization: ActiveOrganization | null;
+  /**
+   * Every workspace this user belongs to, including the active one.
+   *
+   * A user can hold a different role in each, so `activeOrganization.role` is
+   * only ever the role for the *current* workspace — never a property of the
+   * user. Anything rendering permissions must re-read it after a switch.
+   */
+  organizations: ActiveOrganization[];
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -72,7 +81,8 @@ export function useUser() {
             emailVerified: u.emailVerified ?? false,
             avatarUrl: u.avatarUrl ?? null,
           },
-          activeOrganization: u.organization ?? null,
+          activeOrganization: u.activeOrganization ?? u.organization ?? null,
+          organizations: u.organizations ?? (u.organization ? [u.organization] : []),
         } satisfies UserSession;
       } catch {
         return null;
@@ -89,6 +99,40 @@ export function useUser() {
 export function useOrgId(): string | undefined {
   const { data } = useUser();
   return data?.activeOrganization?.id;
+}
+
+export interface SwitchOrganizationResult {
+  activeOrganizationId: string;
+  name: string;
+  myRole: string;
+}
+
+/** Every workspace the user can switch into. Empty until the session loads. */
+export function useOrganizations(): ActiveOrganization[] {
+  const { data } = useUser();
+  return data?.organizations ?? [];
+}
+
+/**
+ * Switch the active workspace.
+ *
+ * Every cached query is dropped on success, not just the session. Org-scoped
+ * queries key on orgId and so would refetch anyway, but anything keyed without
+ * it would otherwise keep showing the previous tenant's data after the switch —
+ * the one bug in this feature that looks exactly like a data leak.
+ */
+export function useSwitchOrganization() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (orgId: string) =>
+      unwrap<SwitchOrganizationResult>(
+        await fetchApi(`/organizations/${orgId}/activate`, { method: 'POST' }),
+      ),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries();
+    },
+  });
 }
 
 /**

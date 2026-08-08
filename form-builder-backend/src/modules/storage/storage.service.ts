@@ -7,8 +7,11 @@ import {
 } from '@nestjs/common';
 import { PutObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
+import { InjectQueue } from '@nestjs/bullmq';
+import { Queue } from 'bullmq';
 import { createStorageClient } from '../../config/storage.config';
 import { PrismaService } from '../../common/prisma/prisma.service';
+import { QUEUE_NAMES } from '../../config/bullmq.config';
 import { nanoid } from 'nanoid';
 import * as path from 'path';
 
@@ -52,7 +55,10 @@ const BLOCKED_EXTENSIONS = new Set([
 export class StorageService {
   private readonly logger = new Logger(StorageService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    @InjectQueue(QUEUE_NAMES.FILE_VERIFY) private readonly fileVerifyQueue: Queue,
+  ) {}
 
   async generatePresignedUrl(
     formId: string,
@@ -150,7 +156,28 @@ export class StorageService {
     }
 
     // ── Storage quota ───────────────────────────────────────────────────────
-    const projected = form.organization.storageUsedBytes + BigInt(Math.floor(fileSizeBytes));
+    // storageUsedBytes only counts VERIFIED files, and verification happens
+    // minutes after the URL is issued. Checking it alone lets an unauthenticated
+    // caller mint an unbounded number of presigned URLs inside that window —
+    // every one of them passing a quota that has not yet moved.
+    //
+    // So reserve the bytes that are already promised but not yet counted. The
+    // org is encoded in the object key (uploads/org_{orgId}/...), which is the
+    // only org linkage FormSubmissionFile has.
+    const inFlight = await this.prisma.reader.formSubmissionFile.aggregate({
+      _sum: { sizeBytes: true },
+      where: {
+        status: 'PENDING_UPLOAD',
+        objectKey: { startsWith: `uploads/org_${form.organizationId}/` },
+        // Expired reservations are dead weight — the URL can no longer be used.
+        expiresAt: { gt: new Date() },
+      },
+    });
+
+    const reserved = inFlight._sum.sizeBytes ?? 0n;
+    const projected =
+      form.organization.storageUsedBytes + reserved + BigInt(Math.floor(fileSizeBytes));
+
     if (projected > form.organization.storageQuotaBytes) {
       throw new ForbiddenException('Organization storage quota exceeded.');
     }
@@ -199,6 +226,29 @@ export class StorageService {
         expiresAt,
       },
     });
+
+    // ── Schedule reconciliation ─────────────────────────────────────────────
+    // SubmissionProcessor also enqueues a verify job, but only for files that a
+    // submission actually references. A file uploaded and then abandoned would
+    // otherwise sit at PENDING_UPLOAD forever: never verified, never counted
+    // against the quota, never reaped — which is precisely what makes an
+    // unauthenticated upload endpoint an unbounded storage sink.
+    //
+    // Firing after the URL expires means the outcome is final: either the
+    // object is there (verify, charge the quota) or it never arrived (mark
+    // DELETED). The processor is idempotent, so the submission-triggered job
+    // and this one cannot double-charge.
+    await this.fileVerifyQueue.add(
+      'verify-file',
+      { fileId: dbRecord.id },
+      {
+        delay: (ttl + 60) * 1000,
+        jobId: `presign-verify:${dbRecord.id}`,
+        removeOnComplete: true,
+        attempts: 3,
+        backoff: { type: 'exponential', delay: 30_000 },
+      },
+    );
 
     return {
       uploadUrl: url,
