@@ -265,6 +265,10 @@ model Organization {
   apiKeys             ApiKey[]
   auditLogs           AuditLog[]
   integrationConfigs  IntegrationConfig[]
+  subjectTypes        SubjectType[]
+  subjects            Subject[]
+  formApps            FormApp[]
+  featureFlags        OrganizationFeatureFlag[]
 
   @@index([slug])
   @@index([isActive])
@@ -627,6 +631,17 @@ model Form {
   pagesJson     Json? @map("pages_json") @db.JsonB
   questionsJson Json? @map("questions_json") @db.JsonB
   logicJson     Json? @map("logic_json") @db.JsonB
+  /// Draft rule set: calculated fields, multi-condition visibility, cross-field
+  /// validation, conditional requirement. An array of FormRule (see
+  /// common/rules/ast.ts). Compiled and frozen into FormVersion on publish.
+  rulesJson     Json? @map("rules_json") @db.JsonB
+
+  // ── Subject binding (optional) ─────────────────────────────────────────────
+  /// Which kind of record this form belongs to, if any. NULL for standalone
+  /// forms — which is every form that existed before subjects were introduced.
+  subjectTypeId String?         @map("subject_type_id") @db.Uuid
+  /// Whether submitting creates a subject or adds to an existing one.
+  subjectRole   FormSubjectRole @default(NONE) @map("subject_role")
 
   // ── Email Notifications ────────────────────────────────────────────────────
   // JSON array of email addresses to notify on each new submission.
@@ -640,6 +655,7 @@ model Form {
 
   // Relations
   organization Organization     @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  subjectType  SubjectType?     @relation(fields: [subjectTypeId], references: [id], onDelete: SetNull)
   createdBy    User             @relation("FormCreator", fields: [createdById], references: [id], onDelete: Restrict)
   versions     FormVersion[]
   submissions  FormSubmission[]
@@ -680,6 +696,18 @@ model FormVersion {
   questionsJson Json @map("questions_json") @db.JsonB
   logicJson     Json @map("logic_json") @db.JsonB
   themeJson     Json @map("theme_json") @db.JsonB
+
+  /// The authored rules, exactly as published.
+  rulesJson     Json  @default("[]") @map("rules_json") @db.JsonB
+  /// The CompiledPlan produced from rulesJson at publish time: calculations in
+  /// dependency order, visibility/require/validate buckets, and the list of
+  /// cross-form references to batch-resolve.
+  ///
+  /// Derived data, stored deliberately. Compilation validates and topologically
+  /// sorts, so caching it here means the submit path only ever interprets — and
+  /// it records precisely what was checked at publish, which a recompile from a
+  /// later code version would not reproduce.
+  compiledRules Json  @default("{}") @map("compiled_rules") @db.JsonB
 
   // When this version was snapshotted and made active.
   publishedAt DateTime @default(now()) @map("published_at")
@@ -753,6 +781,18 @@ model FormSubmission {
   // See ANSWER PAYLOAD SHAPE in the doc comment above.
   answers Json @db.JsonB
 
+  // ── Denormalised tenant + subject ──────────────────────────────────────────
+  /// Copied from the form. Recommended by the platform audit long before
+  /// subjects existed: every org-scoped submission query (list, count, export,
+  /// analytics) currently joins through `forms` to reach the tenant, and
+  /// partitioning needs the column present. Subject timelines make it
+  /// unavoidable, so it lands here.
+  ///
+  /// Nullable only so the backfill can run online; treat it as required.
+  organizationId String? @map("organization_id") @db.Uuid
+  /// The record this submission belongs to. NULL for standalone forms.
+  subjectId      String? @map("subject_id") @db.Uuid
+
   status       SubmissionStatus @default(SUBMITTED)
   // submittedAt = timestamp the API received the request (used in analytics & display).
   submittedAt  DateTime         @default(now()) @map("submitted_at")
@@ -763,6 +803,7 @@ model FormSubmission {
   form        Form                 @relation(fields: [formId], references: [id], onDelete: Cascade)
   formVersion FormVersion          @relation(fields: [formVersionId], references: [id], onDelete: Restrict)
   respondent  User?                @relation(fields: [respondentId], references: [id], onDelete: SetNull)
+  subject     Subject?             @relation(fields: [subjectId], references: [id], onDelete: SetNull)
   files       FormSubmissionFile[]
 
   // ── Critical Performance Indexes ─────────────────────────────────────────
@@ -770,6 +811,13 @@ model FormSubmission {
   @@index([formId, status])                  // Filter SUBMITTED vs FLAGGED_SPAM
   @@index([formVersionId])                   // Version-scoped analytics queries
   @@index([respondentId])                    // All submissions by a logged-in user
+  // The subject timeline: every entry for one record, newest first.
+  @@index([subjectId, submittedAt(sort: Desc)])
+  // Org-scoped listing without joining through `forms`, and the shape a
+  // partitioned table will need.
+  @@index([organizationId, submittedAt(sort: Desc)])
+  // Resolving a cross-form reference: "this subject's latest answer to form X".
+  @@index([subjectId, formId, submittedAt(sort: Desc)])
   @@map("form_submissions")
 }
 
@@ -1136,4 +1184,172 @@ model FormDraft {
   @@unique([formId, fingerprint])
   @@index([formId, updatedAt])
   @@map("form_drafts")
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SUBJECTS — the longitudinal record
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// What role a form plays for a subject type.
+enum FormSubjectRole {
+  /// Not linked to any subject. Every pre-existing form is this.
+  NONE
+  /// Submitting this form creates a Subject.
+  REGISTERS
+  /// Submitting this form adds an entry to an existing Subject.
+  ATTACHES
+}
+
+/// A kind of thing an organization keeps records about — "Patient",
+/// "Household", "Farm", "Vehicle".
+///
+/// Deliberately shallow. Avni layers Programs and Encounter Types above this;
+/// we stop here, because "a form that creates a record, and other forms that
+/// add to it" covers the data-entry cases without an enrolment state machine.
+model SubjectType {
+  id             String  @id @default(uuid()) @db.Uuid
+  organizationId String  @map("organization_id") @db.Uuid
+  name           String  @db.VarChar(100)
+  slug           String  @db.VarChar(60)
+  /// Optional icon/emoji for the app switcher.
+  icon           String? @db.VarChar(16)
+
+  /// The form whose submission creates a subject of this type. Nullable so a
+  /// type can be defined before its registration form is built.
+  registrationFormId String? @map("registration_form_id") @db.Uuid
+
+  /// Which question keys are promoted onto Subject.
+  /// { displayName: ["first_name","last_name"], attributes: ["phone","village"],
+  ///   externalId: "patient_number" }
+  /// Keys, not question ids: a form can be re-published with new ids for the
+  /// same logical field, and this config should survive that.
+  identityConfig Json @default("{}") @map("identity_config") @db.JsonB
+
+  deletedAt DateTime? @map("deleted_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  subjects     Subject[]
+  forms        Form[]
+  formApps     FormApp[]
+
+  @@unique([organizationId, slug])
+  @@index([organizationId])
+  @@map("subject_types")
+}
+
+/// One record — a person, household, asset — that accumulates submissions.
+model Subject {
+  id             String @id @default(uuid()) @db.Uuid
+  /// Denormalised from subjectType. Every subject query is org-scoped, and
+  /// carrying the column makes them index-only instead of a join — the same
+  /// reason FormSubmission gained it.
+  organizationId String @map("organization_id") @db.Uuid
+  subjectTypeId  String @map("subject_type_id") @db.Uuid
+
+  /// Derived from identityConfig.displayName. What search results show.
+  displayName String @map("display_name") @db.VarChar(200)
+  /// Promoted subset of registration answers, for search, filter and prefill.
+  /// The full answers always remain on the submission; this is a projection.
+  attributes  Json   @default("{}") @db.JsonB
+  /// Stable caller-supplied key (patient number, household code). The hard
+  /// de-duplication guarantee; fuzzy matching is deliberately not attempted.
+  externalId  String? @map("external_id") @db.VarChar(100)
+
+  /// The submission that created this subject.
+  registrationSubmissionId String? @unique @map("registration_submission_id") @db.Uuid
+
+  deletedAt DateTime? @map("deleted_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+
+  organization Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  subjectType  SubjectType      @relation(fields: [subjectTypeId], references: [id], onDelete: Restrict)
+  submissions  FormSubmission[]
+
+  /// NULL externalIds do not collide in Postgres, so subjects without one are
+  /// unconstrained — which is the intent.
+  @@unique([subjectTypeId, externalId])
+  @@index([organizationId, subjectTypeId, displayName])
+  @@index([organizationId, createdAt])
+  @@map("subjects")
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// FORM APPS — bundled data-entry surface
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// A data-entry app over one subject type: search, register, timeline, record.
+model FormApp {
+  id             String @id @default(uuid()) @db.Uuid
+  organizationId String @map("organization_id") @db.Uuid
+  subjectTypeId  String @map("subject_type_id") @db.Uuid
+
+  name        String  @db.VarChar(120)
+  slug        String  @db.VarChar(60)
+  description String? @db.Text
+  icon        String? @db.VarChar(16)
+
+  /// { formIds: [...], dashboardCards: [{ title, source, filter }] }
+  /// Cards are declarative filters, never code — see plan.md §4.
+  config      Json    @default("{}") @db.JsonB
+  isPublished Boolean @default(false) @map("is_published")
+
+  deletedAt DateTime? @map("deleted_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  subjectType  SubjectType  @relation(fields: [subjectTypeId], references: [id], onDelete: Restrict)
+
+  @@unique([organizationId, slug])
+  @@index([organizationId])
+  @@map("form_apps")
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// FEATURE FLAGS
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// A platform capability that can be switched on or off.
+///
+/// Two levels, resolved as: organization override, else the global default.
+/// That lets a super-admin dark-launch a feature (global OFF), enable it for a
+/// pilot org, and later flip the global default without touching any org rows.
+///
+/// Keyed by a stable string rather than a uuid: flags are referenced by name in
+/// code (`FORM_APPS`), and a generated id would mean a lookup to answer
+/// "is this on?".
+model FeatureFlag {
+  key         String  @id @db.VarChar(60)
+  name        String  @db.VarChar(120)
+  description String? @db.Text
+
+  /// Default for every organization without an explicit override.
+  isEnabledGlobally Boolean @default(false) @map("is_enabled_globally")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  overrides OrganizationFeatureFlag[]
+
+  @@map("feature_flags")
+}
+
+/// Per-organization override of a FeatureFlag. Presence means "decided here".
+model OrganizationFeatureFlag {
+  organizationId String  @map("organization_id") @db.Uuid
+  flagKey        String  @map("flag_key") @db.VarChar(60)
+  isEnabled      Boolean @map("is_enabled")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  flag         FeatureFlag  @relation(fields: [flagKey], references: [key], onDelete: Cascade)
+
+  @@id([organizationId, flagKey])
+  @@index([organizationId])
+  @@map("organization_feature_flags")
 }

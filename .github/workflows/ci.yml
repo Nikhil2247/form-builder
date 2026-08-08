@@ -58,6 +58,20 @@ jobs:
         continue-on-error: true
         run: npx eslint "{src,test}/**/*.ts"
 
+      # The frontend mirrors this directory so the browser evaluates rules with
+      # the same code the server does. A silent divergence would mean the
+      # respondent sees one calculated value and the server stores another.
+      - name: Rules engine mirror is in sync
+        working-directory: .
+        run: |
+          diff -r form-builder-backend/src/common/rules frontend/src/lib/rules \
+            --exclude=README.md \
+            || {
+              echo "::error::The rules engine copies have diverged."
+              echo "Re-sync with: cp form-builder-backend/src/common/rules/*.ts frontend/src/lib/rules/"
+              exit 1
+            }
+
       - name: Typecheck
         run: npm run typecheck
 

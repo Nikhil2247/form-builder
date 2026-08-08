@@ -92,7 +92,7 @@ export class AnswerValidatorService {
   validate(
     questionsJson: unknown,
     answers: Record<string, any>,
-    opts: { visibleQuestionIds?: Set<string> } = {},
+    opts: { visibleQuestionIds?: Set<string>; extraRequiredIds?: Set<string> } = {},
   ): ValidationResult {
     const issues: ValidationIssue[] = [];
     const sanitized: Record<string, any> = {};
@@ -157,7 +157,12 @@ export class AnswerValidatorService {
 
       const isVisible = opts.visibleQuestionIds ? opts.visibleQuestionIds.has(q.id) : true;
       const raw = answers[q.id];
-      const required = (q.required ?? q.validation?.required ?? false) && isVisible;
+      // A REQUIRE rule can make an otherwise-optional question mandatory. It can
+      // only ever add: a rule must not be able to waive a requirement the author
+      // set on the question itself.
+      const requiredByRule = opts.extraRequiredIds?.has(q.id) ?? false;
+      const required =
+        ((q.required ?? q.validation?.required ?? false) || requiredByRule) && isVisible;
 
       if (isEmpty(raw)) {
         if (required) {

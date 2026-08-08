@@ -12,6 +12,7 @@ import { useFilteredNavigation } from '@/hooks/use-filtered-navigation';
 import { isNavItemActive, type NavGroup, type NavItem } from '@/config/navigation';
 import { StatusBadge } from '@/components/shared/status-badge';
 import { OrgSwitcher } from '@/components/layout/OrgSwitcher';
+import { ModeSwitcher } from '@/components/layout/ModeSwitcher';
 
 export function Sidebar() {
   const pathname = usePathname();
@@ -113,6 +114,15 @@ export function Sidebar() {
             />
           ))}
         </nav>
+
+        {/* ── Mode switcher ─────────────────────────────────────────────────
+            Sits above the account block so the two persistent context
+            controls — which workspace, which mode — bracket the navigation
+            rather than being buried in it. Renders nothing when the Data Apps
+            feature is off. */}
+        <div className="shrink-0 border-t border-sidebar-border">
+          <ModeSwitcher isCollapsed={isCollapsed} onNavigate={close} />
+        </div>
 
         {/* ── Account ───────────────────────────────────────────────────── */}
         <div className="border-t border-sidebar-border p-2">

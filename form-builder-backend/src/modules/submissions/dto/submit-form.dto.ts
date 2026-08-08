@@ -48,4 +48,16 @@ export class SubmitFormDto {
   @IsString()
   @MaxLength(128)
   fingerprint?: string;
+
+  /**
+   * The record this entry belongs to, for forms bound to a subject type.
+   *
+   * Accepted from the client but never trusted: SubmissionsService verifies the
+   * subject exists, is not deleted, belongs to the form's organization AND to
+   * the form's subject type before anything is written. Without that check a
+   * caller could attach an entry to another tenant's record.
+   */
+  @IsOptional()
+  @IsUUID()
+  subjectId?: string;
 }

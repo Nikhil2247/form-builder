@@ -7,6 +7,7 @@ import type {
   FormConfig,
   FormPage,
   FormQuestion,
+  FormRule,
   FormSettings,
   FormTheme,
   LogicRule,
@@ -50,6 +51,20 @@ export interface BuilderState {
   theme: FormTheme;
   pages: FormPage[];
   logic: LogicRule[];
+  /**
+   * Rule set (calculations, visibility, requiredness, validation).
+   *
+   * Held as one array rather than normalised: rules are authored in a single
+   * panel, there are at most 200 of them, and the compiler needs the whole set
+   * anyway to detect cycles — so per-rule subscriptions would buy nothing.
+   */
+  rules: FormRule[];
+  /**
+   * Whether this form is bound to a subject type, and so whether cross-form
+   * `ref` nodes are legal. Mirrors the compiler's `allowReferences` option, so
+   * the panel can only offer what the publish step will accept.
+   */
+  allowReferences: boolean;
   /** Question order, by id. */
   order: string[];
   /** Questions keyed by id. Editing one entry touches nothing else. */
@@ -91,6 +106,7 @@ export interface BuilderState {
       hasUnpublishedChanges?: boolean;
       settings?: Partial<FormSettings>;
       updatedAt?: string | null;
+      allowReferences?: boolean;
     },
   ) => void;
   reset: () => void;
@@ -114,6 +130,9 @@ export interface BuilderState {
   addPage: () => void;
   updatePage: (pageNumber: number, patch: Partial<FormPage>) => void;
   deletePage: (pageNumber: number) => void;
+
+  /** Replace the whole rule set. The rules panel edits it as one value. */
+  setRules: (rules: FormRule[]) => void;
 
   setLogic: (logic: LogicRule[]) => void;
   addLogicRule: (rule: LogicRule) => void;
@@ -228,6 +247,8 @@ function emptyState() {
     theme: { ...DEFAULT_THEME },
     pages: [{ pageNumber: 1, title: 'Page 1', description: '' }] as FormPage[],
     logic: [] as LogicRule[],
+    rules: [] as FormRule[],
+    allowReferences: false,
     order: [] as string[],
     byId: {} as Record<string, FormQuestion>,
     settings: { ...DEFAULT_SETTINGS },
@@ -276,6 +297,14 @@ export const useBuilderStore = create<BuilderState>()((set, get) => ({
         (r.action === 'JUMP_TO_PAGE' || !r.targetQuestionId || !!byId[r.targetQuestionId]),
     );
 
+    // Rules are kept even when their target key no longer resolves. Unlike a
+    // dangling logic rule — which silently hid a live field — an unresolvable
+    // rule is caught by `compileRules` and shown to the author inline, so
+    // dropping it here would delete work without telling anyone.
+    const rules = (Array.isArray(form.rules) ? form.rules : []).filter(
+      (r): r is FormRule => !!r && typeof r === 'object' && !Array.isArray(r) && !!r.id,
+    );
+
     set((s) => ({
       id: form.id ?? '',
       title: form.title || 'Untitled form',
@@ -287,6 +316,8 @@ export const useBuilderStore = create<BuilderState>()((set, get) => ({
           : { ...DEFAULT_THEME },
       pages: pages.length ? pages : [{ pageNumber: 1, title: 'Page 1', description: '' }],
       logic,
+      rules,
+      allowReferences: meta?.allowReferences ?? false,
       order,
       byId,
       settings: { ...DEFAULT_SETTINGS, slug: form.slug ?? '', ...(meta?.settings ?? {}) },
@@ -464,6 +495,8 @@ export const useBuilderStore = create<BuilderState>()((set, get) => ({
       };
     }),
 
+  setRules: (rules) => set((s) => ({ rules, isDirty: true, revision: s.revision + 1 })),
+
   setLogic: (logic) => set((s) => ({ logic, isDirty: true, revision: s.revision + 1 })),
   addLogicRule: (rule) =>
     set((s) => ({ logic: [...s.logic, rule], isDirty: true, revision: s.revision + 1 })),
@@ -618,6 +651,7 @@ export function useBuilderMeta() {
       activeView: s.activeView,
       questionCount: s.order.length,
       logicRuleCount: s.logic.length,
+      ruleCount: s.rules.length,
     })),
   );
 }
@@ -641,6 +675,7 @@ export function selectFormConfig(state: BuilderState): FormConfig {
     pages: state.pages,
     questions: state.order.map((id) => state.byId[id]).filter(Boolean),
     logic: state.logic,
+    rules: state.rules,
     status: state.status,
     slug: state.settings.slug || undefined,
     layoutMode: state.settings.layoutMode,
@@ -704,6 +739,7 @@ export function useFormConfigAdapter(): (
 
     if (next.theme !== current.theme) state.setTheme(next.theme);
     if (next.logic !== current.logic) state.setLogic(next.logic);
+    if (next.rules !== current.rules) state.setRules(next.rules ?? []);
     if (next.title !== current.title) state.setTitle(next.title);
     if (next.description !== current.description) state.setDescription(next.description);
     if (next.isQuizMode !== current.isQuizMode) state.setQuizMode(!!next.isQuizMode);
@@ -729,6 +765,11 @@ export interface FormSavePayload {
   pages: FormPage[];
   questions: FormQuestion[];
   logic: LogicRule[];
+  /**
+   * Always sent, even when empty. The API treats an absent key as "leave the
+   * column alone", so omitting it would make deleting the last rule a no-op.
+   */
+  rules: FormRule[];
   slug?: string;
   layoutMode: string;
   requireAuth: boolean;
@@ -753,6 +794,7 @@ export function selectSavePayload(state: BuilderState): FormSavePayload {
     pages: state.pages,
     questions: state.order.map((id) => state.byId[id]).filter(Boolean),
     logic: state.logic,
+    rules: state.rules,
     // An empty slug means "keep whatever the server generated"; sending `''`
     // would fail @MaxLength/@IsString or, worse, claim the empty slug.
     ...(settings.slug ? { slug: settings.slug } : {}),

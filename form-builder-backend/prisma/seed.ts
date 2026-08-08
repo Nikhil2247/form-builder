@@ -30,6 +30,7 @@
  *
  * ── Accounts (password for all: Password123!) ──────────────────────────────
  *   superadmin@formbuilder.test   platform SUPER_ADMIN (no org membership)
+ *   consultant@formbuilder.test   Acme ADMIN · Northwind EDITOR · Initech VIEWER
  *   admin@acme.test               Acme — ADMIN     (MFA enabled)
  *   editor@acme.test              Acme — EDITOR
  *   viewer@acme.test              Acme — VIEWER
@@ -52,6 +53,13 @@ import {
 import { PrismaPg } from '@prisma/adapter-pg';
 import * as argon2 from 'argon2';
 import 'dotenv/config';
+// The real compiler, not a hand-written plan. Seeding a plan by hand would let
+// the fixture drift from what `publishForm` actually produces, and the first
+// symptom would be a calculated field that works in the seed and nowhere else.
+import { compileRules, type FormRule } from '../src/common/rules';
+// Reused rather than reimplemented: the MFA secret has to be encrypted with the
+// exact key derivation the running app uses, or login fails at decrypt.
+import { CryptoService } from '../src/common/crypto/crypto.service';
 
 const DATABASE_URL = process.env.DATABASE_URL;
 if (!DATABASE_URL) {
@@ -66,6 +74,21 @@ const prisma = new PrismaClient({
 
 const SEED_PASSWORD = 'Password123!';
 const FORM_PASSWORD = 'secret123';
+/**
+ * A real base32 TOTP seed for the MFA-enabled account.
+ *
+ * The previous seed stored the literal string
+ * `v1.seeded.placeholder.not-a-real-secret`. That has four dot-separated parts
+ * beginning with `v1`, so CryptoService.decrypt() treated it as ciphertext, the
+ * GCM auth tag failed, and it threw — meaning the MFA account could never
+ * finish logging in. A placeholder that merely *looks* like the real format is
+ * worse than an obviously fake one.
+ *
+ * Add this to any authenticator app (or run `npx otplib` against it) to sign in.
+ */
+const MFA_TOTP_SECRET = 'JBSWY3DPEHPK3PXP';
+/** One recovery code, reused for all ten rows — see the note where they're seeded. */
+const MFA_RECOVERY_CODE = 'AAAA-BBBB-CCCC';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Deterministic helpers
@@ -278,6 +301,165 @@ const QUIZ_QUESTIONS = [
 const QUIZ_MAX_SCORE = QUIZ_QUESTIONS.reduce((sum, q) => sum + (q.points ?? 0), 0);
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Records + rules: a small clinic, which is the clearest way to show why the
+// two features belong together. A patient is registered once and then visited
+// repeatedly, so every rule kind and every reference scope has a natural place.
+//
+// Questions carry `key` — the short name rules address them by. The server
+// derives keys on save; they are written explicitly here so the seeded rules
+// resolve on the very first load.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const PATIENT_PAGES = [
+  { pageNumber: 1, title: 'Identity', description: 'Who the record is for.' },
+  { pageNumber: 2, title: 'Contact and background', description: '' },
+];
+
+const PATIENT_QUESTIONS = [
+  { id: 'p_name', key: 'full_name', type: 'SHORT_TEXT', label: 'Full name', pageNumber: 1, validation: { required: true, maxLength: 120 } },
+  { id: 'p_number', key: 'patient_number', type: 'SHORT_TEXT', label: 'Patient number', description: 'Used to spot duplicate registrations.', pageNumber: 1, validation: { required: true, maxLength: 40 } },
+  { id: 'p_dob', key: 'dob', type: 'DATE', label: 'Date of birth', pageNumber: 1, validation: { required: true } },
+  // Calculated. Read-only in the runner; the server recomputes it on submit and
+  // discards whatever the client sent.
+  { id: 'p_age', key: 'age', type: 'NUMBER', label: 'Age', description: 'Calculated from the date of birth.', pageNumber: 1, validation: { required: false } },
+  {
+    id: 'p_sex', key: 'sex', type: 'SINGLE_CHOICE', label: 'Sex', pageNumber: 1,
+    validation: { required: true },
+    options: [
+      { id: 'p_sex_f', label: 'Female', value: 'female' },
+      { id: 'p_sex_m', label: 'Male', value: 'male' },
+      { id: 'p_sex_o', label: 'Other', value: 'other' },
+    ],
+  },
+  // Shown only when the two conditions below hold — a rule that depends on a
+  // CALCULATED field, which is what proves derived values cascade.
+  {
+    id: 'p_pregnant', key: 'currently_pregnant', type: 'SINGLE_CHOICE', label: 'Currently pregnant?', pageNumber: 2,
+    validation: { required: false },
+    options: [
+      { id: 'p_preg_y', label: 'Yes', value: 'yes' },
+      { id: 'p_preg_n', label: 'No', value: 'no' },
+    ],
+  },
+  { id: 'p_phone', key: 'phone', type: 'PHONE', label: 'Phone number', pageNumber: 2, validation: { required: false } },
+  {
+    id: 'p_village', key: 'village', type: 'DROPDOWN', label: 'Village', pageNumber: 2,
+    validation: { required: true },
+    options: [
+      { id: 'p_v1', label: 'Amberi', value: 'amberi' },
+      { id: 'p_v2', label: 'Dhanora', value: 'dhanora' },
+      { id: 'p_v3', label: 'Kesli', value: 'kesli' },
+      { id: 'p_v4', label: 'Rampur', value: 'rampur' },
+    ],
+  },
+  { id: 'p_consent', key: 'consent', type: 'SIGNATURE', label: 'Consent signature', pageNumber: 2, validation: { required: false } },
+];
+
+/** Every rule kind, on one form. */
+const PATIENT_RULES: FormRule[] = [
+  {
+    id: 'rule_age',
+    kind: 'CALCULATE',
+    target: 'age',
+    expr: { op: 'yearsBetween', args: [{ field: 'dob' }, { op: 'today', args: [] }] },
+  },
+  {
+    id: 'rule_show_pregnancy',
+    kind: 'SHOW',
+    target: 'currently_pregnant',
+    expr: {
+      op: 'and',
+      args: [
+        { op: 'eq', args: [{ field: 'sex' }, { lit: 'female' }] },
+        { op: 'gte', args: [{ field: 'age' }, { lit: 15 }] },
+      ],
+    },
+  },
+  {
+    id: 'rule_require_phone',
+    kind: 'REQUIRE',
+    target: 'phone',
+    // Adults must be contactable; children are reached through a guardian.
+    expr: { op: 'gte', args: [{ field: 'age' }, { lit: 18 }] },
+  },
+  {
+    id: 'rule_dob_sanity',
+    kind: 'VALIDATE',
+    target: 'dob',
+    message: 'That date of birth gives an age over 120. Please check it.',
+    expr: { op: 'gt', args: [{ field: 'age' }, { lit: 120 }] },
+  },
+];
+
+const VISIT_PAGES = [{ pageNumber: 1, title: 'Measurements', description: '' }];
+
+const VISIT_QUESTIONS = [
+  { id: 'v_date', key: 'visit_date', type: 'DATE', label: 'Visit date', pageNumber: 1, validation: { required: true } },
+  { id: 'v_weight', key: 'weight_kg', type: 'NUMBER', label: 'Weight (kg)', pageNumber: 1, validation: { required: true, min: 1, max: 400 } },
+  { id: 'v_height', key: 'height_cm', type: 'NUMBER', label: 'Height (cm)', pageNumber: 1, validation: { required: true, min: 30, max: 250 } },
+  { id: 'v_bmi', key: 'bmi', type: 'NUMBER', label: 'BMI', description: 'Calculated from weight and height.', pageNumber: 1, validation: { required: false } },
+  // Calculated from the PREVIOUS visit — the cross-form reference in action.
+  { id: 'v_change', key: 'weight_change', type: 'NUMBER', label: 'Change since last visit (kg)', pageNumber: 1, validation: { required: false } },
+  { id: 'v_followup', key: 'followup_reason', type: 'LONG_TEXT', label: 'Why is a follow-up needed?', pageNumber: 1, validation: { required: false, maxLength: 500 } },
+  { id: 'v_notes', key: 'notes', type: 'LONG_TEXT', label: 'Clinical notes', pageNumber: 1, validation: { required: false, maxLength: 2000 } },
+];
+
+const VISIT_RULES: FormRule[] = [
+  {
+    id: 'rule_bmi',
+    kind: 'CALCULATE',
+    target: 'bmi',
+    // weight / (height/100)^2, rounded to one decimal.
+    expr: {
+      op: 'round',
+      args: [
+        {
+          op: 'div',
+          args: [
+            { field: 'weight_kg' },
+            {
+              op: 'mul',
+              args: [
+                { op: 'div', args: [{ field: 'height_cm' }, { lit: 100 }] },
+                { op: 'div', args: [{ field: 'height_cm' }, { lit: 100 }] },
+              ],
+            },
+          ],
+        },
+        { lit: 1 },
+      ],
+    },
+  },
+  {
+    id: 'rule_weight_change',
+    kind: 'CALCULATE',
+    target: 'weight_change',
+    // The reference resolves against THIS subject's most recent previous
+    // submission of this same form. Null on a first visit, which is correct.
+    expr: {
+      op: 'sub',
+      args: [
+        { field: 'weight_kg' },
+        { ref: { form: '__VISIT_FORM_ID__', question: 'weight_kg', when: 'LATEST' } },
+      ],
+    },
+  },
+  {
+    id: 'rule_followup',
+    kind: 'REQUIRE',
+    target: 'followup_reason',
+    // A BMI outside the healthy band needs an explanation before submitting.
+    expr: {
+      op: 'or',
+      args: [
+        { op: 'lt', args: [{ field: 'bmi' }, { lit: 18.5 }] },
+        { op: 'gt', args: [{ field: 'bmi' }, { lit: 30 }] },
+      ],
+    },
+  },
+];
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Answer generation
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -372,6 +554,11 @@ async function reset() {
   await prisma.formWebhook.deleteMany();
   await prisma.formSubmissionFile.deleteMany();
   await prisma.formSubmission.deleteMany();
+  // Apps and records: form_apps and subjects both reference subject_types with
+  // ON DELETE RESTRICT, so they have to go first.
+  await prisma.formApp.deleteMany();
+  await prisma.subject.deleteMany();
+  await prisma.subjectType.deleteMany();
   await prisma.formAnalytics.deleteMany();
   await prisma.formVersion.deleteMany();
   await prisma.formDraft.deleteMany();
@@ -388,6 +575,9 @@ async function reset() {
   await prisma.emailVerificationToken.deleteMany();
   await prisma.passwordResetToken.deleteMany();
   await prisma.refreshToken.deleteMany();
+  // Overrides before the flag definitions they point at.
+  await prisma.organizationFeatureFlag.deleteMany();
+  await prisma.featureFlag.deleteMany();
   await prisma.organization.deleteMany();
   await prisma.user.deleteMany();
 
@@ -414,6 +604,14 @@ async function main() {
 
   const passwordHash = await argon2.hash(SEED_PASSWORD);
   const formPasswordHash = await argon2.hash(FORM_PASSWORD);
+  const recoveryCodeHash = await argon2.hash(MFA_RECOVERY_CODE);
+
+  // A plain class with no constructor dependencies, so it can be driven outside
+  // Nest. onModuleInit() resolves ENCRYPTION_KEY exactly as the server does —
+  // both read the same .env, so what is written here decrypts there.
+  const crypto = new CryptoService();
+  crypto.onModuleInit();
+  const mfaSecretEncrypted = crypto.encrypt(MFA_TOTP_SECRET);
 
   // ── Users ────────────────────────────────────────────────────────────────
   const users: any[] = [];
@@ -443,6 +641,11 @@ async function main() {
     createdAt: daysAgo(420),
   });
 
+  // Belongs to three organizations — see the memberships section.
+  const consultant = addUser('consultant@formbuilder.test', 'Idris', 'Haddad', {
+    createdAt: daysAgo(300),
+  });
+
   const orgBlueprints = [
     { name: 'Acme Corp', slug: 'acme-corp', domain: 'acme', members: 16, forms: 22, suspended: false },
     { name: 'Northwind Traders', slug: 'northwind', domain: 'northwind', members: 7, forms: 9, suspended: false },
@@ -460,8 +663,10 @@ async function main() {
       FIRST_NAMES[orgs.length],
       LAST_NAMES[orgs.length],
       // The Acme admin has MFA on, so the security screen has both states to show.
+      // Genuinely working MFA — the secret is real and encrypted with the same
+      // key the server uses, so this account can actually be signed into.
       blueprint.domain === 'acme'
-        ? { mfaEnabled: true, mfaSecret: 'v1.seeded.placeholder.not-a-real-secret' }
+        ? { mfaEnabled: true, mfaSecret: mfaSecretEncrypted }
         : {},
     );
 
@@ -527,8 +732,8 @@ async function main() {
   });
 
   // ── Memberships ──────────────────────────────────────────────────────────
-  // A user belongs to exactly one organization: OrganizationMember carries
-  // @@unique([userId]). Multi-org membership is a separate piece of work.
+  // A user may now belong to several organizations with a different role in
+  // each — the @@unique([userId]) constraint that forbade it is gone.
   const memberships = orgs.flatMap((org) =>
     org.memberIds.map((userId, index) => ({
       id: randomUUID(),
@@ -548,8 +753,39 @@ async function main() {
       invitedById: index === 0 ? null : org.adminId,
     })),
   );
+
+  // The consultant: one account in three organizations, holding a different
+  // role in each. Without someone like this the org switcher never appears and
+  // "role is per-workspace, not per-user" cannot be checked at all.
+  const consultantOrgs = [
+    { org: orgs[0], role: OrgRole.ADMIN },   // Acme      — full access
+    { org: orgs[1], role: OrgRole.EDITOR },  // Northwind — can build, not administer
+    { org: orgs[2], role: OrgRole.VIEWER },  // Initech   — read-only
+  ];
+  for (const { org, role } of consultantOrgs) {
+    memberships.push({
+      id: randomUUID(),
+      organizationId: org.id,
+      userId: consultant.id,
+      role,
+      joinedAt: daysAgo(int(20, 200)),
+      invitedById: org.adminId,
+    });
+  }
+
   await prisma.organizationMember.createMany({ data: memberships });
-  console.log(`  ${memberships.length} memberships across ${orgs.length} organizations`);
+
+  // Which workspace the consultant lands in. A pointer only — every request
+  // still re-checks membership against the :orgId in the URL.
+  await prisma.user.update({
+    where: { id: consultant.id },
+    data: { lastActiveOrganizationId: orgs[1].id },
+  });
+
+  console.log(
+    `  ${memberships.length} memberships across ${orgs.length} organizations ` +
+      `(consultant@formbuilder.test belongs to ${consultantOrgs.length})`,
+  );
 
   // ── Invitations — every status ───────────────────────────────────────────
   const invitations = orgs.flatMap((org) => {
@@ -632,6 +868,8 @@ async function main() {
     questions: any[];
     createdById: string;
     submissionTarget: number;
+    subjectTypeId?: string | null;
+    subjectRole?: 'NONE' | 'REGISTERS' | 'ATTACHES';
   }
 
   const forms: SeedForm[] = [];
@@ -656,9 +894,14 @@ async function main() {
       submissionTarget?: number;
       description?: string;
       createdDaysAgo?: number;
+      rules?: FormRule[];
+      subjectTypeId?: string | null;
+      subjectRole?: 'NONE' | 'REGISTERS' | 'ATTACHES';
+      /** Pre-assign the id so rules can reference this form before it exists. */
+      forcedId?: string;
     },
   ) => {
-    const id = randomUUID();
+    const id = options.forcedId ?? randomUUID();
     const questions = options.questions ?? STANDARD_QUESTIONS;
     const createdAt = daysAgo(options.createdDaysAgo ?? int(30, 200));
     // Published forms get an immutable version — without one the public page
@@ -666,6 +909,25 @@ async function main() {
     const published = options.status === FormStatus.PUBLISHED || options.status === FormStatus.CLOSED;
     const versionId = published ? randomUUID() : null;
     const creatorId = pick(org.memberIds.slice(0, 3));
+
+    // Compile exactly as publishForm does. A rule set that would be rejected at
+    // publish must not reach the database through the seed either — otherwise
+    // the fixture demonstrates behaviour the product does not actually allow.
+    const rules = options.rules ?? [];
+    let compiledPlan: unknown = {};
+    if (rules.length > 0) {
+      const compiled = compileRules(rules, {
+        knownKeys: questions.map((q: any) => q.key ?? q.id),
+        allowReferences: Boolean(options.subjectTypeId),
+      });
+      if (!compiled.ok) {
+        throw new Error(
+          `Seed rules for "${options.title}" do not compile:\n` +
+            compiled.errors.map((e) => `  • ${e.ruleId ?? 'form'}: ${e.message}`).join('\n'),
+        );
+      }
+      compiledPlan = compiled.plan;
+    }
 
     formRows.push({
       id,
@@ -688,6 +950,9 @@ async function main() {
       pagesJson: options.pages ?? STANDARD_PAGES,
       questionsJson: questions,
       logicJson: options.logic ?? [],
+      rulesJson: rules,
+      subjectTypeId: options.subjectTypeId ?? null,
+      subjectRole: options.subjectRole ?? 'NONE',
       notifyEmails: chance(0.3) ? [`admin@${org.slug}.test`] : null,
       deletedAt: options.deleted ? daysAgo(int(1, 25)) : null,
       createdAt,
@@ -703,6 +968,8 @@ async function main() {
         questionsJson: questions,
         logicJson: options.logic ?? [],
         themeJson: THEME,
+        rulesJson: rules,
+        compiledRules: compiledPlan,
         publishedAt: createdAt,
       });
     }
@@ -719,10 +986,88 @@ async function main() {
       questions,
       createdById: creatorId,
       submissionTarget: options.submissionTarget ?? 0,
+      subjectTypeId: options.subjectTypeId ?? null,
+      subjectRole: options.subjectRole ?? 'NONE',
     });
   };
 
   const acme = orgs[0];
+
+  // ── Subject types ────────────────────────────────────────────────────────
+  // Created before the forms that bind to them, because a form carries the
+  // subject type id and the FK is enforced.
+  const patientTypeId = randomUUID();
+  const householdTypeId = randomUUID();
+  const patientFormId = randomUUID();
+  const visitFormId = randomUUID();
+
+  await prisma.subjectType.createMany({
+    data: [
+      {
+        id: patientTypeId,
+        organizationId: acme.id,
+        name: 'Patient',
+        slug: 'patient',
+        icon: '🩺',
+        registrationFormId: patientFormId,
+        // Question KEYS, not ids — a form can be republished with new ids for
+        // the same logical field and this config has to survive that.
+        identityConfig: {
+          displayName: ['full_name'],
+          attributes: ['phone', 'village', 'sex', 'age'],
+          externalId: 'patient_number',
+        },
+      },
+      {
+        // A second type with no records yet, so the empty state is reachable
+        // in a deployment that otherwise has data everywhere.
+        id: householdTypeId,
+        organizationId: acme.id,
+        name: 'Household',
+        slug: 'household',
+        icon: '🏠',
+        registrationFormId: null,
+        identityConfig: {},
+      },
+    ],
+  });
+  console.log('  2 record types (Patient, Household)');
+
+  // ── Records + rules demo ─────────────────────────────────────────────────
+  buildForm(acme, {
+    forcedId: patientFormId,
+    title: 'Patient registration',
+    slug: 'patient-registration',
+    description:
+      'Creates a Patient record. Age is calculated from the date of birth; the pregnancy question appears only for women 15 or over.',
+    status: FormStatus.PUBLISHED,
+    questions: PATIENT_QUESTIONS,
+    pages: PATIENT_PAGES,
+    rules: PATIENT_RULES,
+    subjectTypeId: patientTypeId,
+    subjectRole: 'REGISTERS',
+    // Submissions for this form are generated separately, alongside the
+    // Subject rows they create — see the records section below.
+    submissionTarget: 0,
+    createdDaysAgo: 210,
+  });
+
+  buildForm(acme, {
+    forcedId: visitFormId,
+    title: 'Health check visit',
+    slug: 'health-check-visit',
+    description:
+      'Attaches to a Patient. BMI is calculated, and the weight change reads the previous visit through a cross-form reference.',
+    status: FormStatus.PUBLISHED,
+    questions: VISIT_QUESTIONS,
+    pages: VISIT_PAGES,
+    // The reference needs the real form id, which only exists now.
+    rules: JSON.parse(JSON.stringify(VISIT_RULES).replace(/__VISIT_FORM_ID__/g, visitFormId)),
+    subjectTypeId: patientTypeId,
+    subjectRole: 'ATTACHES',
+    submissionTarget: 0,
+    createdDaysAgo: 205,
+  });
 
   // Flagship forms — the ones worth opening. Each exercises a different feature.
   buildForm(acme, {
@@ -922,6 +1267,9 @@ async function main() {
         id,
         formId: form.id,
         formVersionId: form.versionId,
+        // Denormalised from the form. Every org-scoped submission query reads
+        // it directly instead of joining through `forms`.
+        organizationId: form.orgId,
         // Roughly a fifth are signed-in members rather than anonymous.
         respondentId: chance(0.2) ? pick(orgs[0].memberIds) : null,
         country: pick(['GB', 'US', 'DE', 'IN', 'JP', 'BR', 'FR', 'AU']),
@@ -946,6 +1294,163 @@ async function main() {
       }
     }
   }
+
+  // ── Patient records and their visits ─────────────────────────────────────
+  // Built by hand rather than through the generic loop, because a record's
+  // entries have to be internally consistent: the calculated age must match the
+  // seeded date of birth, and each visit's weight change must equal the
+  // difference from the visit before it. Random answers would render values
+  // that contradict the rules meant to produce them.
+  const patientForm = forms.find((f) => f.id === patientFormId)!;
+  const visitForm = forms.find((f) => f.id === visitFormId)!;
+
+  const VILLAGES = ['amberi', 'dhanora', 'kesli', 'rampur'];
+  const subjectRows: any[] = [];
+  const PATIENT_COUNT = 38; // Past the 12-row page size, so records paginate.
+
+  for (let index = 0; index < PATIENT_COUNT; index += 1) {
+    const first = FIRST_NAMES[(index * 7) % FIRST_NAMES.length];
+    const last = LAST_NAMES[(index * 11) % LAST_NAMES.length];
+    const fullName = `${first} ${last}`;
+    const patientNumber = `PT-${String(1000 + index)}`;
+
+    const ageYears = int(2, 84);
+    const dob = new Date(NOW);
+    dob.setUTCFullYear(dob.getUTCFullYear() - ageYears);
+    dob.setUTCMonth(int(0, 11), int(1, 28));
+    const dobIso = dob.toISOString().slice(0, 10);
+
+    const sex = pick(['female', 'male', 'other']);
+    const village = pick(VILLAGES);
+    const phone = `+91 9${int(100000000, 999999999)}`;
+    const registeredAt = daysAgo(int(30, 200), int(9, 17));
+
+    const subjectId = randomUUID();
+    const registrationId = randomUUID();
+
+    // Exactly what the rules would compute for this date of birth.
+    const age = ageYears;
+
+    const registrationAnswers: Record<string, unknown> = {
+      p_name: fullName,
+      p_number: patientNumber,
+      p_dob: dobIso,
+      p_age: age,
+      p_sex: sex,
+      p_phone: phone,
+      p_village: village,
+    };
+    // Only present when the SHOW rule would have revealed the question.
+    if (sex === 'female' && age >= 15) {
+      registrationAnswers.p_pregnant = chance(0.18) ? 'yes' : 'no';
+    }
+
+    submissionRows.push({
+      id: registrationId,
+      formId: patientForm.id,
+      formVersionId: patientForm.versionId,
+      organizationId: acme.id,
+      subjectId,
+      respondentId: pick(acme.memberIds.slice(0, 3)),
+      country: 'IN',
+      completionTimeMs: int(60_000, 260_000),
+      quizScore: null,
+      maxQuizScore: null,
+      isPassed: null,
+      answers: registrationAnswers,
+      status: SubmissionStatus.SUBMITTED,
+      submittedAt: registeredAt,
+      processedAt: new Date(registeredAt.getTime() + int(200, 3000)),
+    });
+
+    subjectRows.push({
+      id: subjectId,
+      organizationId: acme.id,
+      subjectTypeId: patientTypeId,
+      displayName: fullName,
+      // The promoted subset named by identityConfig.attributes — keys, because
+      // that is what the app surface and prefill address them by.
+      attributes: { phone, village, sex, age },
+      externalId: patientNumber,
+      registrationSubmissionId: registrationId,
+      createdAt: registeredAt,
+      updatedAt: registeredAt,
+    });
+
+    // Visits. Each carries a BMI and a weight change consistent with the one
+    // before it, so a timeline reads as a real history rather than noise.
+    const visitCount = int(0, 5);
+    const heightCm = age < 16 ? int(90, 165) : int(148, 190);
+    let previousWeight: number | null = null;
+    let visitDay = int(5, 150);
+
+    for (let visitIndex = 0; visitIndex < visitCount; visitIndex += 1) {
+      // Annotated: `weight` feeds `previousWeight`, which feeds the next
+      // `weight`, and TypeScript cannot break that cycle on its own.
+      const weight: number =
+        previousWeight === null
+          ? age < 16
+            ? int(12, 55)
+            : int(45, 105)
+          : Math.max(10, previousWeight + int(-4, 4));
+
+      const heightM = heightCm / 100;
+      const bmi = Math.round((weight / (heightM * heightM)) * 10) / 10;
+      const submittedAt = daysAgo(visitDay, int(9, 17));
+
+      const visitAnswers: Record<string, unknown> = {
+        v_date: submittedAt.toISOString().slice(0, 10),
+        v_weight: weight,
+        v_height: heightCm,
+        v_bmi: bmi,
+        // Null on the first visit — there is nothing to compare against, which
+        // is exactly what the reference resolves to.
+        v_change: previousWeight === null ? null : Math.round((weight - previousWeight) * 10) / 10,
+      };
+      // The REQUIRE rule fires outside the healthy band, so those rows must
+      // carry a reason or they would contradict their own form.
+      if (bmi < 18.5 || bmi > 30) {
+        visitAnswers.v_followup = pick([
+          'Referred to the nutrition programme for a follow-up in four weeks.',
+          'Discussed diet and activity; review at next visit.',
+          'Weight trend flagged to the supervising clinician.',
+        ]);
+      }
+      if (chance(0.5)) {
+        visitAnswers.v_notes = pick([
+          'No acute complaints. Vitals within range.',
+          'Reports occasional fatigue. Advised iron-rich diet.',
+          'Routine check. Next visit in three months.',
+        ]);
+      }
+
+      submissionRows.push({
+        id: randomUUID(),
+        formId: visitForm.id,
+        formVersionId: visitForm.versionId,
+        organizationId: acme.id,
+        subjectId,
+        respondentId: pick(acme.memberIds.slice(0, 3)),
+        country: 'IN',
+        completionTimeMs: int(45_000, 180_000),
+        quizScore: null,
+        maxQuizScore: null,
+        isPassed: null,
+        answers: visitAnswers,
+        status: SubmissionStatus.SUBMITTED,
+        submittedAt,
+        processedAt: new Date(submittedAt.getTime() + int(200, 3000)),
+      });
+
+      previousWeight = weight;
+      // Visits march forward in time, so LATEST really is the most recent.
+      visitDay = Math.max(1, visitDay - int(20, 45));
+    }
+  }
+
+  // Subjects before submissions: form_submissions.subject_id is a real FK.
+  await prisma.subject.createMany({ data: subjectRows });
+  console.log(`  ${subjectRows.length} patient records`);
 
   // Chunked: a single createMany with thousands of rows can exceed the
   // parameter limit on the wire.
@@ -1078,6 +1583,76 @@ async function main() {
   await prisma.webhookDelivery.createMany({ data: deliveryRows });
   console.log(`  ${webhookRows.length} webhooks, ${deliveryRows.length} deliveries`);
 
+  // ── Form apps ────────────────────────────────────────────────────────────
+  await prisma.formApp.createMany({
+    data: [
+      {
+        id: randomUUID(),
+        organizationId: acme.id,
+        subjectTypeId: patientTypeId,
+        name: 'Community clinic',
+        slug: 'community-clinic',
+        description: 'Register patients and record their health check visits.',
+        icon: '🩺',
+        config: {
+          // Registration first — it is the entry point for a new record.
+          formIds: [patientFormId, visitFormId],
+          // Declarative filters, never code. Each is one indexed count.
+          dashboardCards: [
+            { title: 'Patients registered', source: 'subjects' },
+            { title: 'Registered this month', source: 'subjects', filter: { createdWithinDays: 30 } },
+            { title: 'Visits this month', source: 'submissions', filter: { createdWithinDays: 30, formId: visitFormId } },
+            { title: 'Visits this week', source: 'submissions', filter: { createdWithinDays: 7, formId: visitFormId } },
+          ],
+        },
+        isPublished: true,
+      },
+      {
+        // Unpublished, so the draft state on the apps list is reachable.
+        id: randomUUID(),
+        organizationId: acme.id,
+        subjectTypeId: householdTypeId,
+        name: 'Household survey',
+        slug: 'household-survey',
+        description: 'Not finished — no forms attached yet.',
+        icon: '🏠',
+        config: { formIds: [], dashboardCards: [] },
+        isPublished: false,
+      },
+    ],
+  });
+  console.log('  2 form apps (Community clinic, Household survey)');
+
+  // ── Feature flags ────────────────────────────────────────────────────────
+  // Enabled globally so everything is visible immediately after seeding. The
+  // Initech override is deliberately off, so the platform features screen shows
+  // a real override next to the default rather than a uniform list — and the
+  // difference between "off" and "no opinion" is visible.
+  await prisma.featureFlag.createMany({
+    data: [
+      {
+        key: 'FORM_APPS',
+        name: 'Data Apps',
+        description:
+          'Subject records, linked forms, and the data-entry app surface. Adds a second navigation mode alongside Forms.',
+        isEnabledGlobally: true,
+      },
+      {
+        key: 'FORM_RULES',
+        name: 'Form rules',
+        description:
+          'Calculated fields, multi-condition show/hide, cross-field validation, and conditional requirement in the form builder.',
+        isEnabledGlobally: true,
+      },
+    ],
+  });
+
+  const initech = orgs.find((o) => o.slug === 'initech')!;
+  await prisma.organizationFeatureFlag.createMany({
+    data: [{ organizationId: initech.id, flagKey: 'FORM_APPS', isEnabled: false }],
+  });
+  console.log('  2 feature flags (both on; Initech opted out of Data Apps)');
+
   // ── Drafts, comments, integrations, API keys ─────────────────────────────
   await prisma.formDraft.createMany({
     data: forms
@@ -1141,7 +1716,11 @@ async function main() {
     data: Array.from({ length: 10 }, (_, index) => ({
       id: randomUUID(),
       userId: acme.adminId,
-      codeHash: `seeded-placeholder-hash-${index}`,
+      // A real argon2 hash, not a placeholder string: consumeRecoveryCode runs
+      // argon2.verify against this, and verify throws on anything that is not a
+      // valid encoded hash. All ten share one code — fine for a fixture, and it
+      // means the printed code works whichever row is matched first.
+      codeHash: recoveryCodeHash,
       // Two already spent, so the "codes remaining" count is not a round number.
       usedAt: index < 2 ? daysAgo(int(5, 40)) : null,
     })),
@@ -1214,14 +1793,40 @@ async function main() {
   // ── Summary ──────────────────────────────────────────────────────────────
   console.log('\nDone.\n');
   console.log(`  Password for every account: ${SEED_PASSWORD}`);
-  console.log(`  Password for the protected form: ${FORM_PASSWORD}\n`);
+  console.log(`  Password for the protected form: ${FORM_PASSWORD}`);
+  console.log(`  MFA secret for admin@acme.test: ${MFA_TOTP_SECRET}  (base32, add to any authenticator)`);
+  console.log(`  MFA recovery code: ${MFA_RECOVERY_CODE}\n`);
   console.log('  superadmin@formbuilder.test   platform admin (no organization)');
+  console.log('  consultant@formbuilder.test   Acme Admin · Northwind Editor · Initech Viewer');
   console.log('  admin@acme.test               Acme — Admin, MFA enabled');
   console.log('  editor@acme.test              Acme — Editor');
   console.log('  viewer@acme.test              Acme — Viewer (read-only)');
   console.log('  admin@northwind.test          Northwind — Admin');
   console.log('  admin@initech.test            Initech — Admin (near-empty org)');
   console.log('  admin@globex.test             Globex — Admin (SUSPENDED org)\n');
+
+  console.log('  ── What to try ─────────────────────────────────────────────\n');
+  console.log('  Multi-org switcher');
+  console.log('    consultant@formbuilder.test — switcher sits above the account');
+  console.log('    block in the sidebar. Opens in Northwind as Editor; switch to');
+  console.log('    Acme and the role changes to Admin and more navigation appears.\n');
+  console.log('  Data Apps  (sidebar bottom: Forms ⇄ Data)');
+  console.log('    /apps      → Community clinic, then a record, then its timeline');
+  console.log('    /records   → 38 patients, searchable by name or PT- number');
+  console.log('    Initech has Data Apps switched OFF, so the mode is absent there.\n');
+  console.log('  Rules  (Forms → Patient registration → Logic)');
+  console.log('    age          calculated from date of birth');
+  console.log('    pregnancy    shown only when sex = female AND age >= 15');
+  console.log('    phone        required only when age >= 18');
+  console.log('    date of birth rejected when it implies an age over 120');
+  console.log('    Health check visit adds BMI, and a weight change that reads');
+  console.log('    the previous visit through a cross-form reference.\n');
+  console.log('  Feature flags  (superadmin → Platform → Features)');
+  console.log('    Both on globally; Initech carries an override turning Data');
+  console.log('    Apps off. "Use default" clears an override — which is not the');
+  console.log('    same as switching it off.\n');
+  console.log('  Worth proving: submit a visit with a made-up BMI in devtools.');
+  console.log('  The server recomputes it and stores its own value.\n');
 }
 
 main()

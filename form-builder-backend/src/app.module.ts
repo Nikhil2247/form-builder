@@ -23,9 +23,13 @@ import { AuditModule } from './modules/audit/audit.module';
 import { MailModule } from './modules/mail/mail.module';
 import { HealthModule } from './common/health/health.module';
 import { TemplatesModule } from './modules/templates/templates.module';
+import { SubjectsModule } from './modules/subjects/subjects.module';
+import { FormAppsModule } from './modules/form-apps/form-apps.module';
+import { FeatureFlagsModule } from './modules/feature-flags/feature-flags.module';
 
 import configuration, { validationSchema } from './config/configuration';
 import { bullMQConnection } from './config/bullmq.config';
+import { getRedisUrl } from './config/env';
 
 // ── Logging ────────────────────────────────────────────────────────────────────
 import { LoggerModule } from './common/logger/logger.module';
@@ -76,7 +80,9 @@ import { ResponseInterceptor } from './common/interceptors/response.interceptor'
       isGlobal: true,
       useFactory: () => ({
         store: redisStore,
-        url: process.env.REDIS_URL ?? 'redis://localhost:6379',
+        // One resolver for every Redis consumer (cache, throttler, BullMQ), so
+        // they cannot end up pointed at different servers.
+        url: getRedisUrl(),
       }),
     }),
 
@@ -88,9 +94,7 @@ import { ResponseInterceptor } from './common/interceptors/response.interceptor'
     ThrottlerModule.forRootAsync({
       useFactory: () => ({
         throttlers: [{ name: 'default', ttl: 60_000, limit: 100 }],
-        storage: new ThrottlerStorageRedisService(
-          process.env.REDIS_URL ?? 'redis://localhost:6379',
-        ),
+        storage: new ThrottlerStorageRedisService(getRedisUrl()),
         // Trust the proxy-provided client IP. main.ts sets `trust proxy` so
         // req.ips is populated from X-Forwarded-For.
         getTracker: (req: any) =>
@@ -110,6 +114,9 @@ import { ResponseInterceptor } from './common/interceptors/response.interceptor'
     AdminModule,
     HealthModule,
     TemplatesModule,
+    SubjectsModule,
+    FormAppsModule,
+    FeatureFlagsModule,
   ],
   controllers: [AppController],
   providers: [

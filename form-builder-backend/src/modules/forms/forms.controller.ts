@@ -128,7 +128,7 @@ export class FormsController {
   publishForm(
     @OrgId() orgId: string,
     @Param('formId') formId: string,
-    @Body() body: { pages: any; questions: any; logic: any; theme: any },
+    @Body() body: { pages: any; questions: any; logic: any; theme: any; rules?: any },
     @Req() req: Request,
   ) {
     const userId = (req.user as any).sub;
@@ -140,6 +140,7 @@ export class FormsController {
       body.logic,
       body.theme,
       userId,
+      body.rules,
     );
   }
 

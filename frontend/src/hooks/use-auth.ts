@@ -44,6 +44,12 @@ export interface UserSession {
    * user. Anything rendering permissions must re-read it after a switch.
    */
   organizations: ActiveOrganization[];
+  /**
+   * Feature flags resolved for the active workspace, as { KEY: boolean }.
+   * Arrives with the session so the shell renders the right chrome on first
+   * paint. See use-features.ts — gating only, never authorization.
+   */
+  features: Record<string, boolean>;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -83,6 +89,7 @@ export function useUser() {
           },
           activeOrganization: u.activeOrganization ?? u.organization ?? null,
           organizations: u.organizations ?? (u.organization ? [u.organization] : []),
+          features: u.features ?? {},
         } satisfies UserSession;
       } catch {
         return null;

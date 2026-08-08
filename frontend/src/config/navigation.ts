@@ -7,19 +7,26 @@
 // EDITOR and ADMIN while its layout gated on a different set.
 
 import {
+  Activity,
   BarChart2,
   Bell,
   BookTemplate,
+  Boxes,
   Building2,
   ClipboardList,
+  Contact,
   CreditCard,
   FileBox,
   Globe,
   Inbox,
   Layers,
   LayoutDashboard,
+  LayoutGrid,
   Settings,
   Shield,
+  ShieldCheck,
+  Smartphone,
+  ToggleLeft,
   Trash2,
   User,
   Users,
@@ -45,10 +52,25 @@ export interface NavItem {
 export interface NavGroup {
   title: string;
   items: NavItem[];
+  /**
+   * Which workspace mode this group belongs to.
+   *
+   * 'forms' — the form builder the product has always been
+   * 'apps'  — the data-entry surface over subject records
+   * omitted — shown in both (Organization, Platform, Account)
+   *
+   * The two modes are deliberately separate rather than one long sidebar: a
+   * data-entry user and a form author want different things on screen, and
+   * merging them would leave both with a menu mostly full of the other's tools.
+   */
+  mode?: NavMode;
 }
+
+export type NavMode = 'forms' | 'apps';
 
 export const workspaceNav: NavGroup = {
   title: 'Workspace',
+  mode: 'forms',
   items: [
     {
       title: 'Dashboard',
@@ -66,10 +88,35 @@ export const workspaceNav: NavGroup = {
 
 export const buildNav: NavGroup = {
   title: 'Build',
+  mode: 'forms',
   items: [
     { title: 'Form builder', href: '/forms/builder', icon: Layers, permissions: ['form:create'] },
     { title: 'Integrations', href: '/integrations', icon: Webhook, permissions: ['webhook:view'] },
     { title: 'Trash', href: '/trash', icon: Trash2, permissions: ['form:restore'] },
+  ],
+};
+
+/**
+ * Data Apps mode — the subject-record surface.
+ *
+ * Gated behind the FORM_APPS feature flag, so this entire mode is invisible
+ * until a super-admin enables it. Existing installations see no change.
+ */
+export const appsNav: NavGroup = {
+  title: 'Data entry',
+  mode: 'apps',
+  items: [
+    { title: 'Apps', href: '/apps', icon: LayoutGrid, permissions: ['form:view'], exact: true },
+    { title: 'Records', href: '/records', icon: Contact, permissions: ['form:view'] },
+  ],
+};
+
+export const appsBuildNav: NavGroup = {
+  title: 'Configure',
+  mode: 'apps',
+  items: [
+    { title: 'Record types', href: '/record-types', icon: Boxes, permissions: ['form:create'] },
+    { title: 'App builder', href: '/apps/builder', icon: Smartphone, permissions: ['form:create'] },
   ],
 };
 
@@ -120,6 +167,24 @@ export const platformNav: NavGroup = {
     },
     { title: 'Users', href: '/platform/users', icon: Users, permissions: ['platform:access'] },
     {
+      title: 'Roles',
+      href: '/platform/roles',
+      icon: ShieldCheck,
+      permissions: ['platform:access'],
+    },
+    {
+      title: 'System health',
+      href: '/platform/system',
+      icon: Activity,
+      permissions: ['platform:access'],
+    },
+    {
+      title: 'Features',
+      href: '/platform/features',
+      icon: ToggleLeft,
+      permissions: ['platform:access'],
+    },
+    {
       title: 'Audit logs',
       href: '/platform/audit-logs',
       icon: Shield,
@@ -139,6 +204,8 @@ export const accountNav: NavGroup = {
 export const allNavGroups: NavGroup[] = [
   workspaceNav,
   buildNav,
+  appsNav,
+  appsBuildNav,
   organizationNav,
   platformNav,
   accountNav,
@@ -148,11 +215,13 @@ export const allNavGroups: NavGroup[] = [
  * Drop items the user cannot use, then drop groups left empty.
  *
  * Items with no permissions declared (Profile, Notifications) are always
- * visible to a signed-in user.
+ * visible to a signed-in user. Groups carrying a `mode` appear only in that
+ * mode; groups without one (Organization, Platform, Account) appear in both.
  */
 export function filterNavigation(
   groups: NavGroup[],
   can: (permission: Permission) => boolean,
+  mode: NavMode = 'forms',
 ): NavGroup[] {
   const allowed = (item: NavItem): boolean => {
     if (item.permissions?.length && !item.permissions.every(can)) return false;
@@ -161,6 +230,7 @@ export function filterNavigation(
   };
 
   return groups
+    .filter((group) => group.mode === undefined || group.mode === mode)
     .map((group) => ({
       ...group,
       items: group.items.filter(allowed).map((item) => ({
@@ -169,6 +239,21 @@ export function filterNavigation(
       })),
     }))
     .filter((group) => group.items.length > 0);
+}
+
+/** Route prefixes that belong to Data Apps mode. */
+const APPS_PREFIXES = ['/apps', '/records', '/record-types'];
+
+/**
+ * Which mode a path belongs to.
+ *
+ * Used to keep the switcher honest when a user arrives by deep link or the
+ * back button — the sidebar should reflect where they actually are, not the
+ * last button they pressed.
+ */
+export function modeForPath(pathname: string): NavMode | null {
+  if (APPS_PREFIXES.some((p) => pathname === p || pathname.startsWith(`${p}/`))) return 'apps';
+  return null;
 }
 
 /** Whether `href` should be highlighted for the current pathname. */

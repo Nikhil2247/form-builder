@@ -1,3 +1,9 @@
+// MUST be first. Loads .env before any other module is imported, so config
+// files that read process.env at module scope see the real values. Without
+// this, ConfigModule loads .env too late to help them and they fall back to
+// their defaults — which is how every queue ended up pointed at localhost.
+import './config/env';
+
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';

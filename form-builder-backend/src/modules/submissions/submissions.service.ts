@@ -20,6 +20,8 @@ import {
   type Pagination,
 } from '../../common/pagination/pagination';
 import { submissionListSelect } from '../../common/prisma/selects';
+import { readPlan, planIsEmpty, runFormRules } from '../../common/rules';
+import { resolveReferences } from '../subjects/subjects.service';
 
 /**
  * Everything the ingest path needs to accept or reject a submission, cached in
@@ -41,6 +43,9 @@ interface IngestPolicy {
   currentVersionId: string | null;
   currentVersion: number;
   questionsJson: unknown;
+  /// FormVersion.compiledRules. Cached with the rest of the policy so the
+  /// submit path stays a single Redis read.
+  compiledRules: unknown;
 }
 
 const POLICY_TTL_SECONDS = 300;
@@ -122,17 +127,22 @@ export class SubmissionsService {
     // otherwise fall back to the form's current version.
     let formVersionId = policy.currentVersionId;
     let questionsJson = policy.questionsJson;
+    let compiledRules = policy.compiledRules;
 
     if (dto.formVersionId && dto.formVersionId !== policy.currentVersionId) {
       const claimed = await this.prisma.reader.formVersion.findFirst({
         where: { id: dto.formVersionId, formId },
-        select: { id: true, questionsJson: true },
+        select: { id: true, questionsJson: true, compiledRules: true },
       });
       if (!claimed) {
         throw new BadRequestException('Unknown form version for this form.');
       }
       formVersionId = claimed.id;
       questionsJson = claimed.questionsJson;
+      // Rules travel with the version the respondent actually filled in. Using
+      // the current version's rules against an older schema would evaluate
+      // formulas over fields that version may not even have.
+      compiledRules = claimed.compiledRules;
     }
 
     // ── 5. CAPTCHA ──────────────────────────────────────────────────────────
@@ -141,11 +151,86 @@ export class SubmissionsService {
     // ── 6. Schema validation. Runs here, synchronously, so the respondent
     //       gets an actionable field-level error instead of a silent failure
     //       inside a worker they never see. ────────────────────────────────────
-    const result = this.validator.validate(questionsJson, dto.answers);
-    if (!result.valid) {
+    //       Rules run FIRST, because they decide three things validation needs:
+    //       what the calculated values actually are, which questions are
+    //       visible, and which are conditionally required.
+    //
+    //       Critically, runFormRules drops every client-supplied value for a
+    //       calculated field and recomputes it. A respondent posting
+    //       {"age": 4} to clear an eligibility gate changes nothing.
+    const plan = readPlan(compiledRules);
+    const questionList = Array.isArray(questionsJson) ? (questionsJson as any[]) : [];
+
+    // The subject this entry attaches to, if any. Verified against the form's
+    // own org AND subject type — a client-supplied id is otherwise a direct
+    // route into another tenant's records.
+    const subjectId = await this.resolveSubjectId(formId, policy.organizationId, dto.subjectId);
+
+    // Cross-form values are resolved to a plain bag here, before evaluation, so
+    // the interpreter performs no I/O and the reachable set stays exactly what
+    // the compiler recorded at publish time.
+    const refs = await resolveReferences(this.prisma, plan, subjectId);
+
+    let answers = dto.answers as Record<string, any>;
+    let visibleQuestionIds: Set<string> | undefined;
+    let extraRequiredIds: Set<string> | undefined;
+    let ruleViolations: Array<{ questionId: string; message: string }> = [];
+
+    if (!planIsEmpty(plan)) {
+      const evaluated = runFormRules({
+        questions: questionList,
+        plan,
+        answersById: answers,
+        refs,
+      });
+
+      answers = evaluated.answersById as Record<string, any>;
+      extraRequiredIds = evaluated.requiredQuestionIds;
+      ruleViolations = evaluated.violations.map((v) => ({
+        questionId: v.questionId,
+        message: v.message,
+      }));
+
+      if (evaluated.hiddenQuestionIds.size > 0) {
+        visibleQuestionIds = new Set(
+          questionList
+            .map((q: any) => q?.id)
+            .filter((id: unknown): id is string =>
+              typeof id === 'string' && !evaluated.hiddenQuestionIds.has(id),
+            ),
+        );
+      }
+
+      // A rule that cannot be evaluated is a bug in the published form, not a
+      // respondent error. Log it with the version so it is findable, while the
+      // fail-closed defaults inside the engine keep this submission safe.
+      if (evaluated.errors.length > 0) {
+        this.logger.error(
+          `Rule evaluation errors on form ${formId} version ${formVersionId}: ` +
+            evaluated.errors.map((e) => `${e.ruleId}: ${e.message}`).join('; '),
+        );
+      }
+    }
+
+    const result = this.validator.validate(questionsJson, answers, {
+      visibleQuestionIds,
+      extraRequiredIds,
+    });
+
+    // Rule violations are respondent-facing and carry the author's own message.
+    const issues = [
+      ...result.issues,
+      ...ruleViolations.map((v) => ({
+        questionId: v.questionId,
+        code: 'RULE',
+        message: v.message,
+      })),
+    ];
+
+    if (issues.length > 0) {
       throw new UnprocessableEntityException({
         message: 'Some answers are invalid.',
-        issues: result.issues,
+        issues,
       });
     }
 
@@ -173,6 +258,7 @@ export class SubmissionsService {
       formVersionId,
       organizationId: policy.organizationId,
       answers: result.sanitized,
+      subjectId,
       completionTimeMs: dto.completionTimeMs ?? 0,
       respondentIpHash,
       userAgent,
@@ -223,7 +309,7 @@ export class SubmissionsService {
         versions: {
           orderBy: { version: 'desc' },
           take: 5,
-          select: { id: true, version: true, questionsJson: true },
+          select: { id: true, version: true, questionsJson: true, compiledRules: true },
         },
       },
     });
@@ -249,6 +335,7 @@ export class SubmissionsService {
       currentVersionId: active?.id ?? null,
       currentVersion: form.currentVersion,
       questionsJson: active?.questionsJson ?? [],
+      compiledRules: active?.compiledRules ?? {},
     };
 
     try {
@@ -376,6 +463,54 @@ export class SubmissionsService {
    * this form — otherwise a caller could attach another tenant's file to their
    * own submission and read it back through the submissions API.
    */
+  /**
+   * Resolve and authorise the subject an entry attaches to.
+   *
+   * Three things must all hold, and each closes a distinct hole:
+   *   1. the form is actually bound to a subject type — otherwise a caller
+   *      could staple arbitrary entries onto records via a standalone form;
+   *   2. the subject belongs to the SAME organization as the form — the
+   *      cross-tenant check, since subjectId arrives from an unauthenticated
+   *      public endpoint;
+   *   3. the subject is of the type the form expects — a Household entry must
+   *      not land on a Patient record.
+   *
+   * Returns null for standalone forms, which is every pre-existing form.
+   */
+  private async resolveSubjectId(
+    formId: string,
+    organizationId: string,
+    requestedSubjectId?: string,
+  ): Promise<string | null> {
+    if (!requestedSubjectId) return null;
+
+    const form = await this.prisma.reader.form.findFirst({
+      where: { id: formId, organizationId },
+      select: { subjectTypeId: true, subjectRole: true },
+    });
+
+    if (!form?.subjectTypeId || form.subjectRole === 'NONE') {
+      throw new BadRequestException('This form is not linked to a record.');
+    }
+
+    const subject = await this.prisma.reader.subject.findFirst({
+      where: {
+        id: requestedSubjectId,
+        organizationId,
+        subjectTypeId: form.subjectTypeId,
+        deletedAt: null,
+      },
+      select: { id: true },
+    });
+
+    // Deliberately the same message for "not found", "wrong tenant" and "wrong
+    // type": distinguishing them would confirm the existence of another
+    // organization's record to anyone probing ids.
+    if (!subject) throw new BadRequestException('Record not found.');
+
+    return subject.id;
+  }
+
   private async assertFileReferencesValid(
     answers: Record<string, any>,
     questionsJson: unknown,

@@ -130,6 +130,14 @@ export const formDetailSelect = {
   pagesJson: true,
   questionsJson: true,
   logicJson: true,
+  // The builder round-trips the whole definition: without rulesJson the rules
+  // panel reloads empty and the next autosave writes that emptiness back,
+  // silently destroying the author's rules.
+  rulesJson: true,
+  // Decides whether cross-form references are offered in the rule builder —
+  // they are only valid on a form bound to a subject type.
+  subjectTypeId: true,
+  subjectRole: true,
   notifyEmails: true,
   createdAt: true,
   updatedAt: true,

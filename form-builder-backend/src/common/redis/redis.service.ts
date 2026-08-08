@@ -1,6 +1,7 @@
 import { Injectable, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
 import Redis from 'ioredis';
 import { AppLogger } from '../logger/app-logger.service';
+import { getRedisUrl } from '../../config/env';
 
 @Injectable()
 export class RedisService implements OnModuleInit, OnModuleDestroy {
@@ -11,7 +12,7 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
   }
 
   onModuleInit() {
-    this.client = new Redis(process.env.REDIS_URL ?? 'redis://localhost:6379', {
+    this.client = new Redis(getRedisUrl(), {
       maxRetriesPerRequest: null, // Required by BullMQ
       lazyConnect: false,
       retryStrategy(times) {

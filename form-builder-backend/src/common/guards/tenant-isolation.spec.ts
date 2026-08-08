@@ -18,6 +18,9 @@ import { StorageController } from '../../modules/storage/storage.controller';
 import { SubmissionsController } from '../../modules/submissions/submissions.controller';
 import { TemplatesController } from '../../modules/templates/templates.controller';
 import { WebhooksController } from '../../modules/webhooks/webhooks.controller';
+import { SubjectsController } from '../../modules/subjects/subjects.controller';
+import { FormAppsController } from '../../modules/form-apps/form-apps.controller';
+import { FeatureFlagsController } from '../../modules/feature-flags/feature-flags.controller';
 
 /**
  * Structural tenant-isolation checks.
@@ -46,6 +49,9 @@ const ALL_CONTROLLERS = [
   SubmissionsController,
   TemplatesController,
   WebhooksController,
+  SubjectsController,
+  FormAppsController,
+  FeatureFlagsController,
 ];
 
 interface RouteInfo {

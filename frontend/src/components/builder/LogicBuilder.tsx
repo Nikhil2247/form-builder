@@ -81,7 +81,10 @@ export function LogicBuilder({ form, setForm }: LogicBuilderProps) {
   return (
     // Matches the build canvas exactly — same max width, same padding, same
     // vertical rhythm — so switching views does not shift the page under you.
-    <div className="mx-auto max-w-3xl space-y-5 p-4 pb-24 sm:p-6 lg:p-8">
+    // The bottom scroll gutter is the page's, not this panel's: the rules panel
+    // renders directly underneath, and a `pb-24` here would have opened a 6rem
+    // hole between the two.
+    <div className="mx-auto max-w-3xl space-y-5 p-4 sm:p-6 lg:p-8">
       <PanelSection
         title="Conditional logic"
         description="Show or hide questions based on what the respondent has already answered."

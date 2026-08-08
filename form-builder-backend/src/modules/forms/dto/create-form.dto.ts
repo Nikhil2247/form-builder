@@ -69,6 +69,8 @@ export class CreateFormDto {
   @IsOptional() @Allow() pages?: any;
   @IsOptional() @Allow() questions?: any;
   @IsOptional() @Allow() logic?: any;
+  /** Rule set. Shape-checked by normalizeRules; compiled at publish. */
+  @IsOptional() @Allow() rules?: any;
 
   @IsOptional()
   @IsIn(['DOCUMENT', 'CONVERSATIONAL', 'GRID', 'PORTAL'])

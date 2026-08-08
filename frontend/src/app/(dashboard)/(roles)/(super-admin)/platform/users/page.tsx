@@ -137,6 +137,7 @@ export default function PlatformUsersPage() {
         columns={columns}
         data={users}
         getRowId={(user) => user.id}
+        rowHref={(user) => `/platform/users/${user.id}`}
         isLoading={isLoading || isFetching}
         error={error}
         onRetry={() => refetch()}

@@ -1,11 +1,9 @@
 'use client';
 
 import React from 'react';
-import Link from 'next/link';
-import { ArrowRight, BarChart2, Building2, FileBox, Shield, Users } from 'lucide-react';
+import { Activity, ArrowRight, BarChart2, Building2, FileBox, Shield, Users } from 'lucide-react';
 
 import { Card } from '@/components/ui/card';
-import { Button } from '@/components/ui/button';
 import {
   ButtonLink,
   PageHeader,
@@ -15,13 +13,13 @@ import {
   ErrorState,
 } from '@/components/shared';
 import { formatCompact } from '@/components/shared/formatters';
-import { useAdminDashboard } from '@/hooks/use-admin';
+import { useAdminDashboard, type AdminDashboard } from '@/hooks/use-admin';
 
 /**
  * The admin dashboard payload has been returned both flat and under `stats`.
  * Read both rather than showing an em dash on one of them.
  */
-function metric(data: any, ...keys: string[]): number | undefined {
+function metric(data: AdminDashboard | undefined, ...keys: string[]): number | undefined {
   for (const key of keys) {
     const value = data?.stats?.[key] ?? data?.[key];
     if (typeof value === 'number') return value;
@@ -47,6 +45,13 @@ const QUICK_LINKS = [
     icon: Shield,
     label: 'Audit logs',
     description: 'Immutable trail of platform and organization activity.',
+  },
+  {
+    href: '/platform/system',
+    icon: Activity,
+    label: 'System',
+    // Not in the sidebar navigation, so this card is how it is found.
+    description: 'Dependency probes, queue depth, database and Redis statistics.',
   },
 ];
 

@@ -63,6 +63,7 @@ import { EnterpriseFieldCard } from '@/components/builder/EnterpriseFieldCard';
 import { FormRunner } from '@/components/builder/FormRunner';
 import { FormThemeScope } from '@/components/builder/FormThemeScope';
 import { LogicBuilder } from '@/components/builder/LogicBuilder';
+import { RulesBuilder } from '@/components/builder/RulesBuilder';
 import { FormSettingsPanel } from '@/components/builder/FormSettingsPanel';
 import { fetchApi, unwrap } from '@/lib/api';
 import { useOrgId } from '@/hooks/use-auth';
@@ -97,6 +98,48 @@ const COMMAND_ITEMS: { type: QuestionType; label: string; keywords: string; icon
     { type: 'MATRIX', label: 'Matrix / Likert', keywords: 'matrix likert grid table', icon: Grid },
     { type: 'SECTION_HEADER', label: 'Section header', keywords: 'section header banner title', icon: HeadingIcon },
   ];
+
+/**
+ * The builder's view of GET /organizations/:orgId/forms/:id.
+ *
+ * Written out rather than reaching for `any`: this is the one place the whole
+ * document crosses into the store, so a field the API stops sending should be a
+ * type error here and not a silently empty panel. Everything is optional
+ * because forms saved by older builds genuinely lack some of these columns —
+ * `rulesJson` and `subjectTypeId` most of all.
+ */
+interface LoadedFormResponse {
+  id?: string;
+  title?: string;
+  description?: string | null;
+  isQuizMode?: boolean;
+  themeConfig?: FormConfig['theme'];
+  pagesJson?: FormConfig['pages'];
+  questionsJson?: FormConfig['questions'];
+  logicJson?: FormConfig['logic'];
+  rulesJson?: FormConfig['rules'];
+  slug?: string | null;
+  status?: FormConfig['status'];
+  layoutMode?: string | null;
+  /** Present only on forms bound to a subject type; gates `ref` nodes. */
+  subjectTypeId?: string | null;
+  requireAuth?: boolean;
+  allowMultiple?: boolean;
+  maxSubmissions?: number | null;
+  expiresAt?: string | null;
+  isPasswordProtected?: boolean;
+  notifyEmails?: unknown;
+  createdAt?: string;
+  updatedAt?: string;
+  versions?: Array<{ publishedAt?: string | null }>;
+  /** The API sometimes wraps the row and sometimes returns it bare. */
+  form?: LoadedFormResponse;
+}
+
+/** Message from an unknown throw, without widening the catch binding to `any`. */
+function errorMessage(error: unknown, fallback: string): string {
+  return error instanceof Error && error.message ? error.message : fallback;
+}
 
 function FormBuilderInner() {
   const router = useRouter();
@@ -154,7 +197,9 @@ function FormBuilderInner() {
 
       setLoading(true);
       try {
-        const data = unwrap<any>(await fetchApi(`/organizations/${orgId}/forms/${routeFormId}`));
+        const data = unwrap<LoadedFormResponse>(
+          await fetchApi(`/organizations/${orgId}/forms/${routeFormId}`),
+        );
         const form = data?.form ?? data;
         if (cancelled) return;
 
@@ -170,6 +215,7 @@ function FormBuilderInner() {
             pages: form.pagesJson ?? [],
             questions: form.questionsJson ?? [],
             logic: form.logicJson ?? [],
+            rules: form.rulesJson ?? [],
             slug: form.slug ?? undefined,
             createdAt: form.createdAt,
             updatedAt: form.updatedAt,
@@ -177,11 +223,21 @@ function FormBuilderInner() {
           {
             status: form.status ?? 'DRAFT',
             updatedAt: form.updatedAt ?? null,
+            // Cross-form `ref` nodes read another form's answer for the same
+            // subject, so without a subject type there is nothing to look them
+            // up against and the compiler rejects them. Same condition the
+            // publish endpoint uses for `allowReferences`.
+            allowReferences: !!form.subjectTypeId,
             // The draft columns are written on save, a FormVersion only on
             // publish. A newer updatedAt means the live version is stale.
             hasUnpublishedChanges:
               form.status === 'PUBLISHED' &&
               !!lastPublishedAt &&
+              // Guarded rather than assumed: without `updatedAt` this read
+              // `new Date(undefined)`, which is an Invalid Date whose
+              // `getTime()` is NaN — and every comparison against NaN is false,
+              // so a published form silently reported no pending changes.
+              !!form.updatedAt &&
               new Date(form.updatedAt).getTime() > new Date(lastPublishedAt).getTime(),
             settings: {
               slug: form.slug ?? '',
@@ -199,11 +255,13 @@ function FormBuilderInner() {
             },
           },
         );
-        formIdRef.current = form.id;
-      } catch (error: any) {
+        // The id we asked for, if the response omitted its own — losing it here
+        // would make the next autosave POST a second copy of this form.
+        formIdRef.current = form.id ?? routeFormId;
+      } catch (error) {
         if (cancelled) return;
         setLoading(false);
-        toast.error(error?.message ?? 'Could not load this form');
+        toast.error(errorMessage(error, 'Could not load this form'));
       }
     }
 
@@ -269,6 +327,9 @@ function FormBuilderInner() {
           pages: form.pages,
           questions: form.questions,
           logic: form.logic,
+          // Compiled server-side by the same `compileRules` the rules panel
+          // runs live, so a set the panel reports as clean publishes cleanly.
+          rules: form.rules ?? [],
           theme: form.theme,
         }),
       });
@@ -276,8 +337,8 @@ function FormBuilderInner() {
       const wasPublished = state.status === 'PUBLISHED';
       markPublished();
       toast.success(wasPublished ? 'New version published' : 'Your form is live');
-    } catch (error: any) {
-      toast.error(error?.message ?? 'Could not publish this form');
+    } catch (error) {
+      toast.error(errorMessage(error, 'Could not publish this form'));
     } finally {
       setIsPublishing(false);
     }
@@ -376,7 +437,10 @@ function FormBuilderInner() {
         onOpenSettings={() => setIsSettingsOpen(true)}
         activeView={meta.activeView}
         onChangeView={setActiveView}
-        logicRuleCount={meta.logicRuleCount}
+        // Both panels live behind the Logic tab, so the badge counts both —
+        // showing only the conditional-logic rules would have read "1" on a
+        // view holding four things the author has to maintain.
+        logicRuleCount={meta.logicRuleCount + meta.ruleCount}
         onSaveChanges={() => void saveManually()}
         onToggleLeftPanel={() => setIsLeftPanelOpen(true)}
         onPublish={() => void publish()}
@@ -434,7 +498,15 @@ function FormBuilderInner() {
 
         <main id="main-content" className="relative flex-1 overflow-y-auto bg-muted/25">
           {meta.activeView === 'LOGIC' ? (
-            <LogicBuilderPanel />
+            // Both panels share this view. The rules panel renders nothing at
+            // all when FORM_RULES is off, so an org without the flag sees the
+            // logic canvas exactly as it was. The bottom padding lives here
+            // rather than inside either panel, so the two stack on one rhythm
+            // whichever of them is last.
+            <div className="pb-24">
+              <LogicBuilderPanel />
+              <RulesBuilderPanel />
+            </div>
           ) : (
             <div className="mx-auto max-w-3xl space-y-5 p-4 pb-24 sm:p-6 lg:p-8">
               <Card className="space-y-3 p-5">
@@ -608,6 +680,18 @@ function LogicBuilderPanel() {
   const form = useFormSnapshot();
   const setForm = useFormConfigAdapter();
   return <LogicBuilder form={form} setForm={setForm} />;
+}
+
+/**
+ * Rules panel — same wiring as the logic panel above, plus the one fact the
+ * document itself does not carry: whether this form is bound to a subject type,
+ * which is what decides whether cross-form references are legal.
+ */
+function RulesBuilderPanel() {
+  const form = useFormSnapshot();
+  const setForm = useFormConfigAdapter();
+  const allowReferences = useBuilderStore((s) => s.allowReferences);
+  return <RulesBuilder form={form} setForm={setForm} allowReferences={allowReferences} />;
 }
 
 /**

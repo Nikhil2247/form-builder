@@ -38,6 +38,18 @@ export interface QuestionValidation {
 
 export interface FormQuestion {
   id: string;
+  /**
+   * Short, formula-safe name rules address this question by — "Date of birth"
+   * becomes `date_of_birth`.
+   *
+   * Derived from the label server-side (and de-duplicated there), so it is
+   * absent on a question that has not been through a save yet. Rules are
+   * written against keys rather than ids so a formula reads
+   * `yearsBetween(dob, today())` instead of `yearsBetween(q_7f3a91, today())`,
+   * and so a key can be renamed without touching a single stored answer —
+   * answers stay keyed by `id`, which never changes.
+   */
+  key?: string;
   type: QuestionType;
   label: string;
   description?: string;
@@ -64,6 +76,15 @@ export interface FormQuestion {
   correctAnswer?: string | string[];
   explanation?: string;
 }
+
+/**
+ * The rules engine's own types are the single source of truth for what a rule
+ * is; re-exported here so form consumers have one import for the document
+ * shape. `src/lib/rules` is a byte-for-byte mirror of the backend package and
+ * must not be edited.
+ */
+export type { FormRule, RuleKind, ExprNode } from '@/lib/rules';
+import type { FormRule } from '@/lib/rules';
 
 export type LogicOperator = 'EQUALS' | 'NOT_EQUALS' | 'CONTAINS' | 'GREATER_THAN' | 'LESS_THAN' | 'IS_FILLED';
 export type LogicAction = 'SHOW' | 'HIDE' | 'JUMP_TO_PAGE';
@@ -151,6 +172,12 @@ export interface FormConfig {
   pages: FormPage[];
   questions: FormQuestion[];
   logic: LogicRule[];
+  /**
+   * Calculation, visibility, requiredness and validation rules — the safe JSON
+   * expression trees authored in RulesBuilder. Compiled at publish by
+   * `compileRules`; absent on forms saved before the feature existed.
+   */
+  rules?: FormRule[];
   theme: FormTheme;
   createdAt: string;
   updatedAt: string;
@@ -179,6 +206,7 @@ export function toFormConfig(form: Form): FormConfig {
     pages: form.pagesJson ?? [],
     questions: form.questionsJson ?? [],
     logic: form.logicJson ?? [],
+    rules: form.rulesJson ?? [],
     theme: form.themeConfig,
     createdAt: form.createdAt,
     updatedAt: form.updatedAt,
@@ -211,6 +239,16 @@ export interface Form {
   pagesJson: FormPage[];
   questionsJson: FormQuestion[];
   logicJson: LogicRule[];
+  /** JSONB array column. Optional because older API builds do not project it. */
+  rulesJson?: FormRule[];
+  /**
+   * Subject type the form is bound to, when it is one.
+   *
+   * This is what decides whether cross-form `ref` nodes are legal: a reference
+   * reads another form's answer *for the same subject*, so without a subject
+   * there is nothing to look the value up against and the compiler rejects it.
+   */
+  subjectTypeId?: string | null;
   /** JSONB array column. Was typed `string | null`, which it never is. */
   notifyEmails: string[] | null;
   deletedAt: string | null;

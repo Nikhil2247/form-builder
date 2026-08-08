@@ -2,6 +2,7 @@ import { Injectable, Logger, UnauthorizedException, ConflictException } from '@n
 import { JwtService } from '@nestjs/jwt';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { resolveActiveOrganization } from '../../common/tenancy/active-organization';
+import { FeatureFlagsService } from '../feature-flags/feature-flags.service';
 import { userCredentialsSelect } from '../../common/prisma/selects';
 import * as argon2 from 'argon2';
 import * as crypto from 'crypto';
@@ -35,6 +36,7 @@ export class AuthService {
     private mailService: MailService,
     private totp: TotpService,
     private crypto: CryptoService,
+    private featureFlags: FeatureFlagsService,
   ) {}
 
   private async hashPassword(password: string): Promise<string> {
@@ -450,6 +452,13 @@ export class AuthService {
       /// while the frontend migrates to `activeOrganization`.
       organization: active ? toWorkspace(active) : null,
       mfaEnabled: user.mfaEnabled,
+      /// Resolved feature flags for the active workspace, as { KEY: boolean }.
+      /// Delivered with the session so the shell can decide what to render
+      /// without a second round-trip on every page load.
+      ///
+      /// UI gating only — never authorization. Every endpoint keeps its own
+      /// guards, so flipping a flag in devtools reveals menus, not data.
+      features: await this.featureFlags.getForOrganization(active?.organizationId),
     };
   }
 

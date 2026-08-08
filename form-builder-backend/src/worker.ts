@@ -1,3 +1,7 @@
+// MUST be first — see the note in main.ts. The worker is entirely queue-driven,
+// so a Redis URL resolved before .env loads breaks it completely.
+import './config/env';
+
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 import { WinstonNestAdapter } from './common/logger/winston-nest.adapter';

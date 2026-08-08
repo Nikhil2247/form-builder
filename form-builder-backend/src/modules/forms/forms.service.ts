@@ -26,6 +26,7 @@ import {
   formDetailSelect,
   submissionGridSelect,
 } from '../../common/prisma/selects';
+import { compileRules, type FormRule } from '../../common/rules';
 import {
   normalizeFormStructure,
   normalizeNotifyEmails,
@@ -110,6 +111,7 @@ export class FormsService {
         pagesJson: structure.pages,
         questionsJson: structure.questions,
         logicJson: structure.logic,
+        rulesJson: structure.rules,
         layoutMode: dto.layoutMode || 'DOCUMENT',
         status: 'DRAFT',
       },
@@ -423,15 +425,19 @@ Respond ONLY with a valid JSON object matching this structure:
     // write, so the currently persisted parts are supplied for anything the
     // client left out.
     const touchesStructure =
-      dto.pages !== undefined || dto.questions !== undefined || dto.logic !== undefined;
+      dto.pages !== undefined ||
+      dto.questions !== undefined ||
+      dto.logic !== undefined ||
+      dto.rules !== undefined;
 
     const structure = touchesStructure
       ? normalizeFormStructure(
-          { pages: dto.pages, questions: dto.questions, logic: dto.logic },
+          { pages: dto.pages, questions: dto.questions, logic: dto.logic, rules: dto.rules },
           {
             pages: form.pagesJson,
             questions: form.questionsJson,
             logic: form.logicJson,
+            rules: form.rulesJson,
           },
         )
       : null;
@@ -457,6 +463,7 @@ Respond ONLY with a valid JSON object matching this structure:
         pagesJson: structure.pages,
         questionsJson: structure.questions,
         logicJson: structure.logic,
+        rulesJson: structure.rules,
       }),
       ...(dto.layoutMode !== undefined && { layoutMode: dto.layoutMode }),
     };
@@ -624,6 +631,7 @@ Respond ONLY with a valid JSON object matching this structure:
     logicJson: any,
     themeJson: any,
     userId?: string,
+    rulesJson?: any,
   ) {
     // The version number, the FormVersion row, and the Form pointer must move
     // together. Previously these were three separate statements computed from a
@@ -646,11 +654,12 @@ Respond ONLY with a valid JSON object matching this structure:
           // does — a snapshot is the worst possible place to discover a
           // duplicate question id or a dangling logic rule.
           const structure = normalizeFormStructure(
-            { pages: pagesJson, questions: questionsJson, logic: logicJson },
+            { pages: pagesJson, questions: questionsJson, logic: logicJson, rules: rulesJson },
             {
               pages: form.pagesJson,
               questions: form.questionsJson,
               logic: form.logicJson,
+              rules: form.rulesJson,
             },
           );
 
@@ -658,6 +667,26 @@ Respond ONLY with a valid JSON object matching this structure:
             throw new BadRequestException(
               'Cannot publish a form with no questions. Add at least one field first.',
             );
+          }
+
+          // Publish is the last point at which a broken rule set can be stopped
+          // cheaply. After this the version is immutable and every respondent
+          // is evaluated against it, so unknown operators, dangling field
+          // references and dependency cycles all fail here rather than becoming
+          // a runtime surprise on the submit path.
+          const compiled = compileRules(structure.rules as FormRule[], {
+            knownKeys: structure.questions.map((q: any) => q.key),
+            // Cross-form references need a subject to hang off. Until a form is
+            // bound to a subject type they are rejected rather than silently
+            // resolving to null.
+            allowReferences: Boolean((form as any).subjectTypeId),
+          });
+
+          if (!compiled.ok) {
+            throw new BadRequestException({
+              message: 'This form has rule errors and cannot be published.',
+              issues: compiled.errors.map((e) => ({ ruleId: e.ruleId, message: e.message })),
+            });
           }
 
           // Derive the next version from what actually exists, not from a
@@ -676,6 +705,8 @@ Respond ONLY with a valid JSON object matching this structure:
               questionsJson: structure.questions,
               logicJson: structure.logic,
               themeJson: themeJson ? normalizeTheme(themeJson) : (form.themeConfig ?? {}),
+              rulesJson: structure.rules,
+              compiledRules: compiled.plan as any,
             },
           });
 
@@ -973,6 +1004,7 @@ Respond ONLY with a valid JSON object matching this structure:
       pagesJson,
       questionsJson,
       logicJson,
+      rulesJson,
       notifyEmails,
       versions,
       ...rest
@@ -988,6 +1020,14 @@ Respond ONLY with a valid JSON object matching this structure:
       questions: activeVersion.questionsJson ?? [],
       logic: activeVersion.logicJson ?? [],
       theme: activeVersion.themeJson ?? rest.themeConfig ?? {},
+      // The COMPILED plan, not the authored rules: the runner interprets it to
+      // show calculated values live and hide irrelevant questions. Safe to
+      // expose — it describes this form's own structure, which the respondent
+      // is already looking at, and it is validated data rather than code.
+      //
+      // Client evaluation is for UX only. The server recomputes every
+      // calculated value on submit and ignores whatever the client sent.
+      rules: activeVersion.compiledRules ?? {},
       // Tell the client whether it must collect a password before submitting.
       isPasswordProtected: form.isPasswordProtected,
       requireAuth: form.requireAuth,

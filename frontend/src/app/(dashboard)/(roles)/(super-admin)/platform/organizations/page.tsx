@@ -4,7 +4,6 @@ import React, { useState } from 'react';
 import { Building2, MoreHorizontal, ShieldAlert, ShieldCheck } from 'lucide-react';
 import { toast } from 'sonner';
 
-import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import {
@@ -171,6 +170,7 @@ export default function PlatformOrganizationsPage() {
         columns={columns}
         data={orgs}
         getRowId={(org) => org.id}
+        rowHref={(org) => `/platform/organizations/${org.id}`}
         isLoading={isLoading || isFetching}
         error={error}
         onRetry={() => refetch()}
@@ -189,21 +189,26 @@ export default function PlatformOrganizationsPage() {
         }
       />
 
-      <SuspendModal
-        org={suspendTarget}
-        onOpenChange={(open) => !open && setSuspendTarget(null)}
-        isPending={suspendOrg.isPending}
-        onConfirm={async (reason) => {
-          if (!suspendTarget) return;
-          try {
-            await suspendOrg.mutateAsync({ orgId: suspendTarget.id, reason });
-            toast.success(`${suspendTarget.name} suspended`);
-            setSuspendTarget(null);
-          } catch (err: any) {
-            toast.error(err?.message ?? 'Could not suspend this organization');
-          }
-        }}
-      />
+      {/* Mounted only while open, so the reason field starts empty each time
+          without an effect resetting it. */}
+      {suspendTarget && (
+        <SuspendModal
+          org={suspendTarget}
+          onClose={() => setSuspendTarget(null)}
+          isPending={suspendOrg.isPending}
+          onConfirm={async (reason) => {
+            try {
+              await suspendOrg.mutateAsync({ orgId: suspendTarget.id, reason });
+              toast.success(`${suspendTarget.name} suspended`);
+              setSuspendTarget(null);
+            } catch (err) {
+              toast.error(
+                err instanceof Error ? err.message : 'Could not suspend this organization',
+              );
+            }
+          }}
+        />
+      )}
 
       <ConfirmDialog
         open={!!activateTarget}
@@ -224,8 +229,10 @@ export default function PlatformOrganizationsPage() {
             await activateOrg.mutateAsync(activateTarget.id);
             toast.success(`${activateTarget.name} reactivated`);
             setActivateTarget(null);
-          } catch (err: any) {
-            toast.error(err?.message ?? 'Could not reactivate this organization');
+          } catch (err) {
+            toast.error(
+              err instanceof Error ? err.message : 'Could not reactivate this organization',
+            );
           }
         }}
       />
@@ -235,30 +242,26 @@ export default function PlatformOrganizationsPage() {
 
 function SuspendModal({
   org,
-  onOpenChange,
+  onClose,
   onConfirm,
   isPending,
 }: {
-  org: AdminOrganization | null;
-  onOpenChange: (open: boolean) => void;
+  org: AdminOrganization;
+  onClose: () => void;
   onConfirm: (reason: string) => void;
   isPending: boolean;
 }) {
   const [reason, setReason] = useState('');
 
-  React.useEffect(() => {
-    if (org) setReason('');
-  }, [org]);
-
   return (
     <Modal
-      open={!!org}
-      onOpenChange={onOpenChange}
+      open
+      onOpenChange={(open) => !open && onClose()}
       title="Suspend organization"
-      description={`${org?.name ?? 'This organization'} will lose access immediately and its published forms will stop accepting submissions.`}
+      description={`${org.name} will lose access immediately and its published forms will stop accepting submissions.`}
       footer={
         <ModalActions
-          onCancel={() => onOpenChange(false)}
+          onCancel={onClose}
           confirmLabel="Suspend organization"
           variant="destructive"
           onConfirm={() => onConfirm(reason.trim())}

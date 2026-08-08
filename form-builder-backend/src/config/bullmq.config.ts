@@ -1,7 +1,12 @@
 import type { ConnectionOptions } from 'bullmq';
+// Importing env first is load-bearing: it runs dotenv as a side effect, so
+// REDIS_URL is populated before the line below reads it. Without this the
+// value is resolved during import — before ConfigModule loads .env — and
+// silently falls back to localhost.
+import { getRedisUrl } from './env';
 
 export const bullMQConnection: ConnectionOptions = {
-  url: process.env.REDIS_URL ?? 'redis://localhost:6379',
+  url: getRedisUrl(),
   maxRetriesPerRequest: null,
   lazyConnect: true,
 };

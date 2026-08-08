@@ -1,4 +1,5 @@
 import * as Joi from 'joi';
+import { getRedisUrl } from './env';
 
 export const validationSchema = Joi.object({
   NODE_ENV: Joi.string().valid('development', 'production', 'test').default('development'),
@@ -38,7 +39,9 @@ export default () => ({
     url: process.env.DATABASE_URL,
     replicaUrl: process.env.DATABASE_REPLICA_URL ?? process.env.DATABASE_URL,
   },
-  redis: { url: process.env.REDIS_URL ?? 'redis://localhost:6379' },
+  // Single resolver, shared with the cache, throttler and BullMQ, so nothing
+  // can end up pointed at a different server than the rest.
+  redis: { url: getRedisUrl() },
   jwt: {
     secret: process.env.JWT_SECRET!,
     accessTtl: parseInt(process.env.JWT_ACCESS_TTL_SECONDS ?? '900', 10),

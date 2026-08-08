@@ -1,8 +1,11 @@
 import {
   Controller, Get, Post, Patch, Param, Query,
-  UseGuards, Body,
+  UseGuards, Body, Req, ParseUUIDPipe,
 } from '@nestjs/common';
+import type { Request } from 'express';
 import { AdminService } from './admin.service';
+import { SystemService } from './system.service';
+import { AdminUsersService } from './admin-users.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { SuperAdminGuard } from '../../common/guards/super-admin.guard';
 import { PaginationQueryDto } from '../../common/pagination/pagination-query.dto';
@@ -17,11 +20,96 @@ import { parsePagination } from '../../common/pagination/pagination';
  *   /admin/organizations         — List/manage all organizations
  *   /admin/users                 — List/manage all users
  *   /admin/audit-logs            — View audit logs (per-org filterable)
+ *   /admin/system/*              — Dependency health and infrastructure stats
+ *   /admin/users/:userId/*       — Per-user roles, sessions, and security
  */
 @Controller('admin')
 @UseGuards(JwtAuthGuard, SuperAdminGuard)
 export class AdminController {
-  constructor(private readonly adminService: AdminService) {}
+  constructor(
+    private readonly adminService: AdminService,
+    private readonly systemService: SystemService,
+    private readonly adminUsers: AdminUsersService,
+  ) {}
+
+  // ════════════════════════════════════════════════════════════════════════════
+  // SYSTEM HEALTH & INFRASTRUCTURE
+  // ════════════════════════════════════════════════════════════════════════════
+
+  /**
+   * Everything the system page needs in one request.
+   *
+   * Note this describes the POD THAT ANSWERED. Process memory and uptime are
+   * per-instance; aggregate figures need a metrics backend, not an API call.
+   */
+  @Get('system')
+  async getSystemOverview() {
+    return this.systemService.getOverview();
+  }
+
+  /** Dependency probes on their own, for polling without the heavier queries. */
+  @Get('system/health')
+  async getSystemHealth() {
+    return this.systemService.getHealth();
+  }
+
+  @Get('system/queues')
+  async getQueueStats() {
+    return this.systemService.getQueueStats();
+  }
+
+  // ════════════════════════════════════════════════════════════════════════════
+  // USER ADMINISTRATION
+  // ════════════════════════════════════════════════════════════════════════════
+
+  @Get('users/:userId')
+  async getUserDetail(@Param('userId', new ParseUUIDPipe()) userId: string) {
+    return this.adminUsers.getUserDetail(userId);
+  }
+
+  /** Platform role. Separate from org roles — see AdminUsersService. */
+  @Patch('users/:userId/system-role')
+  async setSystemRole(
+    @Param('userId', new ParseUUIDPipe()) userId: string,
+    @Body() body: { systemRole: 'USER' | 'SUPER_ADMIN' },
+    @Req() req: Request,
+  ) {
+    return this.adminUsers.setSystemRole(userId, body.systemRole, (req.user as any).sub);
+  }
+
+  /** Role within one organization the user already belongs to. */
+  @Patch('users/:userId/organizations/:orgId/role')
+  async setOrgRole(
+    @Param('userId', new ParseUUIDPipe()) userId: string,
+    @Param('orgId', new ParseUUIDPipe()) orgId: string,
+    @Body() body: { role: 'ADMIN' | 'EDITOR' | 'VIEWER' },
+    @Req() req: Request,
+  ) {
+    return this.adminUsers.setOrgRole(userId, orgId, body.role, (req.user as any).sub);
+  }
+
+  @Post('users/:userId/revoke-sessions')
+  async revokeSessions(
+    @Param('userId', new ParseUUIDPipe()) userId: string,
+    @Req() req: Request,
+  ) {
+    return this.adminUsers.revokeSessions(userId, (req.user as any).sub);
+  }
+
+  @Patch('users/:userId/suspended')
+  async setUserSuspended(
+    @Param('userId', new ParseUUIDPipe()) userId: string,
+    @Body() body: { suspended: boolean },
+    @Req() req: Request,
+  ) {
+    return this.adminUsers.setUserSuspended(userId, body.suspended === true, (req.user as any).sub);
+  }
+
+  /** Support path for a user locked out of their authenticator. */
+  @Post('users/:userId/reset-mfa')
+  async resetMfa(@Param('userId', new ParseUUIDPipe()) userId: string, @Req() req: Request) {
+    return this.adminUsers.resetMfa(userId, (req.user as any).sub);
+  }
 
   // ════════════════════════════════════════════════════════════════════════════
   // DASHBOARD

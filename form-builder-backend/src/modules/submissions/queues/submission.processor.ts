@@ -30,6 +30,8 @@ export class SubmissionProcessor extends WorkerHost {
       userAgent,
       respondentId,
       submittedAt,
+      organizationId,
+      subjectId,
     } = job.data;
 
     this.logger.log(`Processing submission ${submissionId}`);
@@ -42,7 +44,16 @@ export class SubmissionProcessor extends WorkerHost {
       select: {
         id: true,
         questionsJson: true,
-        form: { select: { title: true, notifyEmails: true, isQuizMode: true } },
+        form: {
+          select: {
+            title: true,
+            notifyEmails: true,
+            isQuizMode: true,
+            subjectRole: true,
+            subjectTypeId: true,
+            subjectType: { select: { id: true, identityConfig: true } },
+          },
+        },
       },
     });
 
@@ -57,13 +68,43 @@ export class SubmissionProcessor extends WorkerHost {
       ? gradeQuiz(questions, answers)
       : { score: null, max: null, passed: null };
 
-    // ── Persist submission + analytics atomically ───────────────────────────
+    // ── Persist submission + subject + analytics atomically ─────────────────
+    // Subject creation belongs INSIDE this transaction. If the submission
+    // committed and the subject creation then failed, the registration entry
+    // would exist with no record attached to it and no way to tell, after the
+    // fact, that one was ever meant to exist.
     await this.prisma.writer.$transaction(async (tx: any) => {
+      const form = formVersion.form as any;
+      let resolvedSubjectId: string | null = subjectId ?? null;
+
+      if (form.subjectRole === 'REGISTERS' && form.subjectTypeId && !resolvedSubjectId) {
+        const identity = buildSubjectIdentity(
+          (form.subjectType?.identityConfig ?? {}) as any,
+          questions,
+          answers,
+        );
+
+        const subject = await tx.subject.create({
+          data: {
+            organizationId,
+            subjectTypeId: form.subjectTypeId,
+            displayName: identity.displayName,
+            attributes: identity.attributes,
+            externalId: identity.externalId,
+            registrationSubmissionId: submissionId,
+          },
+        });
+
+        resolvedSubjectId = subject.id;
+      }
+
       await tx.formSubmission.create({
         data: {
           id: submissionId,
           formId,
           formVersionId,
+          organizationId,
+          subjectId: resolvedSubjectId,
           answers,
           completionTimeMs: completionTimeMs ?? 0,
           quizScore: grade.score,
@@ -239,4 +280,62 @@ function correctValues(q: any): Set<string> {
     if (typeof o.label === 'string') out.add(o.label);
   }
   return out;
+}
+
+/**
+ * Project a registration submission's identity fields onto the new Subject.
+ *
+ * `identityConfig` names question KEYS while answers are stored by question ID,
+ * so the version's questions translate between them. Keys are used because a
+ * form can be re-published with new question ids for the same logical field,
+ * and this configuration has to survive that.
+ *
+ * Duplicated deliberately rather than imported from SubjectsService: the worker
+ * runs in a separate process (PROCESS_ROLE=worker) and importing a service
+ * would drag its whole Nest dependency graph into the queue runtime.
+ */
+function buildSubjectIdentity(
+  identityConfig: {
+    displayName?: string[];
+    attributes?: string[];
+    externalId?: string;
+  },
+  questions: any[],
+  answers: Record<string, any>,
+): { displayName: string; attributes: Record<string, any>; externalId: string | null } {
+  const idByKey = new Map<string, string>();
+  for (const question of questions ?? []) {
+    if (!question || typeof question.id !== 'string') continue;
+    const key = typeof question.key === 'string' && question.key ? question.key : question.id;
+    if (!idByKey.has(key)) idByKey.set(key, question.id);
+  }
+
+  const valueOf = (key: string): any => {
+    const id = idByKey.get(key);
+    return id ? answers[id] : undefined;
+  };
+
+  const nameParts = (identityConfig.displayName ?? [])
+    .map(valueOf)
+    .filter((v) => v !== undefined && v !== null && v !== '')
+    .map((v) => (Array.isArray(v) ? v.join(' ') : String(v)));
+
+  const attributes: Record<string, any> = {};
+  for (const key of identityConfig.attributes ?? []) {
+    const value = valueOf(key);
+    if (value !== undefined) attributes[key] = value;
+  }
+
+  const rawExternal = identityConfig.externalId ? valueOf(identityConfig.externalId) : undefined;
+
+  return {
+    // A nameless record is unusable in a search list, so fall back to something
+    // stable rather than storing an empty string.
+    displayName: nameParts.join(' ').trim().slice(0, 200) || 'Unnamed record',
+    attributes,
+    externalId:
+      rawExternal === undefined || rawExternal === null || rawExternal === ''
+        ? null
+        : String(rawExternal).slice(0, 100),
+  };
 }

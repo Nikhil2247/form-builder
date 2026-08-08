@@ -81,6 +81,9 @@ export const STRUCTURE_LIMITS = {
   MAX_LABEL_LENGTH: 2_000,
   MAX_DESCRIPTION_LENGTH: 10_000,
   MAX_THEME_KEYS: 60,
+  MAX_KEY_LENGTH: 60,
+  /** Mirrors COMPILE_LIMITS.maxRulesPerForm in common/rules/compiler.ts. */
+  MAX_RULES: 200,
   MAX_NOTIFY_EMAILS: 20,
   /** Serialised size of the whole definition. Below the 256 kb body limit. */
   MAX_DEFINITION_BYTES: 200 * 1024,
@@ -90,6 +93,28 @@ export interface NormalizedStructure {
   pages: any[];
   questions: any[];
   logic: any[];
+  rules: any[];
+}
+
+/**
+ * Turn a question label into a formula-safe key: "Date of birth" -> "date_of_birth".
+ *
+ * Keys exist so a formula reads `yearsBetween(dob, today())` rather than
+ * `yearsBetween(q_7f3a91, today())`. They are per-form naming, not a shared
+ * dictionary — there is no registry and no reuse requirement.
+ */
+function slugifyKey(label: string): string {
+  const slug = label
+    .toLowerCase()
+    .normalize('NFKD')
+    // Strip accents so "Âge" and "Age" produce the same key.
+    .replace(/[̀-ͯ]/g, '')
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, STRUCTURE_LIMITS.MAX_KEY_LENGTH);
+
+  // Keys are identifiers in formulas, so they cannot lead with a digit.
+  return slug && !/^\d/.test(slug) ? slug : `f_${slug}`;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -230,6 +255,7 @@ function normalizeQuestions(input: unknown, validPages: Set<number>): any[] {
 
   const firstPage = validPages.values().next().value ?? 1;
   const seenIds = new Set<string>();
+  const seenKeys = new Set<string>();
   const questions: any[] = [];
 
   for (const raw of input) {
@@ -259,8 +285,23 @@ function normalizeQuestions(input: unknown, validPages: Set<number>): any[] {
     const pageNumber =
       declaredPage !== undefined && validPages.has(declaredPage) ? declaredPage : firstPage;
 
+    // The key is what rules address this question by. Author-set when provided,
+    // otherwise derived from the label. Uniqueness is enforced here because a
+    // duplicate key would make a formula silently read the wrong question —
+    // and unlike ids, keys are not the join key for stored answers, so
+    // renaming one to break a tie is safe.
+    let key =
+      typeof raw.key === 'string' && raw.key.trim() ? slugifyKey(raw.key) : slugifyKey(label);
+    if (seenKeys.has(key)) {
+      let suffix = 2;
+      while (seenKeys.has(`${key}_${suffix}`)) suffix += 1;
+      key = `${key}_${suffix}`;
+    }
+    seenKeys.add(key);
+
     const question: Record<string, any> = {
       id,
+      key,
       type,
       label,
       description: str(raw.description, STRUCTURE_LIMITS.MAX_DESCRIPTION_LENGTH),
@@ -456,9 +497,57 @@ export function normalizeTheme(input: unknown): Record<string, any> {
  * against the definition that will actually exist after the write, not against
  * a fragment of it.
  */
+/**
+ * Shape-normalise the rule array.
+ *
+ * This is structural only — it guarantees a well-formed array of rule-shaped
+ * objects so the column never holds junk. It does NOT check that operators
+ * exist, that referenced keys resolve, or that calculations are acyclic; that
+ * is `compileRules`, which runs at publish and can reject the whole set with a
+ * message. Keeping the two separate means saving a draft never fails because a
+ * half-built rule doesn't compile yet.
+ */
+function normalizeRules(input: unknown): any[] {
+  if (!Array.isArray(input)) return [];
+
+  if (input.length > STRUCTURE_LIMITS.MAX_RULES) {
+    throw new BadRequestException(
+      `A form may have at most ${STRUCTURE_LIMITS.MAX_RULES} rules; this one has ${input.length}.`,
+    );
+  }
+
+  const seen = new Set<string>();
+  const rules: any[] = [];
+
+  for (const raw of input) {
+    if (!isPlainObject(raw)) continue;
+
+    let id = typeof raw.id === 'string' && raw.id.trim() ? raw.id.trim() : generatedId('rule');
+    if (seen.has(id)) id = generatedId('rule');
+    seen.add(id);
+
+    const rule: Record<string, any> = {
+      id,
+      kind: typeof raw.kind === 'string' ? raw.kind : '',
+      target: typeof raw.target === 'string' ? raw.target : '',
+      // The expression is stored as authored. compileRules validates every node
+      // before this ever reaches a respondent.
+      expr: raw.expr ?? null,
+    };
+
+    if (typeof raw.message === 'string') {
+      rule.message = str(raw.message, STRUCTURE_LIMITS.MAX_LABEL_LENGTH);
+    }
+
+    rules.push(rule);
+  }
+
+  return rules;
+}
+
 export function normalizeFormStructure(
-  input: { pages?: unknown; questions?: unknown; logic?: unknown },
-  current: { pages?: unknown; questions?: unknown; logic?: unknown } = {},
+  input: { pages?: unknown; questions?: unknown; logic?: unknown; rules?: unknown },
+  current: { pages?: unknown; questions?: unknown; logic?: unknown; rules?: unknown } = {},
 ): NormalizedStructure {
   const pages = normalizePages(input.pages !== undefined ? input.pages : current.pages);
   const pageNumbers = new Set<number>(pages.map((p) => p.pageNumber));
@@ -475,7 +564,9 @@ export function normalizeFormStructure(
     pageNumbers,
   );
 
-  const bytes = Buffer.byteLength(JSON.stringify({ pages, questions, logic }), 'utf8');
+  const rules = normalizeRules(input.rules !== undefined ? input.rules : current.rules);
+
+  const bytes = Buffer.byteLength(JSON.stringify({ pages, questions, logic, rules }), 'utf8');
   if (bytes > STRUCTURE_LIMITS.MAX_DEFINITION_BYTES) {
     throw new BadRequestException(
       `This form is too large to save (${Math.round(bytes / 1024)} kb of ` +
@@ -484,7 +575,7 @@ export function normalizeFormStructure(
     );
   }
 
-  return { pages, questions, logic };
+  return { pages, questions, logic, rules };
 }
 
 /** Trim, lowercase and de-duplicate notification addresses. */

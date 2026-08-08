@@ -19,6 +19,11 @@ export interface SubmissionPayload {
   userAgent?: string;
   respondentId?: string;
   submittedAt: string;
+  /**
+   * Record this entry belongs to. Already verified against the form's org and
+   * subject type by SubmissionsService — the worker treats it as trusted.
+   */
+  subjectId?: string | null;
 }
 
 @Injectable()
