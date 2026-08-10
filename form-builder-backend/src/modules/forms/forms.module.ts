@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { FormsController } from './forms.controller';
 import { PublicFormsController } from './public-forms.controller';
 import { FormsService } from './forms.service';
+import { ChoiceListsModule } from '../choice-lists/choice-lists.module';
 
 /**
  * NOTE: PrismaService and RedisService are intentionally NOT listed as providers
@@ -10,6 +11,9 @@ import { FormsService } from './forms.service';
  * PrismaService means two extra PostgreSQL connection pools per module.
  */
 @Module({
+  // Choice lists are needed to check optionsSource bindings on save and to
+  // give the rule compiler the slugs a lookup() may name at publish.
+  imports: [ChoiceListsModule],
   controllers: [FormsController, PublicFormsController],
   providers: [FormsService],
   exports: [FormsService],

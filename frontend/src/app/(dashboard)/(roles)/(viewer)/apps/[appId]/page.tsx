@@ -28,7 +28,7 @@ import { PhonePreview } from '@/components/apps/PhonePreview';
 import { PhoneAppSimulator } from '@/components/apps/PhoneAppSimulator';
 import { FEATURES, useFeature } from '@/hooks/use-features';
 import { usePagination } from '@/hooks/use-pagination';
-import { useFormApp, useFormAppDashboard, type AppForm } from '@/hooks/use-form-apps';
+import { useFormApp, useFormAppDashboard, type FormAppStep } from '@/hooks/use-form-apps';
 import { useSubjects, type Subject } from '@/hooks/use-subjects';
 
 /**
@@ -92,6 +92,7 @@ export default function AppDetailPage() {
 
   const detail = app.data;
   const forms = detail?.forms ?? [];
+  const steps = detail?.steps ?? [];
 
   // The registration form is the one that *creates* records. Prefer the form's
   // own role over the subject type's binding: config resolution already dropped
@@ -160,8 +161,17 @@ export default function AppDetailPage() {
         }
         actions={
           <>
+            {/* The whole programme in one link. Offered ahead of the single
+                registration form, because after Phase B that is how a
+                respondent is meant to file — one session, one submit. */}
+            {detail?.publicSlug && detail.isPublished && (
+              <ButtonAnchor size="sm" className="gap-2" href={`/a/${detail.publicSlug}`} external>
+                <ExternalLink className="size-4" /> Open the app
+              </ButtonAnchor>
+            )}
             {registrationForm && (
               <ButtonAnchor
+                variant={detail?.publicSlug && detail.isPublished ? 'outline' : 'default'}
                 size="sm"
                 className="gap-2"
                 href={`/f/${registrationForm.slug}`}
@@ -269,13 +279,19 @@ export default function AppDetailPage() {
           </section>
 
           <section className="space-y-3">
-            <h2 className="text-sm font-semibold">Forms in this app</h2>
-            {forms.length === 0 ? (
+            <div className="flex flex-wrap items-baseline justify-between gap-2">
+              <h2 className="text-sm font-semibold">Steps</h2>
+              <span className="text-xs text-muted-foreground">
+                Filled in this order, submitted together
+              </span>
+            </div>
+
+            {steps.length === 0 ? (
               <EmptyState
                 variant="panel"
                 icon={FileBox}
-                title="No forms configured"
-                description="Add published forms to this app so data-entry users have something to fill."
+                title="No steps configured"
+                description="An app is an ordered set of steps. Add the form that identifies the respondent first, then whatever they report."
                 action={
                   <Can permission="form:create">
                     <ButtonLink variant="outline" size="sm" href={`/apps/builder?id=${appId}`}>
@@ -285,11 +301,11 @@ export default function AppDetailPage() {
                 }
               />
             ) : (
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                {forms.map((form) => (
-                  <AppFormCard key={form.id} form={form} />
+              <ol className="space-y-2">
+                {steps.map((step, index) => (
+                  <AppStepCard key={step.id} step={step} index={index} />
                 ))}
-              </div>
+              </ol>
             )}
           </section>
         </div>
@@ -316,35 +332,49 @@ export default function AppDetailPage() {
 
 // ─────────────────────────────────────────────────────────────────────────────
 
-const ROLE_LABELS: Record<AppForm['subjectRole'], string> = {
-  REGISTERS: 'Creates records',
-  ATTACHES: 'Attaches to a record',
-  NONE: 'Standalone',
-};
+/**
+ * One step, as read-only summary.
+ *
+ * The "Open" link goes to the step's own form rather than into the app, because
+ * that is what this page is for — checking what a step asks. Filing a report
+ * happens through the app link in the header, in one session.
+ */
+function AppStepCard({ step, index }: { step: FormAppStep; index: number }) {
+  const entries =
+    step.mode === 'SINGLE'
+      ? 'Filled once'
+      : step.maxEntries === null
+        ? `${step.minEntries}+ entries`
+        : `${step.minEntries}–${step.maxEntries} entries`;
 
-function AppFormCard({ form }: { form: AppForm }) {
   return (
-    <Card className="flex flex-row items-center justify-between gap-3 p-4">
-      <div className="flex min-w-0 items-center gap-3">
-        <span className="flex size-8 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground">
-          <FileBox className="size-4" strokeWidth={1.5} />
-        </span>
-        <div className="min-w-0">
-          <p className="truncate text-sm font-medium text-foreground">{form.title}</p>
-          <p className="truncate text-xs text-muted-foreground">
-            {ROLE_LABELS[form.subjectRole] ?? 'Standalone'}
-          </p>
+    <li>
+      <Card className="flex flex-row items-center justify-between gap-3 p-4">
+        <div className="flex min-w-0 items-center gap-3">
+          <span className="tabular flex size-8 shrink-0 items-center justify-center rounded-md bg-muted text-xs font-semibold text-muted-foreground">
+            {index + 1}
+          </span>
+          <div className="min-w-0">
+            <p className="truncate text-sm font-medium text-foreground">{step.title}</p>
+            <p className="truncate text-xs text-muted-foreground">
+              {step.form?.title ?? 'Unknown form'} · {entries}
+              {step.isOptional ? ' · optional' : ''}
+              {!step.isUsable ? ' · form not published' : ''}
+            </p>
+          </div>
         </div>
-      </div>
-      <ButtonAnchor
-        variant="outline"
-        size="sm"
-        className="shrink-0 gap-1.5"
-        href={`/f/${form.slug}`}
-        external
-      >
-        <ExternalLink className="size-3.5" /> Open
-      </ButtonAnchor>
-    </Card>
+        {step.form?.slug && (
+          <ButtonAnchor
+            variant="outline"
+            size="sm"
+            className="shrink-0 gap-1.5"
+            href={`/f/${step.form.slug}`}
+            external
+          >
+            <ExternalLink className="size-3.5" /> Open
+          </ButtonAnchor>
+        )}
+      </Card>
+    </li>
   );
 }

@@ -145,6 +145,19 @@ export function FormRunnerClient({ slug, initialData }: { slug: string, initialD
     pages: actualFormConfig.pages ?? legacyVersion?.pagesJson ?? [],
     logic: actualFormConfig.logic ?? legacyVersion?.logicJson ?? [],
     theme: actualFormConfig.theme ?? legacyVersion?.themeJson ?? actualFormConfig.themeConfig ?? {},
+    // The COMPILED plan, which the runner interprets to show calculated values,
+    // hide irrelevant questions and flag violations inline. This was being
+    // dropped here: the API sent it on every request and nothing read it, so
+    // every rule on every published form was invisible to the respondent until
+    // the moment they pressed Submit.
+    //
+    // `rules` is the field name older API builds used for the same payload;
+    // a response cached from one of those still renders correctly.
+    rules:
+      actualFormConfig.compiledRules ??
+      actualFormConfig.rules ??
+      legacyVersion?.compiledRules ??
+      null,
   };
 
   const theme: FormTheme = parsedForm.theme ?? {};
@@ -164,7 +177,9 @@ export function FormRunnerClient({ slug, initialData }: { slug: string, initialD
       theme={theme}
       className={cn('min-h-screen', formFontVariables)}
     >
-      <div className="animate-in fade-in slide-in-from-bottom-4 duration-500 mx-auto w-full max-w-3xl px-4 py-8 sm:px-6 sm:py-12">
+      {/* 42rem, not 48rem: a single-column form reads better in a narrower
+          measure, and every control inside is already capped at max-w-md. */}
+      <div className="animate-in fade-in slide-in-from-bottom-2 mx-auto w-full max-w-2xl px-4 py-8 duration-500 sm:px-6 sm:py-12">
       {/* `requireAuth` is enforced at ingest: the API rejects a submission with
           no user attached. Saying so up front beats letting someone fill in
           twenty questions and then bounce off a 403 they cannot act on. */}
@@ -188,6 +203,8 @@ export function FormRunnerClient({ slug, initialData }: { slug: string, initialD
 
       <FormRunner
         form={parsedForm as any}
+        // A list-backed question fetches its options against this slug.
+        formSlug={slug}
         initialAnswers={prefilledAnswers}
         onProgressSave={handleProgressSave}
         layoutMode={layoutMode}
@@ -244,6 +261,20 @@ export function FormRunnerClient({ slug, initialData }: { slug: string, initialD
           }
         }}
       />
+
+      {/* Closes the page off. Without it the last card floats against an
+          unbounded background, which reads as an unfinished render. */}
+      <footer className="mt-10 border-t border-border pt-5 text-center">
+        <p className="text-xs text-muted-foreground">
+          {actualFormConfig.organization?.name ? (
+            <>
+              A form from <span className="font-medium">{actualFormConfig.organization.name}</span>
+            </>
+          ) : (
+            'Never submit passwords or financial details through this form.'
+          )}
+        </p>
+      </footer>
       </div>
     </FormThemeScope>
   );
@@ -289,21 +320,29 @@ function FormHeader({
         />
       )}
 
-      <div className={cn('space-y-2 p-6', logoUrl && 'pt-0')}>
+      <div className={cn('space-y-3 p-6 sm:p-7', logoUrl && 'pt-0')}>
         {logoUrl && (
           // eslint-disable-next-line @next/next/no-img-element
           <img
             src={logoUrl}
             alt=""
             className={cn(
-              'h-12 w-auto object-contain',
+              'h-11 w-auto object-contain',
               // Overlaps the cover, the way a brand mark normally sits.
               coverImageUrl ? '-mt-9 rounded-lg bg-card p-1.5 shadow-sm' : 'mt-6',
             )}
           />
         )}
-        <h1 className="text-2xl font-bold text-foreground">{title}</h1>
-        {description && <p className="text-sm text-muted-foreground">{description}</p>}
+        <h1 className="text-2xl font-bold leading-tight tracking-tight text-foreground sm:text-[1.75rem]">
+          {title}
+        </h1>
+        {description && (
+          // `whitespace-pre-line` so an author's paragraph breaks survive. They
+          // type them into a textarea and they were being collapsed to one run.
+          <p className="whitespace-pre-line text-sm leading-relaxed text-muted-foreground">
+            {description}
+          </p>
+        )}
       </div>
     </div>
   );

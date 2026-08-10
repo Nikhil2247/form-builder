@@ -24,8 +24,9 @@ import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { Switch } from '@/components/ui/switch';
 import { Label } from '@/components/ui/label';
-import { useBuilderStore, useQuestion } from '@/store/builder-store';
-import type { QuestionOption } from '@/types/form';
+import { useBuilderStore, useFormSnapshot, useQuestion } from '@/store/builder-store';
+import type { FormQuestion, QuestionOption } from '@/types/form';
+import { OptionsSourcePicker } from './OptionsSourcePicker';
 
 /**
  * One question on the canvas.
@@ -330,6 +331,13 @@ function EnterpriseFieldCardImpl({ id, index }: EnterpriseFieldCardProps) {
           </div>
         )}
 
+        {/* ── Where the options come from ────────────────────────────────── */}
+        {/* Only while the card is selected: an author scanning a long form
+            should see the question, not every question's data plumbing. */}
+        {isChoice && isSelected && (
+          <ConnectedOptionsSource question={question} onPatch={patch} />
+        )}
+
         {/* ── Preview of the respondent's control ────────────────────────── */}
         <div className="rounded-lg border border-dashed border-border bg-muted/25 p-3">
           <QuestionPreview
@@ -364,6 +372,32 @@ function EnterpriseFieldCardImpl({ id, index }: EnterpriseFieldCardProps) {
         </Button>
       </div>
     </div>
+  );
+}
+
+/**
+ * The options-source panel, wired to the store.
+ *
+ * A cascade needs to know every question on the form and their order, which is
+ * the whole document — exactly the subscription this card exists to avoid. It
+ * is confined to this wrapper, which only mounts for the SELECTED card, so at
+ * most one card is ever subscribed to the snapshot and the rest of the canvas
+ * stays off the re-render-per-keystroke path.
+ */
+function ConnectedOptionsSource({
+  question,
+  onPatch,
+}: {
+  question: FormQuestion;
+  onPatch: (patch: Partial<FormQuestion>) => void;
+}) {
+  const form = useFormSnapshot();
+  return (
+    <OptionsSourcePicker
+      question={question}
+      questions={form.questions}
+      onChange={(optionsSource) => onPatch({ optionsSource })}
+    />
   );
 }
 

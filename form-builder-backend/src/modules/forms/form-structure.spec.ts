@@ -220,3 +220,134 @@ describe('normalizeNotifyEmails', () => {
     expect(normalizeNotifyEmails(many)).toHaveLength(STRUCTURE_LIMITS.MAX_NOTIFY_EMAILS);
   });
 });
+
+/**
+ * `optionsSource` — binding a choice question to a managed list.
+ *
+ * Shape and ordering only. Whether the slug resolves to a list the org can see
+ * is a database question and lives in FormsService, the same split as the rule
+ * compiler.
+ */
+describe('normalizeFormStructure — optionsSource', () => {
+  const dropdown = (over: Record<string, any> = {}) => ({
+    id: 'q1',
+    type: 'DROPDOWN',
+    label: 'District',
+    ...over,
+  });
+
+  it('keeps a well-formed binding', () => {
+    const result = normalizeFormStructure({
+      questions: [
+        dropdown({
+          optionsSource: { kind: 'CHOICE_LIST', listSlug: 'in-districts', searchable: true },
+        }),
+      ],
+    });
+    expect(result.questions[0].optionsSource).toEqual({
+      kind: 'CHOICE_LIST',
+      listSlug: 'in-districts',
+      searchable: true,
+    });
+  });
+
+  // A list-backed question has no static options and must not be forced to
+  // invent one — that check exists for hand-typed dropdowns.
+  it('does not demand static options when a list is bound', () => {
+    expect(() =>
+      normalizeFormStructure({
+        questions: [dropdown({ optionsSource: { kind: 'CHOICE_LIST', listSlug: 'in-districts' } })],
+      }),
+    ).not.toThrow();
+  });
+
+  it('still demands options for a hand-typed choice question', () => {
+    expect(() => normalizeFormStructure({ questions: [dropdown()] })).toThrow(
+      /choice question with no options/i,
+    );
+  });
+
+  it('refuses a binding on a question that shows no options', () => {
+    expect(() =>
+      normalizeFormStructure({
+        questions: [
+          dropdown({
+            type: 'SHORT_TEXT',
+            optionsSource: { kind: 'CHOICE_LIST', listSlug: 'in-districts' },
+          }),
+        ],
+      }),
+    ).toThrow(/not a choice question/i);
+  });
+
+  it('refuses a binding with no list', () => {
+    expect(() =>
+      normalizeFormStructure({ questions: [dropdown({ optionsSource: { kind: 'CHOICE_LIST' } })] }),
+    ).toThrow(/missing the list/i);
+  });
+
+  it('refuses an unknown source kind', () => {
+    expect(() =>
+      normalizeFormStructure({
+        questions: [dropdown({ optionsSource: { kind: 'REST_API', listSlug: 'x' } })],
+      }),
+    ).toThrow(/unknown kind/i);
+  });
+
+  describe('cascade ordering', () => {
+    const parent = () => ({
+      id: 'q_state',
+      type: 'DROPDOWN',
+      label: 'State',
+      optionsSource: { kind: 'CHOICE_LIST', listSlug: 'in-states' },
+    });
+    const child = () => ({
+      id: 'q_district',
+      type: 'DROPDOWN',
+      label: 'District',
+      optionsSource: {
+        kind: 'CHOICE_LIST',
+        listSlug: 'in-districts',
+        parentQuestionKey: 'state',
+      },
+    });
+
+    it('accepts a parent that comes first', () => {
+      const result = normalizeFormStructure({ questions: [parent(), child()] });
+      expect(result.questions[1].optionsSource.parentQuestionKey).toBe('state');
+    });
+
+    // Not subtle: the child is filtered by an answer the respondent has not been
+    // asked for yet, so its dropdown is permanently empty.
+    it('rejects a parent that comes after the child', () => {
+      expect(() => normalizeFormStructure({ questions: [child(), parent()] })).toThrow(
+        /comes after it/i,
+      );
+    });
+
+    it('rejects a parent that is not on the form', () => {
+      expect(() => normalizeFormStructure({ questions: [child()] })).toThrow(
+        /not a question on this form/i,
+      );
+    });
+
+    it('rejects a question filtered by itself', () => {
+      expect(() =>
+        normalizeFormStructure({
+          questions: [
+            {
+              id: 'q1',
+              type: 'DROPDOWN',
+              label: 'District',
+              optionsSource: {
+                kind: 'CHOICE_LIST',
+                listSlug: 'in-districts',
+                parentQuestionKey: 'district',
+              },
+            },
+          ],
+        }),
+      ).toThrow(/comes after it|cannot be filtered by itself/i);
+    });
+  });
+});

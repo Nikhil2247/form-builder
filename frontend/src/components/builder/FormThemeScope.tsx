@@ -135,45 +135,74 @@ export function buildThemeStyle(theme: FormTheme | undefined): React.CSSProperti
   const primary = parseColor(t.primaryColor) ?? { r: 79, g: 70, b: 229, a: 1 };
 
   // Derived tokens are mixed against the card, since that is what they sit on.
-  const style: Record<string, string> = {
-    '--background': t.backgroundColor || 'rgb(248, 250, 252)',
-    '--foreground': t.textColor || 'rgb(24, 24, 27)',
-    '--card': t.cardColor || 'rgb(255, 255, 255)',
-    '--card-foreground': t.textColor || 'rgb(24, 24, 27)',
-    '--popover': t.cardColor || 'rgb(255, 255, 255)',
-    '--popover-foreground': t.textColor || 'rgb(24, 24, 27)',
+  const tokens: Record<string, string> = {
+    background: t.backgroundColor || 'rgb(248, 250, 252)',
+    foreground: t.textColor || 'rgb(24, 24, 27)',
+    card: t.cardColor || 'rgb(255, 255, 255)',
+    'card-foreground': t.textColor || 'rgb(24, 24, 27)',
+    popover: t.cardColor || 'rgb(255, 255, 255)',
+    'popover-foreground': t.textColor || 'rgb(24, 24, 27)',
 
-    '--primary': t.primaryColor || 'rgb(79, 70, 229)',
-    '--primary-foreground': readableOn(primary),
-    '--ring': rgba(primary, 0.5),
+    primary: t.primaryColor || 'rgb(79, 70, 229)',
+    'primary-foreground': readableOn(primary),
+    ring: rgba(primary, 0.5),
 
-    '--secondary': mix(text, card, 0.06),
-    '--secondary-foreground': t.textColor || 'rgb(24, 24, 27)',
-    '--accent': mix(text, card, 0.06),
-    '--accent-foreground': t.textColor || 'rgb(24, 24, 27)',
+    secondary: mix(text, card, 0.06),
+    'secondary-foreground': t.textColor || 'rgb(24, 24, 27)',
+    accent: mix(text, card, 0.06),
+    'accent-foreground': t.textColor || 'rgb(24, 24, 27)',
 
-    '--muted': mix(text, card, 0.05),
+    muted: mix(text, card, 0.05),
     // 62% is where secondary text stays comfortably above 4.5:1 against the
     // card for both light and dark themes.
-    '--muted-foreground': mix(text, card, 0.62),
+    'muted-foreground': mix(text, card, 0.62),
 
-    '--border': mix(text, card, 0.14),
-    '--border-strong': mix(text, card, 0.24),
-    '--input': mix(text, card, 0.2),
-
-    '--radius': RADIUS_REM[t.borderRadius ?? 'md'],
-
-    backgroundColor: t.backgroundColor || 'rgb(248, 250, 252)',
-    color: t.textColor || 'rgb(24, 24, 27)',
-    fontFamily: FONT_STACKS[t.fontFamily ?? 'Inter'] ?? FONT_STACKS.Inter,
+    border: mix(text, card, 0.14),
+    'border-strong': mix(text, card, 0.24),
+    input: mix(text, card, 0.2),
   };
 
-  // Unused today but kept honest: a theme whose page background is dark should
-  // not inherit light-mode shadows from the surrounding app.
+  const style: Record<string, string> = {};
+
+  // ── Both naming families, and that is not belt-and-braces ────────────────
+  //
+  // Tailwind v4 compiles `bg-card` to `background-color: var(--color-card)`,
+  // and globals.css declares `--color-card: var(--card)` inside `@theme` —
+  // which emits it on `:root`.
+  //
+  // Custom properties inherit their COMPUTED value. `--color-card` was
+  // therefore already resolved against the root's `--card`, and descendants
+  // inherit the finished colour, not the unresolved `var(--card)` reference.
+  // Overriding `--card` on this wrapper could never move a single utility
+  // class — which is exactly why every published form rendered in the app's
+  // own palette no matter what the author picked.
+  //
+  // `--color-*` is what the utilities actually read. The bare names are kept
+  // because components and inline styles reach for them directly
+  // (`accent-[var(--primary)]`, `rounded-[var(--radius)]`).
+  for (const [name, value] of Object.entries(tokens)) {
+    style[`--${name}`] = value;
+    style[`--color-${name}`] = value;
+  }
+
+  // Radius has the same indirection: `--radius-lg: var(--radius)` is frozen at
+  // the root, so `rounded-lg` ignores a theme that only sets `--radius`.
+  const radius = RADIUS_REM[t.borderRadius ?? 'md'];
+  style['--radius'] = radius;
+  style['--radius-lg'] = radius;
+  style['--radius-md'] = `max(0px, calc(${radius} - 2px))`;
+  style['--radius-sm'] = `max(0px, calc(${radius} - 4px))`;
+
+  // A theme whose page background is dark should not inherit the light-mode
+  // shadows of the surrounding app.
   style['--shadow-card'] =
     luminance(background) < 0.4
       ? '0 1px 2px rgba(0,0,0,.6)'
       : '0 1px 2px rgba(16,24,40,.06)';
+
+  style.backgroundColor = t.backgroundColor || 'rgb(248, 250, 252)';
+  style.color = t.textColor || 'rgb(24, 24, 27)';
+  style.fontFamily = FONT_STACKS[t.fontFamily ?? 'Inter'] ?? FONT_STACKS.Inter;
 
   return style as React.CSSProperties;
 }

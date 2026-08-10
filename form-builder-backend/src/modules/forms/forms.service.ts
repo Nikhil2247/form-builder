@@ -27,6 +27,7 @@ import {
   submissionGridSelect,
 } from '../../common/prisma/selects';
 import { compileRules, type FormRule } from '../../common/rules';
+import { ChoiceListsService } from '../choice-lists/choice-lists.service';
 import {
   normalizeFormStructure,
   normalizeNotifyEmails,
@@ -55,7 +56,41 @@ export class FormsService {
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
     private readonly redis: RedisService,
+    private readonly choiceLists: ChoiceListsService,
   ) {}
+
+  /**
+   * Every `optionsSource` on the form must name a list this org can actually
+   * see.
+   *
+   * `normalizeFormStructure` checks the SHAPE of the binding and the ordering
+   * of the cascade, both of which are pure. Whether the slug resolves is a
+   * database question, so it lives here — the same split as `compileRules`.
+   *
+   * Enforced on SAVE, not only on publish: a dropdown bound to a list that does
+   * not exist renders permanently empty, and finding that out at publish time
+   * means the author has already built the rest of the form around it.
+   */
+  private async assertOptionsSourcesResolve(orgId: string, questions: any[]): Promise<void> {
+    const slugs = new Set<string>();
+    for (const question of questions) {
+      const source = question?.optionsSource;
+      if (source?.kind === 'CHOICE_LIST' && typeof source.listSlug === 'string') {
+        slugs.add(source.listSlug);
+      }
+    }
+    if (slugs.size === 0) return;
+
+    const available = new Set(await this.choiceLists.listSlugsFor(orgId));
+    const missing = [...slugs].filter((slug) => !available.has(slug));
+    if (missing.length > 0) {
+      throw new BadRequestException(
+        missing.length === 1
+          ? `The list "${missing[0]}" does not exist, so a question cannot take its options from it.`
+          : `These lists do not exist: ${missing.join(', ')}.`,
+      );
+    }
+  }
 
   /**
    * Create a new form within an organization.
@@ -442,6 +477,13 @@ Respond ONLY with a valid JSON object matching this structure:
         )
       : null;
 
+    // A binding to a list this org cannot see would render an empty dropdown
+    // with nothing to explain it. Caught at save, while the author is looking
+    // at the question they just configured.
+    if (structure) {
+      await this.assertOptionsSourcesResolve(orgId, structure.questions);
+    }
+
     const data: Prisma.FormUpdateInput = {
       ...(dto.title !== undefined && { title: dto.title }),
       ...(dto.description !== undefined && { description: dto.description }),
@@ -633,6 +675,14 @@ Respond ONLY with a valid JSON object matching this structure:
     userId?: string,
     rulesJson?: any,
   ) {
+    // Fetched OUTSIDE the transaction, and deliberately so: it is a read of
+    // slowly-changing catalogue data, and holding a Serializable transaction
+    // open across it would widen the conflict window on every publish for no
+    // benefit. A list created in the moments after this read simply cannot be
+    // referenced until the next publish.
+    const knownChoiceLists = await this.choiceLists.listSlugsFor(orgId);
+    const knownChoiceListSet = new Set(knownChoiceLists);
+
     // The version number, the FormVersion row, and the Form pointer must move
     // together. Previously these were three separate statements computed from a
     // stale read: a failure between them left currentVersion pointing at a
@@ -669,6 +719,21 @@ Respond ONLY with a valid JSON object matching this structure:
             );
           }
 
+          // Re-checked here, not just on save: the version about to be frozen
+          // is what every future respondent is served, and a list may have been
+          // deleted since the draft was last written.
+          const unresolved = structure.questions
+            .map((q: any) => q?.optionsSource?.listSlug)
+            .filter(
+              (slug: unknown): slug is string =>
+                typeof slug === 'string' && !knownChoiceListSet.has(slug),
+            );
+          if (unresolved.length > 0) {
+            throw new BadRequestException(
+              `Cannot publish: these option lists no longer exist — ${[...new Set(unresolved)].join(', ')}.`,
+            );
+          }
+
           // Publish is the last point at which a broken rule set can be stopped
           // cheaply. After this the version is immutable and every respondent
           // is evaluated against it, so unknown operators, dangling field
@@ -680,6 +745,9 @@ Respond ONLY with a valid JSON object matching this structure:
             // bound to a subject type they are rejected rather than silently
             // resolving to null.
             allowReferences: Boolean((form as any).subjectTypeId),
+            // A lookup() naming a list this org cannot see would return null
+            // for every respondent, forever, with nothing to indicate why.
+            knownChoiceLists,
           });
 
           if (!compiled.ok) {
@@ -1027,7 +1095,13 @@ Respond ONLY with a valid JSON object matching this structure:
       //
       // Client evaluation is for UX only. The server recomputes every
       // calculated value on submit and ignores whatever the client sent.
-      rules: activeVersion.compiledRules ?? {},
+      //
+      // NAMED `compiledRules`, not `rules`. `FormConfig.rules` is the AUTHORED
+      // rule array everywhere else in the codebase — the builder edits one, the
+      // publish endpoint accepts one. Serving a CompiledPlan under the same
+      // name gave one field two incompatible shapes depending on which endpoint
+      // produced it, which is a trap for anything that reads it generically.
+      compiledRules: activeVersion.compiledRules ?? {},
       // Tell the client whether it must collect a password before submitting.
       isPasswordProtected: form.isPasswordProtected,
       requireAuth: form.requireAuth,

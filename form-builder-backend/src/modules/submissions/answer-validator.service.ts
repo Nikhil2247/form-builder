@@ -53,10 +53,40 @@ interface QuestionLike {
     max?: number;
     pattern?: string;
   };
-  min?: number;
-  max?: number;
-  rows?: any[];
-  columns?: any[];
+  /**
+   * The names the builder and `normalizeFormStructure` actually write.
+   *
+   * This interface previously declared `rows`/`columns` and `min`/`max`, none
+   * of which exist on a stored question. Every guard that consulted them was
+   * therefore reading `undefined`, and because each was written as
+   * `if (set.size > 0 && ...)`, every one of them silently passed: a matrix
+   * accepted arbitrary row keys and column values, and a slider accepted any
+   * number at all.
+   */
+  matrixRows?: any[];
+  matrixColumns?: any[];
+  sliderMin?: number;
+  sliderMax?: number;
+  /** Set when the options come from a managed ChoiceList rather than `options`. */
+  optionsSource?: {
+    kind?: string;
+    listSlug?: string;
+    parentQuestionKey?: string;
+  };
+  key?: string;
+}
+
+/**
+ * One resolved choice-list item, as far as validation cares.
+ *
+ * Supplied by the caller (SubmissionsService), which has already batched every
+ * lookup this submission needs into one query per list. Passing the result in
+ * rather than querying here keeps the validator synchronous and pure — it is
+ * called from the request path and must not become N queries per submission.
+ */
+export interface ResolvedChoiceItem {
+  value: string;
+  parentValue: string | null;
 }
 
 /** Types that never carry an answer. */
@@ -88,11 +118,22 @@ export class AnswerValidatorService {
    * @param opts.visibleQuestionIds  When provided, required-checks apply only to
    *                                 these. Questions hidden by conditional logic
    *                                 are otherwise wrongly reported as missing.
+   * @param opts.calculatedQuestionIds  Questions whose value the rules engine
+   *                                 owns. Never treated as required — see below.
    */
   validate(
     questionsJson: unknown,
     answers: Record<string, any>,
-    opts: { visibleQuestionIds?: Set<string>; extraRequiredIds?: Set<string> } = {},
+    opts: {
+      visibleQuestionIds?: Set<string>;
+      extraRequiredIds?: Set<string>;
+      calculatedQuestionIds?: Set<string>;
+      /**
+       * Choice-list items referenced by this submission, keyed
+       * `listSlug::value`. Pre-resolved by the caller in one batch.
+       */
+      choiceItems?: Map<string, ResolvedChoiceItem>;
+    } = {},
   ): ValidationResult {
     const issues: ValidationIssue[] = [];
     const sanitized: Record<string, any> = {};
@@ -161,8 +202,17 @@ export class AnswerValidatorService {
       // only ever add: a rule must not be able to waive a requirement the author
       // set on the question itself.
       const requiredByRule = opts.extraRequiredIds?.has(q.id) ?? false;
+      // ...with one exception. A CALCULATE rule owns its target's value: the
+      // respondent's input for it is stripped and the value recomputed. If such
+      // a field is also marked required and its formula yields nothing, the
+      // respondent is told to fill in a field they are structurally forbidden
+      // from filling, and the form becomes impossible for anyone to submit.
+      // Requiredness is meaningless for a derived value, so it is not applied.
+      const isCalculated = opts.calculatedQuestionIds?.has(q.id) ?? false;
       const required =
-        ((q.required ?? q.validation?.required ?? false) || requiredByRule) && isVisible;
+        !isCalculated &&
+        ((q.required ?? q.validation?.required ?? false) || requiredByRule) &&
+        isVisible;
 
       if (isEmpty(raw)) {
         if (required) {
@@ -183,9 +233,21 @@ export class AnswerValidatorService {
       const outcome = this.validateOne(q, raw);
       if (outcome.issue) {
         issues.push({ questionId: q.id, label: q.label, ...outcome.issue });
-      } else {
-        sanitized[q.id] = outcome.value;
+        continue;
       }
+
+      // Options that came from a managed list are checked against the list,
+      // not against `q.options` — which is empty for such a question, and
+      // whose emptiness `validateOne` deliberately reads as "unconfigured,
+      // accept anything". Without this a list-backed dropdown would accept
+      // any string at all.
+      const listIssue = this.validateAgainstChoiceList(q, outcome.value, answers, questions, opts);
+      if (listIssue) {
+        issues.push({ questionId: q.id, label: q.label, ...listIssue });
+        continue;
+      }
+
+      sanitized[q.id] = outcome.value;
     }
 
     // Unknown keys are silently dropped rather than rejected: a stale client
@@ -198,6 +260,74 @@ export class AnswerValidatorService {
     }
 
     return { valid: issues.length === 0, issues, sanitized };
+  }
+
+  /**
+   * Membership and cascade consistency for a list-backed choice question.
+   *
+   * TWO CHECKS, AND THE SECOND IS THE ONE THAT MATTERS.
+   *
+   *  1. Membership — the submitted value is a real item of the named list.
+   *  2. Cascade consistency — if the question is filtered by another, the
+   *     submitted item's `parentValue` must equal the answer to that other
+   *     question.
+   *
+   * Without (2) the UI is the only thing enforcing the hierarchy, and the UI is
+   * not a security boundary. A crafted payload could pair a Kohima block with a
+   * Phek district and the row would look entirely plausible in every export and
+   * dashboard forever after. This is the kind of wrong data nobody finds.
+   */
+  private validateAgainstChoiceList(
+    q: QuestionLike,
+    value: any,
+    answers: Record<string, any>,
+    questions: QuestionLike[],
+    opts: { choiceItems?: Map<string, ResolvedChoiceItem> },
+  ): { code: string; message: string } | undefined {
+    const source = q.optionsSource;
+    if (!source || source.kind !== 'CHOICE_LIST' || !source.listSlug) return undefined;
+
+    const label = q.label ?? q.id;
+    const items = opts.choiceItems;
+    // No catalogue supplied means the caller could not resolve one — fail
+    // closed rather than accepting anything, since the alternative is silently
+    // storing values that are not on the list.
+    if (!items) {
+      return { code: 'OPTION_SOURCE', message: `"${label}" could not be checked against its list.` };
+    }
+
+    const submitted = Array.isArray(value) ? value : [value];
+
+    for (const entry of submitted) {
+      if (typeof entry !== 'string') {
+        return { code: 'TYPE', message: `"${label}" must be a value from its list.` };
+      }
+
+      const item = items.get(`${source.listSlug}::${entry}`);
+      if (!item) {
+        return { code: 'OPTION', message: `"${entry}" is not a valid option for "${label}".` };
+      }
+
+      if (!source.parentQuestionKey) continue;
+
+      const parentQuestion = questions.find((other) => other.key === source.parentQuestionKey);
+      // A parent that is not on this version can only mean the form changed
+      // under an in-flight respondent. Skip the consistency check rather than
+      // reject: membership already passed, and the pairing is unverifiable.
+      if (!parentQuestion) continue;
+
+      const parentAnswer = answers[parentQuestion.id];
+      if (typeof parentAnswer !== 'string' || parentAnswer === '') continue;
+
+      if (item.parentValue !== parentAnswer) {
+        return {
+          code: 'CASCADE',
+          message: `"${label}" does not belong to the selected "${parentQuestion.label ?? source.parentQuestionKey}".`,
+        };
+      }
+    }
+
+    return undefined;
   }
 
   // ──────────────────────────────────────────────────────────────────────────
@@ -250,17 +380,21 @@ export class AnswerValidatorService {
       case 'SLIDER': {
         const n = typeof raw === 'number' ? raw : Number(raw);
         if (!Number.isFinite(n)) return bad('TYPE', `"${label}" must be a number.`);
-        const min = v.min ?? q.min;
-        const max = v.max ?? q.max;
+        // A slider's bounds live on the question (`sliderMin`/`sliderMax`,
+        // written by normalizeFormStructure); a number's live in `validation`.
+        const min = q.type === 'SLIDER' ? (q.sliderMin ?? v.min) : v.min;
+        const max = q.type === 'SLIDER' ? (q.sliderMax ?? v.max) : v.max;
         if (min != null && n < min) return bad('MIN', `"${label}" must be at least ${min}.`);
         if (max != null && n > max) return bad('MAX', `"${label}" must be at most ${max}.`);
         return { value: n };
       }
 
       case 'STAR_RATING': {
+        // The runner renders a fixed 1–5 scale; `validation.max` narrows it.
+        const ceiling = v.max ?? 5;
         const n = Number(raw);
-        if (!Number.isInteger(n) || n < 1 || n > (q.max ?? 5))
-          return bad('RANGE', `"${label}" must be a whole number between 1 and ${q.max ?? 5}.`);
+        if (!Number.isInteger(n) || n < 1 || n > ceiling)
+          return bad('RANGE', `"${label}" must be a whole number between 1 and ${ceiling}.`);
         return { value: n };
       }
 
@@ -312,8 +446,8 @@ export class AnswerValidatorService {
       case 'MATRIX': {
         if (typeof raw !== 'object' || raw === null || Array.isArray(raw))
           return bad('TYPE', `"${label}" must be a row/column map.`);
-        const rowKeys = labelSet(q.rows);
-        const colKeys = labelSet(q.columns);
+        const rowKeys = labelSet(q.matrixRows);
+        const colKeys = labelSet(q.matrixColumns);
         const out: Record<string, any> = {};
         for (const [rowKey, colVal] of Object.entries(raw)) {
           if (rowKeys.size > 0 && !rowKeys.has(rowKey))

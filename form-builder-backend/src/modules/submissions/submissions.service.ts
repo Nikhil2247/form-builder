@@ -20,7 +20,18 @@ import {
   type Pagination,
 } from '../../common/pagination/pagination';
 import { submissionListSelect } from '../../common/prisma/selects';
-import { readPlan, planIsEmpty, runFormRules } from '../../common/rules';
+import {
+  readPlan,
+  planIsEmpty,
+  runFormRules,
+  planLookupRequests,
+  resolveLookupBag,
+  type CompiledPlan,
+  type RuleValue,
+} from '../../common/rules';
+import { ChoiceListsService } from '../choice-lists/choice-lists.service';
+import type { ResolvedChoiceItem, ValidationIssue } from './answer-validator.service';
+import { hiddenByLegacyLogic, type LegacyLogicRule } from '../../common/legacy-logic';
 import { resolveReferences } from '../subjects/subjects.service';
 
 /**
@@ -46,6 +57,13 @@ interface IngestPolicy {
   /// FormVersion.compiledRules. Cached with the rest of the policy so the
   /// submit path stays a single Redis read.
   compiledRules: unknown;
+  /// FormVersion.logicJson — the legacy show/hide rules.
+  ///
+  /// The submit path never loaded these, so `visibleQuestionIds` was derived
+  /// from the compiled plan alone and a question hidden by a legacy HIDE rule
+  /// was still treated as visible. If it was also required, the submission was
+  /// rejected for a field the respondent was never shown.
+  logicJson: unknown;
 }
 
 const POLICY_TTL_SECONDS = 300;
@@ -59,6 +77,7 @@ export class SubmissionsService {
     private readonly prisma: PrismaService,
     private readonly redis: RedisService,
     private readonly validator: AnswerValidatorService,
+    private readonly choiceLists: ChoiceListsService,
   ) {}
 
   // ══════════════════════════════════════════════════════════════════════════
@@ -128,11 +147,12 @@ export class SubmissionsService {
     let formVersionId = policy.currentVersionId;
     let questionsJson = policy.questionsJson;
     let compiledRules = policy.compiledRules;
+    let logicJson = policy.logicJson;
 
     if (dto.formVersionId && dto.formVersionId !== policy.currentVersionId) {
       const claimed = await this.prisma.reader.formVersion.findFirst({
         where: { id: dto.formVersionId, formId },
-        select: { id: true, questionsJson: true, compiledRules: true },
+        select: { id: true, questionsJson: true, compiledRules: true, logicJson: true },
       });
       if (!claimed) {
         throw new BadRequestException('Unknown form version for this form.');
@@ -143,6 +163,7 @@ export class SubmissionsService {
       // the current version's rules against an older schema would evaluate
       // formulas over fields that version may not even have.
       compiledRules = claimed.compiledRules;
+      logicJson = claimed.logicJson;
     }
 
     // ── 5. CAPTCHA ──────────────────────────────────────────────────────────
@@ -158,81 +179,30 @@ export class SubmissionsService {
     //       Critically, runFormRules drops every client-supplied value for a
     //       calculated field and recomputes it. A respondent posting
     //       {"age": 4} to clear an eligibility gate changes nothing.
-    const plan = readPlan(compiledRules);
-    const questionList = Array.isArray(questionsJson) ? (questionsJson as any[]) : [];
-
     // The subject this entry attaches to, if any. Verified against the form's
     // own org AND subject type — a client-supplied id is otherwise a direct
     // route into another tenant's records.
     const subjectId = await this.resolveSubjectId(formId, policy.organizationId, dto.subjectId);
 
-    // Cross-form values are resolved to a plain bag here, before evaluation, so
-    // the interpreter performs no I/O and the reachable set stays exactly what
-    // the compiler recorded at publish time.
-    const refs = await resolveReferences(this.prisma, plan, subjectId);
-
-    let answers = dto.answers as Record<string, any>;
-    let visibleQuestionIds: Set<string> | undefined;
-    let extraRequiredIds: Set<string> | undefined;
-    let ruleViolations: Array<{ questionId: string; message: string }> = [];
-
-    if (!planIsEmpty(plan)) {
-      const evaluated = runFormRules({
-        questions: questionList,
-        plan,
-        answersById: answers,
-        refs,
-      });
-
-      answers = evaluated.answersById as Record<string, any>;
-      extraRequiredIds = evaluated.requiredQuestionIds;
-      ruleViolations = evaluated.violations.map((v) => ({
-        questionId: v.questionId,
-        message: v.message,
-      }));
-
-      if (evaluated.hiddenQuestionIds.size > 0) {
-        visibleQuestionIds = new Set(
-          questionList
-            .map((q: any) => q?.id)
-            .filter((id: unknown): id is string =>
-              typeof id === 'string' && !evaluated.hiddenQuestionIds.has(id),
-            ),
-        );
-      }
-
-      // A rule that cannot be evaluated is a bug in the published form, not a
-      // respondent error. Log it with the version so it is findable, while the
-      // fail-closed defaults inside the engine keep this submission safe.
-      if (evaluated.errors.length > 0) {
-        this.logger.error(
-          `Rule evaluation errors on form ${formId} version ${formVersionId}: ` +
-            evaluated.errors.map((e) => `${e.ruleId}: ${e.message}`).join('; '),
-        );
-      }
-    }
-
-    const result = this.validator.validate(questionsJson, answers, {
-      visibleQuestionIds,
-      extraRequiredIds,
+    const prepared = await this.prepareAnswers({
+      organizationId: policy.organizationId,
+      formId,
+      formVersionId,
+      questionsJson,
+      logicJson,
+      compiledRules,
+      answers: dto.answers as Record<string, any>,
+      subjectId,
     });
 
-    // Rule violations are respondent-facing and carry the author's own message.
-    const issues = [
-      ...result.issues,
-      ...ruleViolations.map((v) => ({
-        questionId: v.questionId,
-        code: 'RULE',
-        message: v.message,
-      })),
-    ];
-
-    if (issues.length > 0) {
+    if (prepared.issues.length > 0) {
       throw new UnprocessableEntityException({
         message: 'Some answers are invalid.',
-        issues,
+        issues: prepared.issues,
       });
     }
+
+    const result = { sanitized: prepared.sanitized };
 
     // ── 7. File references must belong to this form and be real ─────────────
     await this.assertFileReferencesValid(result.sanitized, questionsJson, formId);
@@ -269,6 +239,232 @@ export class SubmissionsService {
     await this.producer.enqueue(payload);
 
     return { submissionId, status: 'ENQUEUED' };
+  }
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // ANSWER PIPELINE
+  // ══════════════════════════════════════════════════════════════════════════
+
+  /**
+   * Everything between "raw answers arrived" and "these answers are storable",
+   * for ONE form version.
+   *
+   * Extracted so the form-app session submit runs the identical pipeline. A
+   * second implementation there would have been the obvious shortcut and the
+   * obvious mistake: a session entry is a submission of a real form, and if the
+   * two paths could disagree about visibility, requiredness or a calculated
+   * value, then which door a respondent came through would change what got
+   * stored. Any divergence here is a data-integrity bug, so there is one copy.
+   *
+   * Returns issues rather than throwing, because the session path collects them
+   * across many entries and reports them together.
+   */
+  async prepareAnswers(input: {
+    organizationId: string;
+    formId: string;
+    formVersionId: string;
+    questionsJson: unknown;
+    logicJson: unknown;
+    compiledRules: unknown;
+    answers: Record<string, any>;
+    subjectId?: string | null;
+  }): Promise<{ sanitized: Record<string, any>; issues: ValidationIssue[] }> {
+    const plan = readPlan(input.compiledRules);
+    const questionList = Array.isArray(input.questionsJson)
+      ? (input.questionsJson as any[])
+      : [];
+
+    // Cross-form values are resolved to a plain bag here, before evaluation, so
+    // the interpreter performs no I/O and the reachable set stays exactly what
+    // the compiler recorded at publish time.
+    const refs = await resolveReferences(this.prisma, plan, input.subjectId ?? null);
+
+    // Choice-list items this submission touches, resolved once. Two consumers:
+    // the validator checks membership and cascade consistency against them,
+    // and the rules engine reads their metadata columns for lookup().
+    const { choiceItems, lookups } = await this.resolveChoiceData(
+      input.organizationId,
+      questionList,
+      plan,
+      input.answers,
+    );
+
+    let answers = input.answers;
+    let extraRequiredIds: Set<string> | undefined;
+    let calculatedQuestionIds: Set<string> | undefined;
+    let ruleViolations: Array<{ questionId: string; message: string }> = [];
+
+    // Hidden by EITHER system. The legacy `logic` array is still what most
+    // forms use, and it was not consulted here at all — see IngestPolicy.
+    // Evaluated with the same module the browser runs, so the two agree on
+    // exactly which questions the respondent could see.
+    const hiddenQuestionIds = hiddenByLegacyLogic(
+      questionList as Array<{ id: string }>,
+      Array.isArray(input.logicJson) ? (input.logicJson as LegacyLogicRule[]) : [],
+      answers,
+    );
+
+    if (!planIsEmpty(plan)) {
+      const evaluated = runFormRules({
+        questions: questionList,
+        plan,
+        answersById: answers,
+        refs,
+        lookups,
+      });
+
+      answers = evaluated.answersById as Record<string, any>;
+      calculatedQuestionIds = evaluated.calculatedQuestionIds;
+      ruleViolations = evaluated.violations.map((v) => ({
+        questionId: v.questionId,
+        message: v.message,
+      }));
+
+      for (const id of evaluated.hiddenQuestionIds) hiddenQuestionIds.add(id);
+
+      // A hidden question cannot be answered, so requiring it would deadlock
+      // the respondent. The engine already applies this to its own SHOW rules;
+      // repeating it here covers the case where legacy logic did the hiding.
+      extraRequiredIds = new Set(
+        [...evaluated.requiredQuestionIds].filter((id) => !hiddenQuestionIds.has(id)),
+      );
+
+      // A rule that cannot be evaluated is a bug in the published form, not a
+      // respondent error. Log it with the version so it is findable, while the
+      // fail-closed defaults inside the engine keep this submission safe.
+      if (evaluated.errors.length > 0) {
+        this.logger.error(
+          `Rule evaluation errors on form ${input.formId} version ${input.formVersionId}: ` +
+            evaluated.errors.map((e) => `${e.ruleId}: ${e.message}`).join('; '),
+        );
+      }
+    }
+
+    const visibleQuestionIds =
+      hiddenQuestionIds.size > 0
+        ? new Set(
+            questionList
+              .map((q: any) => q?.id)
+              .filter(
+                (id: unknown): id is string =>
+                  typeof id === 'string' && !hiddenQuestionIds.has(id),
+              ),
+          )
+        : undefined;
+
+    const result = this.validator.validate(input.questionsJson, answers, {
+      visibleQuestionIds,
+      extraRequiredIds,
+      calculatedQuestionIds,
+      choiceItems,
+    });
+
+    // Rule violations are respondent-facing and carry the author's own message.
+    return {
+      sanitized: result.sanitized,
+      issues: [
+        ...result.issues,
+        ...ruleViolations.map((v) => ({
+          questionId: v.questionId,
+          code: 'RULE',
+          message: v.message,
+        })),
+      ],
+    };
+  }
+
+  /** File-reference ownership check, reused by the session submit path. */
+  async assertFilesBelongToForm(answers: Record<string, any>, questionsJson: unknown, formId: string) {
+    return this.assertFileReferencesValid(answers, questionsJson, formId);
+  }
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // CHOICE LISTS
+  // ══════════════════════════════════════════════════════════════════════════
+
+  /**
+   * Everything this submission needs from the choice-list tables, in one pass.
+   *
+   * Two consumers with overlapping needs, deliberately served together:
+   *
+   *   • the ANSWER VALIDATOR needs each submitted item's `parentValue`, to
+   *     confirm membership and that the cascade the client claims is real;
+   *   • the RULES ENGINE needs each item's `metadata`, so `lookup()` can
+   *     auto-fill a read-only field.
+   *
+   * Resolving them separately would be two round trips over the same rows on
+   * the request path. Resolving them here also keeps `AnswerValidatorService`
+   * synchronous and free of a database dependency.
+   */
+  private async resolveChoiceData(
+    organizationId: string,
+    questions: any[],
+    plan: CompiledPlan,
+    answersById: Record<string, any>,
+  ): Promise<{
+    choiceItems: Map<string, ResolvedChoiceItem> | undefined;
+    lookups: Record<string, RuleValue>;
+  }> {
+    // What the questions themselves reference.
+    const wanted: Array<{ listSlug: string; value: string }> = [];
+    let hasListBackedQuestion = false;
+
+    for (const question of questions) {
+      const source = question?.optionsSource;
+      if (!source || source.kind !== 'CHOICE_LIST' || typeof source.listSlug !== 'string') continue;
+      hasListBackedQuestion = true;
+
+      const answer = answersById[question.id];
+      const values = Array.isArray(answer) ? answer : [answer];
+      for (const value of values) {
+        if (typeof value === 'string' && value !== '') {
+          wanted.push({ listSlug: source.listSlug, value });
+        }
+      }
+    }
+
+    // What the rules reference. `planLookupRequests` addresses questions by
+    // key, so the answers have to be projected first.
+    const keyById = new Map<string, string>();
+    for (const question of questions) {
+      if (question?.id) keyById.set(question.id, question.key ?? question.id);
+    }
+    const answersByKey: Record<string, RuleValue> = {};
+    for (const [id, value] of Object.entries(answersById)) {
+      const key = keyById.get(id);
+      if (key) answersByKey[key] = value as RuleValue;
+    }
+
+    const lookupRequests = planLookupRequests(plan.lookups, answersByKey);
+    for (const request of lookupRequests) {
+      wanted.push({ listSlug: request.list, value: request.value });
+    }
+
+    if (!hasListBackedQuestion && lookupRequests.length === 0) {
+      return { choiceItems: undefined, lookups: {} };
+    }
+
+    const resolved = await this.choiceLists.resolveItemsForValidation(organizationId, wanted);
+
+    const choiceItems = new Map<string, ResolvedChoiceItem>();
+    const metadataByKey = new Map<string, Record<string, unknown>>();
+    for (const [key, item] of resolved) {
+      choiceItems.set(key, { value: item.value, parentValue: item.parentValue });
+      metadataByKey.set(
+        key,
+        item.metadata && typeof item.metadata === 'object' && !Array.isArray(item.metadata)
+          ? (item.metadata as Record<string, unknown>)
+          : {},
+      );
+    }
+
+    return {
+      // Undefined rather than an empty map when no question is list-backed:
+      // the validator treats a missing catalogue as "could not check" and fails
+      // closed, which is only correct when there was something to check.
+      choiceItems: hasListBackedQuestion ? choiceItems : undefined,
+      lookups: resolveLookupBag(lookupRequests, metadataByKey),
+    };
   }
 
   // ══════════════════════════════════════════════════════════════════════════
@@ -309,7 +505,13 @@ export class SubmissionsService {
         versions: {
           orderBy: { version: 'desc' },
           take: 5,
-          select: { id: true, version: true, questionsJson: true, compiledRules: true },
+          select: {
+            id: true,
+            version: true,
+            questionsJson: true,
+            compiledRules: true,
+            logicJson: true,
+          },
         },
       },
     });
@@ -336,6 +538,7 @@ export class SubmissionsService {
       currentVersion: form.currentVersion,
       questionsJson: active?.questionsJson ?? [],
       compiledRules: active?.compiledRules ?? {},
+      logicJson: active?.logicJson ?? [],
     };
 
     try {

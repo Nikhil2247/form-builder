@@ -7,6 +7,7 @@ import { SubmissionProcessor } from './queues/submission.processor';
 import { AnswerValidatorService } from './answer-validator.service';
 import { QUEUE_NAMES } from '../../config/bullmq.config';
 import { isWorkerMode } from '../../config/runtime.config';
+import { ChoiceListsModule } from '../choice-lists/choice-lists.module';
 
 /**
  * Queue processors are only registered when this process runs in worker mode
@@ -16,6 +17,10 @@ import { isWorkerMode } from '../../config/runtime.config';
  */
 @Module({
   imports: [
+    // Membership + cascade validation of list-backed answers, and the metadata
+    // that lookup() reads. Imported rather than duplicated here so tenancy
+    // rules for lists live in exactly one place.
+    ChoiceListsModule,
     BullModule.registerQueue(
       { name: QUEUE_NAMES.SUBMISSIONS },
       { name: QUEUE_NAMES.WEBHOOKS },
@@ -29,6 +34,8 @@ import { isWorkerMode } from '../../config/runtime.config';
     AnswerValidatorService,
     ...(isWorkerMode() ? [SubmissionProcessor] : []),
   ],
-  exports: [SubmissionsService, AnswerValidatorService],
+  // SubmissionProducer is exported so the form-app session submit can enqueue
+  // post-processing for the submissions it creates, without a second queue.
+  exports: [SubmissionsService, AnswerValidatorService, SubmissionProducer],
 })
 export class SubmissionsModule {}

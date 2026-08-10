@@ -28,78 +28,22 @@ import {
   type RuleKind,
   type RuleValue,
 } from '@/lib/rules';
+import type { QuestionKeyRow } from '@/lib/question-keys';
 import type { FormQuestion } from '@/types/form';
 
 // ── Question keys ───────────────────────────────────────────────────────────
 
-/** Longest key the API will store; mirrors STRUCTURE_LIMITS.MAX_KEY_LENGTH. */
-const MAX_KEY_LENGTH = 60;
-
 /**
- * Label → key, mirroring the server's `slugifyKey` exactly.
+ * Re-exported, not defined here.
  *
- * A question only carries a `key` once it has been through a save, so a
- * question added a second ago has none. Deriving the same key the server will
- * derive lets the author write a rule against a brand-new question instead of
- * having to save, reload, and come back — and because the algorithm matches,
- * the key does not change under the rule when the save lands.
+ * The runner needs the identical derivation to evaluate a compiled plan in the
+ * browser, and a second copy that drifted would mean a rule compiling in this
+ * panel and then reading `null` at runtime. The one implementation lives in
+ * `@/lib/question-keys`; these re-exports keep the existing import sites
+ * working.
  */
-export function slugifyKey(label: string): string {
-  const slug = label
-    .toLowerCase()
-    .normalize('NFKD')
-    // Strip combining accents so "Âge" and "Age" produce the same key.
-    .replace(/[̀-ͯ]/g, '')
-    .replace(/[^a-z0-9]+/g, '_')
-    .replace(/^_+|_+$/g, '')
-    .slice(0, MAX_KEY_LENGTH);
-
-  // Keys are identifiers in formulas, so they cannot lead with a digit.
-  return slug && !/^\d/.test(slug) ? slug : `f_${slug}`;
-}
-
-export interface QuestionKeyRow {
-  id: string;
-  key: string;
-  label: string;
-  type: FormQuestion['type'];
-}
-
-/**
- * The key every question will be addressable by, in form order.
- *
- * De-duplication repeats the server's scheme (`key`, `key_2`, `key_3`, …) so
- * two questions called "Notes" resolve here to the same pair of keys the
- * compiler will see at publish.
- */
-export function deriveQuestionKeys(questions: FormQuestion[]): QuestionKeyRow[] {
-  const seen = new Set<string>();
-  const rows: QuestionKeyRow[] = [];
-
-  for (const question of questions) {
-    if (!question?.id) continue;
-
-    let key = question.key?.trim()
-      ? slugifyKey(question.key)
-      : slugifyKey(question.label ?? '');
-
-    if (seen.has(key)) {
-      let suffix = 2;
-      while (seen.has(`${key}_${suffix}`)) suffix += 1;
-      key = `${key}_${suffix}`;
-    }
-    seen.add(key);
-
-    rows.push({
-      id: question.id,
-      key,
-      label: question.label || 'Untitled question',
-      type: question.type,
-    });
-  }
-
-  return rows;
-}
+export { slugifyKey, deriveQuestionKeys } from '@/lib/question-keys';
+export type { QuestionKeyRow } from '@/lib/question-keys';
 
 // ── Operators ───────────────────────────────────────────────────────────────
 

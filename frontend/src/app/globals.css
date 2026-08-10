@@ -5,16 +5,21 @@
 @custom-variant dark (&:is(.dark *));
 
 /* ═══════════════════════════════════════════════════════════════════════════
-   DESIGN TOKENS
+   DESIGN TOKENS — Vibha brand
 
-   A neutral, professional surface: greyscale chrome, one restrained accent,
-   and a small set of *semantic* status colours (success / warning / info /
-   destructive) that are the ONLY places colour is allowed to appear.
+   The palette and typography are lifted from vibha.org: deep navy as the ink
+   and primary action colour, amber/orange as the single warm accent, and a
+   cream tint that warms every neutral so the greys never read as cold.
 
    Rules this file enforces, so pages stay consistent:
      • No page may hardcode a palette colour (bg-emerald-500, text-amber-600…).
-       Use the semantic tokens below via <StatusBadge> / bg-success/10 etc.
-     • Chrome (sidebar, header, cards, tables) is greyscale only.
+       Use the semantic tokens below via <StatusBadge> / bg-success/10 etc.,
+       or the `brand-*` utilities for deliberate brand moments.
+     • Chrome (sidebar, header, cards, tables) stays on the warm neutral ramp.
+       Several layout components style themselves with the generic
+       foreground/muted tokens rather than the sidebar-* ones, so the sidebar
+       surface must stay light — colour arrives via primary/accent, not by
+       flooding the chrome.
      • Elevation is carried by borders, not shadows. One shadow step exists.
 
    Previously this file ended with ~60 lines of `!important` overrides that
@@ -24,6 +29,14 @@
    ═══════════════════════════════════════════════════════════════════════════ */
 
 @theme {
+  /* Typography, matching vibha.org's three roles:
+       Baloo 2   — display/headings (rounded, warm)
+       Open Sans — body and all UI text
+       Merienda  — script, reserved for marketing pull-quotes            */
+  --font-sans: var(--font-open-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-display: var(--font-baloo2), var(--font-open-sans), ui-sans-serif, sans-serif;
+  --font-script: var(--font-merienda), ui-serif, Georgia, cursive;
+
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-card: var(--card);
@@ -64,135 +77,170 @@
   --radius-sm: calc(var(--radius) - 4px);
 }
 
+/* Raw brand colours, exactly as vibha.org publishes them. These exist so a
+   deliberate brand moment (hero, marketing page, empty-state art) can reach for
+   the real colour; product chrome should keep to the semantic tokens above.
+
+   `static` because Tailwind otherwise emits only the theme variables it sees
+   used in a class name — which would leave `var(--color-brand-navy)` undefined
+   for any component that reaches for it from an inline style or plain CSS. */
+@theme static {
+  --color-brand-navy: #244862;
+  --color-brand-navy-dark: #142532;
+  --color-brand-navy-light: #46738c;
+  --color-brand-orange: #f9a620;
+  --color-brand-amber: #f9b620;
+  --color-brand-ember: #e96c29;
+  --color-brand-terracotta: #c06357;
+  --color-brand-peach: #f8b076;
+  --color-brand-blush: #fae7d6;
+  --color-brand-cream: #f8f3eb;
+  --color-brand-gold: #ffefcd;
+  --color-brand-green: #027059;
+}
+
 @layer base {
   :root {
     /* ── Surfaces ────────────────────────────────────────────────────────
-       A three-step neutral ramp. The page sits slightly below the cards so
-       content reads as raised without needing a shadow.                    */
-    --background: oklch(0.981 0.001 286);
-    --foreground: oklch(0.205 0.004 286);
+       A three-step ramp warmed toward the brand cream (#f8f3eb). The page
+       sits slightly below the cards so content reads as raised without
+       needing a shadow.                                                    */
+    --background: oklch(0.984 0.005 80);
+    --foreground: oklch(0.256 0.034 242.6); /* brand navy-dark */
 
     --card: oklch(1 0 0);
-    --card-foreground: oklch(0.205 0.004 286);
+    --card-foreground: oklch(0.256 0.034 242.6);
 
     --popover: oklch(1 0 0);
-    --popover-foreground: oklch(0.205 0.004 286);
+    --popover-foreground: oklch(0.256 0.034 242.6);
 
     /* ── Accent ──────────────────────────────────────────────────────────
-       Near-black. Deliberately not a hue: buttons, active nav, and focus
-       rings read as "ink", which is what keeps the UI looking professional
-       rather than themed.                                                  */
-    --primary: oklch(0.235 0.005 286);
+       Brand navy (#244862). Buttons, active nav, and focus rings read as
+       Vibha's ink — coloured, but dark enough to stay professional rather
+       than decorative. The amber is deliberately NOT the primary: at
+       L≈0.82 it cannot carry white text, so it lives in `brand-*` and in
+       the warning token instead.                                           */
+    --primary: oklch(0.387 0.061 242);
     --primary-foreground: oklch(0.985 0 0);
 
-    --secondary: oklch(0.968 0.001 286);
-    --secondary-foreground: oklch(0.269 0.004 286);
+    --secondary: oklch(0.966 0.008 78);
+    --secondary-foreground: oklch(0.325 0.045 242);
 
-    --muted: oklch(0.968 0.001 286);
-    --muted-foreground: oklch(0.535 0.008 286);
+    --muted: oklch(0.966 0.008 78);
+    --muted-foreground: oklch(0.535 0.022 242);
 
-    --accent: oklch(0.955 0.002 286);
-    --accent-foreground: oklch(0.235 0.005 286);
+    /* Hover/selected surfaces pick up the blush tint (#fae7d6) at low
+       strength, so hovering a row feels warm rather than grey. */
+    --accent: oklch(0.955 0.017 70);
+    --accent-foreground: oklch(0.387 0.061 242);
 
     /* ── Semantic status ─────────────────────────────────────────────────
-       Muted, low-chroma. Used at 10% opacity for fills and full strength
-       for text, which keeps status legible without turning tables into
-       traffic lights.                                                      */
-    --destructive: oklch(0.551 0.176 25.5);
+       Drawn from the brand's warm range but darkened until each one is
+       legible as text on white. Used at 10% opacity for fills and full
+       strength for text, which keeps status legible without turning tables
+       into traffic lights.                                                 */
+    --destructive: oklch(0.522 0.152 28.7); /* deepened terracotta */
     --destructive-foreground: oklch(0.985 0 0);
-    --success: oklch(0.545 0.107 158);
+    --success: oklch(0.486 0.094 171.9); /* brand green #027059 */
     --success-foreground: oklch(0.985 0 0);
-    --warning: oklch(0.635 0.128 72);
-    --warning-foreground: oklch(0.205 0.004 286);
-    --info: oklch(0.545 0.093 245);
+    --warning: oklch(0.618 0.132 72); /* amber, darkened to hold text */
+    --warning-foreground: oklch(0.985 0 0);
+    --info: oklch(0.533 0.063 234); /* brand navy-light #46738c */
     --info-foreground: oklch(0.985 0 0);
 
     /* ── Lines ───────────────────────────────────────────────────────────
        Two weights: hairlines for internal separation, `strong` for the
        outer edge of a container.                                           */
-    --border: oklch(0.922 0.002 286);
-    --border-strong: oklch(0.878 0.003 286);
-    --input: oklch(0.905 0.003 286);
-    --ring: oklch(0.235 0.005 286);
+    --border: oklch(0.918 0.006 245);
+    --border-strong: oklch(0.868 0.010 245);
+    --input: oklch(0.898 0.008 245);
+    --ring: oklch(0.387 0.061 242);
 
     --sidebar: oklch(1 0 0);
-    --sidebar-foreground: oklch(0.269 0.004 286);
-    --sidebar-primary: oklch(0.235 0.005 286);
+    --sidebar-foreground: oklch(0.325 0.045 242);
+    --sidebar-primary: oklch(0.387 0.061 242);
     --sidebar-primary-foreground: oklch(0.985 0 0);
-    --sidebar-accent: oklch(0.955 0.002 286);
-    --sidebar-accent-foreground: oklch(0.205 0.004 286);
-    --sidebar-border: oklch(0.922 0.002 286);
-    --sidebar-ring: oklch(0.235 0.005 286);
+    --sidebar-accent: oklch(0.955 0.017 70);
+    --sidebar-accent-foreground: oklch(0.256 0.034 242.6);
+    --sidebar-border: oklch(0.918 0.006 245);
+    --sidebar-ring: oklch(0.387 0.061 242);
 
-    /* Charts: a single-hue ramp plus greys. Categorical rainbows are what
-       made the old dashboards look like a demo. */
-    --chart-1: oklch(0.435 0.028 268);
-    --chart-2: oklch(0.545 0.038 250);
-    --chart-3: oklch(0.655 0.045 238);
-    --chart-4: oklch(0.755 0.038 232);
-    --chart-5: oklch(0.845 0.024 228);
+    /* Charts: the brand's own navy→amber arc rather than a categorical
+       rainbow. Reads as one family at any series count. */
+    --chart-1: oklch(0.387 0.061 242); /* navy */
+    --chart-2: oklch(0.533 0.063 234); /* navy-light */
+    --chart-3: oklch(0.673 0.173 45); /* ember */
+    --chart-4: oklch(0.788 0.162 71.8); /* orange */
+    --chart-5: oklch(0.813 0.112 59.2); /* peach */
 
     --radius: 0.5rem;
 
     /* One shadow step. Anything needing more emphasis uses a border. */
-    --shadow-card: 0 1px 2px 0 oklch(0.205 0.004 286 / 0.04);
-    --shadow-overlay: 0 8px 32px -8px oklch(0.205 0.004 286 / 0.16),
-      0 0 0 1px oklch(0.205 0.004 286 / 0.04);
+    --shadow-card: 0 1px 2px 0 oklch(0.256 0.034 242.6 / 0.05);
+    --shadow-overlay: 0 8px 32px -8px oklch(0.256 0.034 242.6 / 0.18),
+      0 0 0 1px oklch(0.256 0.034 242.6 / 0.05);
   }
 
+  /* Dark mode is built on the brand's own dark navy (#142532) rather than a
+     neutral charcoal — it is the colour Vibha's footer and dark bands already
+     use. Navy is too dark to act as the primary here, so the roles invert:
+     amber becomes the action colour, which is exactly how the site's dark
+     sections behave. */
   .dark {
-    --background: oklch(0.165 0.003 286);
-    --foreground: oklch(0.96 0.001 286);
+    --background: oklch(0.205 0.030 242.6);
+    --foreground: oklch(0.955 0.008 80);
 
-    --card: oklch(0.205 0.004 286);
-    --card-foreground: oklch(0.96 0.001 286);
+    --card: oklch(0.256 0.034 242.6);
+    --card-foreground: oklch(0.955 0.008 80);
 
-    --popover: oklch(0.215 0.004 286);
-    --popover-foreground: oklch(0.96 0.001 286);
+    --popover: oklch(0.272 0.034 242.6);
+    --popover-foreground: oklch(0.955 0.008 80);
 
-    --primary: oklch(0.96 0.001 286);
-    --primary-foreground: oklch(0.205 0.004 286);
+    --primary: oklch(0.818 0.163 80.6); /* brand amber #f9b620 */
+    --primary-foreground: oklch(0.205 0.030 242.6);
 
-    --secondary: oklch(0.262 0.005 286);
-    --secondary-foreground: oklch(0.96 0.001 286);
+    --secondary: oklch(0.312 0.036 242);
+    --secondary-foreground: oklch(0.955 0.008 80);
 
-    --muted: oklch(0.252 0.005 286);
-    --muted-foreground: oklch(0.688 0.011 286);
+    --muted: oklch(0.302 0.034 242);
+    --muted-foreground: oklch(0.735 0.022 240);
 
-    --accent: oklch(0.278 0.006 286);
-    --accent-foreground: oklch(0.96 0.001 286);
+    --accent: oklch(0.338 0.040 242);
+    --accent-foreground: oklch(0.955 0.008 80);
 
-    --destructive: oklch(0.655 0.168 25.5);
-    --destructive-foreground: oklch(0.165 0.003 286);
-    --success: oklch(0.685 0.115 158);
-    --success-foreground: oklch(0.165 0.003 286);
-    --warning: oklch(0.775 0.13 78);
-    --warning-foreground: oklch(0.165 0.003 286);
-    --info: oklch(0.685 0.095 245);
-    --info-foreground: oklch(0.165 0.003 286);
+    --destructive: oklch(0.660 0.152 30);
+    --destructive-foreground: oklch(0.205 0.030 242.6);
+    --success: oklch(0.680 0.104 168);
+    --success-foreground: oklch(0.205 0.030 242.6);
+    --warning: oklch(0.818 0.163 80.6);
+    --warning-foreground: oklch(0.205 0.030 242.6);
+    --info: oklch(0.720 0.062 234);
+    --info-foreground: oklch(0.205 0.030 242.6);
 
-    --border: oklch(0.278 0.006 286);
-    --border-strong: oklch(0.332 0.007 286);
-    --input: oklch(0.302 0.006 286);
-    --ring: oklch(0.72 0.01 286);
+    --border: oklch(0.338 0.040 242);
+    --border-strong: oklch(0.398 0.046 242);
+    --input: oklch(0.362 0.042 242);
+    --ring: oklch(0.818 0.163 80.6);
 
-    --sidebar: oklch(0.185 0.004 286);
-    --sidebar-foreground: oklch(0.9 0.003 286);
-    --sidebar-primary: oklch(0.96 0.001 286);
-    --sidebar-primary-foreground: oklch(0.205 0.004 286);
-    --sidebar-accent: oklch(0.278 0.006 286);
-    --sidebar-accent-foreground: oklch(0.96 0.001 286);
-    --sidebar-border: oklch(0.278 0.006 286);
-    --sidebar-ring: oklch(0.72 0.01 286);
+    --sidebar: oklch(0.232 0.032 242.6);
+    --sidebar-foreground: oklch(0.905 0.010 80);
+    --sidebar-primary: oklch(0.818 0.163 80.6);
+    --sidebar-primary-foreground: oklch(0.205 0.030 242.6);
+    --sidebar-accent: oklch(0.338 0.040 242);
+    --sidebar-accent-foreground: oklch(0.955 0.008 80);
+    --sidebar-border: oklch(0.338 0.040 242);
+    --sidebar-ring: oklch(0.818 0.163 80.6);
 
-    --chart-1: oklch(0.735 0.048 268);
-    --chart-2: oklch(0.665 0.055 250);
-    --chart-3: oklch(0.595 0.052 238);
-    --chart-4: oklch(0.515 0.042 232);
-    --chart-5: oklch(0.435 0.03 228);
+    /* Same navy→amber arc, re-ordered so the lightest end leads on a dark
+       ground. */
+    --chart-1: oklch(0.818 0.163 80.6);
+    --chart-2: oklch(0.813 0.112 59.2);
+    --chart-3: oklch(0.720 0.062 234);
+    --chart-4: oklch(0.673 0.173 45);
+    --chart-5: oklch(0.560 0.055 236);
 
-    --shadow-card: 0 1px 2px 0 oklch(0 0 0 / 0.3);
-    --shadow-overlay: 0 8px 32px -8px oklch(0 0 0 / 0.55),
+    --shadow-card: 0 1px 2px 0 oklch(0 0 0 / 0.35);
+    --shadow-overlay: 0 8px 32px -8px oklch(0 0 0 / 0.6),
       0 0 0 1px oklch(1 0 0 / 0.06);
   }
 }
@@ -215,7 +263,19 @@
   body {
     @apply bg-background text-foreground antialiased;
     @apply selection:bg-primary selection:text-primary-foreground;
-    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  }
+
+  /* Headings take Baloo 2, the display face from vibha.org. It runs optically
+     larger and looser than Open Sans, so it is pulled back a little here —
+     without this, every card title sits a step too heavy. */
+  h1,
+  h2,
+  h3,
+  h4,
+  h5,
+  h6 {
+    @apply font-display;
+    letter-spacing: -0.011em;
   }
 
   /* ── Focus ────────────────────────────────────────────────────────────
@@ -254,6 +314,37 @@
 
   .shadow-overlay {
     box-shadow: var(--shadow-overlay);
+  }
+
+  /* ── Brand moments ────────────────────────────────────────────────────
+     vibha.org's hero and stat bands are a single orange→amber wash. These
+     two utilities are the only sanctioned way to reproduce it, so it stays
+     one gradient across the app instead of a dozen near-misses. */
+  .bg-brand-gradient {
+    background-image: linear-gradient(
+      135deg,
+      var(--color-brand-ember) 0%,
+      var(--color-brand-orange) 45%,
+      var(--color-brand-amber) 100%
+    );
+  }
+
+  .text-brand-gradient {
+    background-image: linear-gradient(
+      135deg,
+      var(--color-brand-ember) 0%,
+      var(--color-brand-orange) 100%
+    );
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+
+  /* The site sets its section headings in Merienda. Reserve it for marketing
+     copy — it is a script face and unreadable at UI sizes. */
+  .brand-script {
+    @apply font-script;
+    font-weight: 500;
   }
 
   /* Skip link — visually hidden until focused. */

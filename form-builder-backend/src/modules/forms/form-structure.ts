@@ -215,6 +215,57 @@ function normalizeOptions(raw: unknown, questionLabel: string): any[] | undefine
   return options;
 }
 
+/**
+ * Shape-check a question's binding to a managed choice list.
+ *
+ * SHAPE ONLY. Whether the slug actually resolves to a list this organization
+ * can see is a database question, checked in FormsService alongside the rule
+ * compile — the same split as everywhere else in this file, and for the same
+ * reason: this module is pure so it can be unit-tested and reasoned about
+ * without a connection.
+ */
+function normalizeOptionsSource(
+  raw: unknown,
+  type: string,
+  questionLabel: string,
+): Record<string, any> | undefined {
+  if (raw == null) return undefined;
+  if (!isPlainObject(raw)) {
+    throw new BadRequestException(`"${questionLabel}" has a malformed options source.`);
+  }
+
+  if (raw.kind !== 'CHOICE_LIST') {
+    throw new BadRequestException(
+      `"${questionLabel}" names an options source of an unknown kind.`,
+    );
+  }
+
+  // Only a question that presents a set of options can draw from a list. On
+  // anything else the binding would be stored, ignored, and quietly misleading.
+  if (!CHOICE_TYPES.has(type)) {
+    throw new BadRequestException(
+      `"${questionLabel}" is not a choice question, so it cannot take its options from a list.`,
+    );
+  }
+
+  const listSlug = typeof raw.listSlug === 'string' ? raw.listSlug.trim() : '';
+  if (!listSlug) {
+    throw new BadRequestException(`"${questionLabel}" is missing the list to take options from.`);
+  }
+
+  const source: Record<string, any> = { kind: 'CHOICE_LIST', listSlug: listSlug.slice(0, 60) };
+
+  if (typeof raw.parentQuestionKey === 'string' && raw.parentQuestionKey.trim()) {
+    source.parentQuestionKey = raw.parentQuestionKey.trim().slice(0, STRUCTURE_LIMITS.MAX_KEY_LENGTH);
+  }
+  if (typeof raw.displayField === 'string' && raw.displayField.trim()) {
+    source.displayField = raw.displayField.trim().slice(0, 60);
+  }
+  if (raw.searchable === true) source.searchable = true;
+
+  return source;
+}
+
 function normalizeValidation(raw: unknown): Record<string, any> {
   if (!isPlainObject(raw)) return {};
 
@@ -318,15 +369,20 @@ function normalizeQuestions(input: unknown, validPages: Set<number>): any[] {
     question.required = question.validation.required === true;
     question.validation.required = question.required;
 
+    // A question bound to a managed list has no static options, and must not
+    // be required to have any — its options live in the database.
+    const optionsSource = normalizeOptionsSource(raw.optionsSource, type, label);
+    if (optionsSource) question.optionsSource = optionsSource;
+
     const options = normalizeOptions(raw.options, label);
     if (options) {
-      if (CHOICE_TYPES.has(type) && options.length === 0) {
+      if (CHOICE_TYPES.has(type) && options.length === 0 && !optionsSource) {
         throw new BadRequestException(
           `"${label}" is a choice question with no options. Add at least one.`,
         );
       }
       question.options = options;
-    } else if (CHOICE_TYPES.has(type)) {
+    } else if (CHOICE_TYPES.has(type) && !optionsSource) {
       throw new BadRequestException(
         `"${label}" is a choice question with no options. Add at least one.`,
       );
@@ -379,7 +435,45 @@ function normalizeQuestions(input: unknown, validPages: Set<number>): any[] {
     questions.push(question);
   }
 
+  assertCascadesResolve(questions);
+
   return questions;
+}
+
+/**
+ * A cascading question's parent must exist and must come BEFORE it.
+ *
+ * Checked after the whole list is built, because it is a property of the form's
+ * ordering, not of any one question. A forward reference is not a subtle
+ * problem: the child's options are filtered by an answer the respondent has not
+ * been asked for yet, so the dropdown is permanently empty and the form is
+ * unfillable. Rejecting the save is right — unlike a dangling logic target,
+ * this is a configuration the author just made and can immediately correct.
+ */
+function assertCascadesResolve(questions: any[]): void {
+  const keyPosition = new Map<string, number>();
+  questions.forEach((question, index) => keyPosition.set(question.key, index));
+
+  questions.forEach((question, index) => {
+    const parentKey = question.optionsSource?.parentQuestionKey;
+    if (!parentKey) return;
+
+    const parentIndex = keyPosition.get(parentKey);
+    if (parentIndex === undefined) {
+      throw new BadRequestException(
+        `"${question.label}" is filtered by "${parentKey}", which is not a question on this form.`,
+      );
+    }
+    if (parentIndex >= index) {
+      throw new BadRequestException(
+        `"${question.label}" is filtered by "${questions[parentIndex].label}", which comes after it. ` +
+          'Move the filtering question earlier in the form.',
+      );
+    }
+    if (parentKey === question.key) {
+      throw new BadRequestException(`"${question.label}" cannot be filtered by itself.`);
+    }
+  });
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

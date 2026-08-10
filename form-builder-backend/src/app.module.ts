@@ -26,6 +26,7 @@ import { TemplatesModule } from './modules/templates/templates.module';
 import { SubjectsModule } from './modules/subjects/subjects.module';
 import { FormAppsModule } from './modules/form-apps/form-apps.module';
 import { FeatureFlagsModule } from './modules/feature-flags/feature-flags.module';
+import { ChoiceListsModule } from './modules/choice-lists/choice-lists.module';
 
 import configuration, { validationSchema } from './config/configuration';
 import { bullMQConnection } from './config/bullmq.config';
@@ -117,6 +118,7 @@ import { ResponseInterceptor } from './common/interceptors/response.interceptor'
     SubjectsModule,
     FormAppsModule,
     FeatureFlagsModule,
+    ChoiceListsModule,
   ],
   controllers: [AppController],
   providers: [

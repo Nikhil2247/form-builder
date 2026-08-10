@@ -16,7 +16,7 @@
  * keeps the interpreter a plain post-order walk with no special forms.
  */
 
-import type { RuleValue } from './ast';
+import { lookupKey, type RuleValue } from './ast';
 
 export interface OpContext {
   /**
@@ -27,6 +27,16 @@ export interface OpContext {
    * evaluation is a pure function of its inputs.
    */
   evalTime: Date;
+  /**
+   * Choice-list column values, pre-resolved and keyed by `lookupKey()`.
+   *
+   * Filled by the caller before evaluation — from the database on the server,
+   * from the items the cascade already fetched in the browser. The operator
+   * only reads it, so the interpreter stays free of I/O. A missing entry is
+   * `null`, never an error: an item with no value recorded in that column is
+   * an ordinary state, not a fault.
+   */
+  lookups?: Record<string, RuleValue>;
 }
 
 export interface OperatorDef {
@@ -344,6 +354,36 @@ export const OPERATORS: Readonly<Record<string, OperatorDef>> = {
       const needle = toText(a[1]);
       if (haystack === null || needle === null) return null;
       return haystack.toLowerCase().startsWith(needle.toLowerCase());
+    },
+  },
+
+  // ── Choice lists ──
+  /**
+   * A column of the choice-list item the respondent picked.
+   *
+   * `lookup('ng-schools', school_name, 'udise_code')`
+   *
+   * The value has already been resolved into `ctx.lookups` by the caller — see
+   * LookupSpec in ast.ts for why the second argument is compiler-restricted to
+   * a bare field reference. Everything here is a total, pure map lookup.
+   */
+  lookup: {
+    minArgs: 3,
+    maxArgs: 3,
+    fn: (a, ctx) => {
+      const list = toText(a[0]);
+      const column = toText(a[2]);
+      if (list === null || column === null) return null;
+
+      // The picked value. Multi-select answers have no single item to look up,
+      // and an unanswered question has none yet — both are null, not an error.
+      const raw = a[1];
+      if (Array.isArray(raw)) return null;
+      const value = toText(raw);
+      if (value === null || value === '') return null;
+
+      const resolved = ctx.lookups?.[lookupKey(list, value, column)];
+      return resolved === undefined ? null : resolved;
     },
   },
 

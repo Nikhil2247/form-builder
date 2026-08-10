@@ -702,6 +702,11 @@ function RulesBuilderPanel() {
 function PreviewPanel() {
   const form = useFormSnapshot();
   const layoutMode = useBuilderStore((s) => s.settings.layoutMode);
+  // The preview holds AUTHORED rules, not a compiled plan, so the runner
+  // compiles them live with the same `compileRules` the publish endpoint uses.
+  // `allowReferences` has to match, or a preview would accept a cross-form
+  // reference that publish then rejects.
+  const allowReferences = useBuilderStore((s) => s.allowReferences);
 
   return (
     <FormThemeScope
@@ -715,6 +720,7 @@ function PreviewPanel() {
       <FormRunner
         form={form}
         layoutMode={layoutMode === 'PORTAL' ? 'DOCUMENT' : layoutMode}
+        allowReferences={allowReferences}
         onSubmitResponse={() => {
           toast.success('Preview submission — no data was stored.');
         }}

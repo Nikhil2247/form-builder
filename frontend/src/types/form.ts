@@ -36,6 +36,34 @@ export interface QuestionValidation {
   maxSizeMb?: number;
 }
 
+/**
+ * Where a choice question's options come from, when not typed in by hand.
+ *
+ * Absent means the legacy behaviour: the static `options` array on the
+ * question. Present means the options are served from a managed ChoiceList,
+ * which is what makes a 784-row district dropdown, a District→Block→School
+ * cascade, and `lookup()` auto-fill possible at all.
+ */
+export interface QuestionOptionsSource {
+  kind: 'CHOICE_LIST';
+  /** ChoiceList.slug, resolved within the org then falling back to global. */
+  listSlug: string;
+  /**
+   * Cascade: offer only the items whose `parentValue` equals the answer to
+   * this question.
+   *
+   * Addressed by KEY, like rules — the same reason. A key can be renamed
+   * without touching stored answers; a label cannot be relied on at all.
+   * The question must appear EARLIER in the form, or the respondent would meet
+   * a dropdown filtered by something they have not been asked yet.
+   */
+  parentQuestionKey?: string;
+  /** Metadata column to display instead of `label`. */
+  displayField?: string;
+  /** Type-to-search rather than a plain select. Forced on for large lists. */
+  searchable?: boolean;
+}
+
 export interface FormQuestion {
   id: string;
   /**
@@ -57,6 +85,8 @@ export interface FormQuestion {
   required?: boolean;
   defaultValue?: string | number | string[];
   options?: QuestionOption[];
+  /** Present = options come from a managed list rather than `options`. */
+  optionsSource?: QuestionOptionsSource;
   matrixRows?: string[];
   matrixColumns?: string[];
   validation: QuestionValidation;

@@ -19,6 +19,7 @@
 import {
   type ExprNode,
   type FormRule,
+  type LookupSpec,
   type RefNode,
   RULE_KINDS,
   REF_WHEN_VALUES,
@@ -62,6 +63,18 @@ export interface CompiledPlan {
   references: RefNode['ref'][];
   /** Keys this plan computes; the API strips these from client input. */
   calculatedKeys: string[];
+  /**
+   * Every distinct choice-list column this plan reads.
+   *
+   * Optional so a plan compiled before lookups existed still satisfies the
+   * type — `readPlan` defaults it to an empty list.
+   *
+   * Like `references`, this is emitted so the resolver can batch its queries
+   * and so the reachable data set is knowable statically. Unlike references,
+   * a spec is only half a key: the resolver pairs each spec with the answer to
+   * its `field` to produce the concrete `lookupKey()`.
+   */
+  lookups?: LookupSpec[];
 }
 
 export type CompileResult =
@@ -76,6 +89,15 @@ export interface CompileOptions {
    * subject to hang off, so they are rejected rather than silently null.
    */
   allowReferences: boolean;
+  /**
+   * Choice-list slugs a `lookup` may name.
+   *
+   * Undefined means "do not check" — used by callers that have no catalogue to
+   * hand, such as the builder's live preview before the lists have loaded. The
+   * publish path always supplies it, so a rule naming a list that does not
+   * exist is rejected before a respondent can meet it.
+   */
+  knownChoiceLists?: readonly string[];
 }
 
 // ── Structural validation ───────────────────────────────────────────────────
@@ -84,6 +106,7 @@ interface WalkState {
   nodes: number;
   errors: string[];
   references: Map<string, RefNode['ref']>;
+  lookups: Map<string, LookupSpec>;
   fieldsUsed: Set<string>;
 }
 
@@ -159,6 +182,13 @@ function walk(node: ExprNode, depth: number, state: WalkState, options: CompileO
       return;
     }
 
+    if (node.op === 'lookup') {
+      validateLookup(node.args, state, options);
+      // Its arguments are fully checked above and none of them may be a
+      // nested expression, so there is nothing left to walk.
+      return;
+    }
+
     const def = OPERATORS[node.op];
     if (node.args.length < def.minArgs || node.args.length > def.maxArgs) {
       const expected =
@@ -178,6 +208,64 @@ function walk(node: ExprNode, depth: number, state: WalkState, options: CompileO
   }
 
   state.errors.push('Expression contains an unrecognised node.');
+}
+
+/**
+ * `lookup(<list>, <field>, <column>)` — checked here rather than by the generic
+ * operator path, because its argument SHAPES are part of its contract, not just
+ * its arity.
+ *
+ * The middle argument must be a bare field reference. That restriction is what
+ * keeps the interpreter free of I/O: it means every (list, value, column) triple
+ * the plan can need is determined by the submitted answers alone, so the
+ * resolver can fill the whole bag in one pass before evaluation begins. Allowing
+ * an expression there would let one lookup's result feed another's key, which
+ * needs iterative resolution and a depth analysis this compiler does not do.
+ *
+ * The outer arguments must be literals for the same reason — a computed list
+ * name would not be knowable until evaluation.
+ */
+function validateLookup(args: ExprNode[], state: WalkState, options: CompileOptions): void {
+  if (args.length !== 3) {
+    state.errors.push(
+      `Operation "lookup" takes exactly 3 inputs but was given ${args.length}.`,
+    );
+    return;
+  }
+
+  const [listNode, fieldNode, columnNode] = args;
+
+  if (!isLiteral(listNode) || typeof listNode.lit !== 'string' || !listNode.lit) {
+    state.errors.push('The list a lookup reads from must be chosen, not calculated.');
+    return;
+  }
+  if (!isLiteral(columnNode) || typeof columnNode.lit !== 'string' || !columnNode.lit) {
+    state.errors.push('The column a lookup reads must be chosen, not calculated.');
+    return;
+  }
+  if (!isField(fieldNode) || typeof fieldNode.field !== 'string' || !fieldNode.field) {
+    state.errors.push(
+      'A lookup must read the answer to a question directly — it cannot look up a calculated value.',
+    );
+    return;
+  }
+
+  const list = listNode.lit;
+  const column = columnNode.lit;
+  const field = fieldNode.field;
+
+  state.fieldsUsed.add(field);
+  if (!options.knownKeys.includes(field)) {
+    state.errors.push(`Rule refers to "${field}", which is not a question on this form.`);
+    return;
+  }
+
+  if (options.knownChoiceLists && !options.knownChoiceLists.includes(list)) {
+    state.errors.push(`"${list}" is not a list this organization can use.`);
+    return;
+  }
+
+  state.lookups.set(`${list}::${field}::${column}`, { list, field, column });
 }
 
 // ── Dependency ordering ─────────────────────────────────────────────────────
@@ -259,6 +347,7 @@ export function compileRules(rules: FormRule[], options: CompileOptions): Compil
   }
 
   const references = new Map<string, RefNode['ref']>();
+  const lookups = new Map<string, LookupSpec>();
   const dependencies = new Map<string, Set<string>>();
   const calculations: FormRule[] = [];
   const show: FormRule[] = [];
@@ -303,6 +392,7 @@ export function compileRules(rules: FormRule[], options: CompileOptions): Compil
       nodes: 0,
       errors: [],
       references,
+      lookups,
       fieldsUsed: new Set<string>(),
     };
     walk(rule.expr, 0, state, options);
@@ -359,6 +449,7 @@ export function compileRules(rules: FormRule[], options: CompileOptions): Compil
       validate,
       references: [...references.values()],
       calculatedKeys: ordered.map((rule) => rule.target),
+      lookups: [...lookups.values()],
     },
   };
 }

@@ -123,3 +123,51 @@ export interface FormRule {
 export function refKey(ref: RefNode['ref']): string {
   return `${ref.form}::${ref.question}::${ref.when}`;
 }
+
+// ── Choice-list lookups ─────────────────────────────────────────────────────
+
+/**
+ * A column of a choice list, read for whichever item the respondent picked.
+ *
+ * This is what makes a field auto-fill: pick a school, and its UDISE code
+ * appears in a read-only box. Expressed as
+ *
+ *   lookup('ng-schools', school_name, 'udise_code')
+ *
+ * WHY THE SECOND ARGUMENT IS RESTRICTED TO A BARE `field` NODE
+ *
+ * The interpreter performs no I/O — that is what lets the identical code run
+ * in the browser and lets the server reproduce exactly what the respondent
+ * saw. A lookup obviously needs data, so it is resolved BEFORE evaluation into
+ * a plain bag, the same way cross-form `ref` values are.
+ *
+ * That only works if the set of (list, value) pairs a plan can need is knowable
+ * without evaluating anything. Restricting the value argument to a raw field
+ * reference guarantees it: every pair is determined by the submitted answers
+ * alone. An arbitrary expression there would force multi-pass evaluation with
+ * a lookup-depth analysis in the compiler, for no case anyone has asked for.
+ *
+ * The compiler enforces the restriction (see `walk`), so an author cannot
+ * write one that would need a second pass.
+ */
+export interface LookupSpec {
+  /** ChoiceList.slug the value is looked up in. */
+  list: string;
+  /** Question key whose answer identifies the item. */
+  field: string;
+  /** Key within the item's `metadata` to return. */
+  column: string;
+}
+
+/**
+ * Canonical key for one resolved lookup.
+ *
+ * Includes the VALUE, not just the spec, because two respondents answering the
+ * same question pick different items. The compiler emits specs; the resolver
+ * expands each spec against the actual answer and fills the bag under this key;
+ * the interpreter does a plain lookup. One shared function keeps the three in
+ * agreement — computing it differently anywhere would silently yield `null`.
+ */
+export function lookupKey(list: string, value: string, column: string): string {
+  return `${list}::${value}::${column}`;
+}

@@ -5,17 +5,18 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import {
   BarChart3,
   Boxes,
-  FileBox,
+  ExternalLink,
+  ListOrdered,
   Loader2,
   Plus,
   Save,
+  Settings2,
   Trash2,
 } from 'lucide-react';
 import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
-import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -33,20 +34,24 @@ import {
   EmptyState,
   ErrorState,
   ForbiddenState,
+  Modal,
   PageHeader,
   PageShell,
 } from '@/components/shared';
 import { DataAppsDisabled } from '@/components/apps/DataAppsGate';
+import { AppSettingsPanel } from '@/components/apps/AppSettingsPanel';
+import { AppStepsDesigner } from '@/components/apps/AppStepsDesigner';
 import { PhonePreview } from '@/components/apps/PhonePreview';
 import { PhoneAppSimulator } from '@/components/apps/PhoneAppSimulator';
 import { usePermissions } from '@/hooks/use-auth';
 import { FEATURES, useFeature } from '@/hooks/use-features';
-import { useForms, type Form } from '@/hooks/use-forms';
+import { useForms } from '@/hooks/use-forms';
 import { useSubjectTypes } from '@/hooks/use-subjects';
 import {
   toAppConfig,
   useCreateFormApp,
   useFormApp,
+  useUpdateAppSettings,
   useUpdateFormApp,
   type CardSource,
   type DashboardCardConfig,
@@ -63,11 +68,19 @@ const SOURCE_OPTIONS: { value: CardSource; label: string }[] = [
 /**
  * Configure a data-entry app.
  *
- * The app is configuration, not code: a record type, an ordered list of forms,
+ * The app is configuration, not code: a record type, an ordered list of STEPS,
  * and a set of declarative dashboard cards. Everything the author picks here is
  * reflected in the phone frame beside the form, because the app is used on a
  * 390pt screen and authored on a 1400px one — without the frame it is very easy
  * to configure eight dashboard cards that no field worker will ever scroll past.
+ *
+ * ── Two save models on one page, deliberately ──────────────────────────────
+ * The basics and the dashboard cards are fields on one row, so they batch
+ * behind the save button. Steps and settings are not: a step is a row whose key
+ * is referenced by conditions and by staged session entries, and the public
+ * slug is unique platform-wide. Both write through immediately, which is why
+ * the step designer has no save button of its own and the settings dialog says
+ * it saves automatically — exactly like the form settings panel.
  *
  * `?id=<appId>` edits an existing app; without it the page creates a new one,
  * matching the form builder's convention.
@@ -159,6 +172,7 @@ function AppBuilderForm({
 
   const createApp = useCreateFormApp();
   const updateApp = useUpdateFormApp();
+  const updateSettings = useUpdateAppSettings();
 
   const seed = toAppConfig(app?.config);
 
@@ -168,39 +182,28 @@ function AppBuilderForm({
   const [subjectTypeId, setSubjectTypeId] = useState<string>(
     app?.subjectType?.id ?? app?.subjectTypeId ?? NONE,
   );
-  const [formIds, setFormIds] = useState<string[]>(seed.formIds);
   const [cards, setCards] = useState<DashboardCardConfig[]>(seed.dashboardCards);
-  const [isPublished, setPublished] = useState(app?.isPublished ?? false);
+  const [isSettingsOpen, setSettingsOpen] = useState(false);
 
   const publishedForms = useMemo(() => forms.data?.forms ?? [], [forms.data]);
-  const selectedForms = useMemo(
-    () =>
-      formIds
-        .map((id) => publishedForms.find((form) => form.id === id))
-        .filter((form): form is Form => !!form),
-    [formIds, publishedForms],
-  );
+  const steps = useMemo(() => app?.steps ?? [], [app]);
+
+  // The forms an app actually opens, deduplicated: the same form is legitimately
+  // two steps, and a card filter offering it twice is just noise.
+  const stepForms = useMemo(() => {
+    const seen = new Map<string, { id: string; title: string }>();
+    for (const step of steps) {
+      if (step.form && !seen.has(step.formId)) {
+        seen.set(step.formId, { id: step.formId, title: step.form.title });
+      }
+    }
+    return [...seen.values()];
+  }, [steps]);
 
   const subjectType = (subjectTypes.data ?? []).find((type) => type.id === subjectTypeId);
   const isEditing = !!appId;
   const isSaving = createApp.isPending || updateApp.isPending;
   const canSave = !!name.trim() && subjectTypeId !== NONE && !isSaving;
-
-  function toggleForm(formId: string) {
-    setFormIds((current) =>
-      current.includes(formId)
-        ? current.filter((id) => id !== formId)
-        : // Order is display order in the app, so append rather than sort.
-          [...current, formId],
-    );
-    // A card scoped to a form that is no longer in the app would silently count
-    // nothing — the API drops the filter on save, so drop it here too.
-    setCards((current) =>
-      current.map((card) =>
-        card.filter?.formId === formId ? { ...card, filter: { ...card.filter, formId: undefined } } : card,
-      ),
-    );
-  }
 
   function updateCard(index: number, patch: Partial<DashboardCardConfig>) {
     setCards((current) =>
@@ -212,7 +215,6 @@ function AppBuilderForm({
     if (!canSave) return;
 
     const config = {
-      formIds,
       dashboardCards: cards
         .filter((card) => card.title.trim().length > 0)
         .map((card) => ({
@@ -240,7 +242,9 @@ function AppBuilderForm({
           name: name.trim(),
           description: description.trim(),
           icon: icon.trim(),
-          isPublished,
+          // `isPublished` is deliberately absent: it lives in the settings
+          // dialog, which writes it through on toggle. Sending it from here as
+          // well would let a stale copy in this form undo a change made there.
           config,
         });
         toast.success('App saved');
@@ -273,13 +277,37 @@ function AppBuilderForm({
           { label: isEditing ? 'Configure' : 'New app' },
         ]}
         title={isEditing ? name || 'Configure app' : 'New app'}
-        description="Pick a record type, choose the forms your team fills, and define the dashboard."
+        description="Pick a record type, lay out the steps your team works through, and define the dashboard."
         actions={
           <>
+            {isEditing && app?.publicSlug && app.isPublished && (
+              <ButtonLink
+                variant="ghost"
+                size="sm"
+                className="gap-2"
+                href={`/a/${app.publicSlug}`}
+                target="_blank"
+                rel="noreferrer"
+              >
+                <ExternalLink className="size-4" />
+                Public link
+              </ButtonLink>
+            )}
             {isEditing && (
               <ButtonLink variant="outline" size="sm" href={`/apps/${appId}`}>
                 Open app
               </ButtonLink>
+            )}
+            {isEditing && app && (
+              <Button
+                variant="outline"
+                size="sm"
+                className="gap-2"
+                onClick={() => setSettingsOpen(true)}
+              >
+                <Settings2 className="size-4" />
+                Settings
+              </Button>
             )}
             <Button size="sm" className="gap-2" onClick={handleSave} disabled={!canSave}>
               {isSaving ? <Loader2 className="size-4 animate-spin" /> : <Save className="size-4" />}
@@ -288,6 +316,27 @@ function AppBuilderForm({
           </>
         }
       />
+
+      {/* ── Settings ──────────────────────────────────────────────────────── */}
+      {/* Same modal, same size and the same "saves automatically" contract as
+          the form settings panel — an author who has set up a form already
+          knows what this button does. */}
+      {isEditing && app && (
+        <Modal
+          open={isSettingsOpen}
+          onOpenChange={setSettingsOpen}
+          size="md"
+          title="App settings"
+          description="Design, public link, access and reporting periods. Saved automatically."
+          footer={
+            <Button size="sm" onClick={() => setSettingsOpen(false)}>
+              Done
+            </Button>
+          }
+        >
+          {isSettingsOpen && <AppSettingsPanel app={app} />}
+        </Modal>
+      )}
 
       {noRecordTypes ? (
         <EmptyState
@@ -371,88 +420,60 @@ function AppBuilderForm({
                 </p>
               </div>
 
-              {isEditing && (
+              {isEditing && app && (
                 <div className="flex items-center justify-between gap-4 border-t border-border pt-4">
                   <div>
                     <Label htmlFor="app-published">Live</Label>
                     <p className="text-xs text-muted-foreground">
-                      A draft app stays visible to editors but is not offered for data entry.
+                      A draft app stays visible to editors but is not offered for data entry, and
+                      its public link returns nothing.
                     </p>
                   </div>
+                  {/* Mirrors the switch in the settings dialog and writes through
+                      the same endpoint, so the two can never disagree. */}
                   <Switch
                     id="app-published"
-                    checked={isPublished}
-                    onCheckedChange={(checked) => setPublished(checked)}
+                    checked={app.isPublished}
+                    onCheckedChange={(checked) =>
+                      updateSettings
+                        .mutateAsync({ appId: app.id, isPublished: checked })
+                        .catch((error: unknown) =>
+                          toast.error(
+                            error instanceof Error ? error.message : 'Could not change that',
+                          ),
+                        )
+                    }
                   />
                 </div>
               )}
             </Card>
 
-            {/* ── Forms ────────────────────────────────────────────────── */}
-            <Card className="space-y-4 p-5">
-              <div>
-                <h2 className="text-sm font-semibold">Forms</h2>
-                <p className="text-xs text-muted-foreground">
-                  Published forms only, in the order you select them. That order is the order they
-                  appear on the device.
-                </p>
-              </div>
-
-              {forms.error ? (
-                <ErrorState
-                  error={forms.error}
-                  onRetry={() => forms.refetch()}
-                  variant="inline"
-                />
-              ) : publishedForms.length === 0 ? (
+            {/* ── Steps ────────────────────────────────────────────────── */}
+            {forms.error ? (
+              <Card className="p-5">
+                <ErrorState error={forms.error} onRetry={() => forms.refetch()} variant="inline" />
+              </Card>
+            ) : !isEditing || !app ? (
+              // Steps are rows keyed to an app id, so there is nothing to
+              // attach them to until the app exists. Saying so beats an empty
+              // designer that silently fails on the first "Add step".
+              <Card className="p-5">
                 <EmptyState
                   variant="inline"
-                  icon={FileBox}
-                  title="No published forms"
-                  description="An app can only open published forms — a draft has no immutable version to submit against."
-                  action={
-                    <ButtonLink variant="outline" size="sm" href="/forms">
-                      Go to forms
-                    </ButtonLink>
-                  }
+                  icon={ListOrdered}
+                  title="Create the app first"
+                  description="Steps belong to a saved app. Press “Create app” and the step designer opens here."
                 />
-              ) : (
-                <div className="max-h-72 space-y-0.5 overflow-y-auto rounded-lg border border-border p-1">
-                  {publishedForms.map((form) => {
-                    const index = formIds.indexOf(form.id);
-                    const isSelected = index !== -1;
-
-                    return (
-                      <label
-                        key={form.id}
-                        className="flex cursor-pointer items-center gap-2.5 rounded-md px-2 py-2 text-sm transition-colors hover:bg-muted/60"
-                      >
-                        <Checkbox
-                          checked={isSelected}
-                          onCheckedChange={() => toggleForm(form.id)}
-                          aria-label={form.title}
-                        />
-                        <span className="min-w-0 flex-1">
-                          <span className="block truncate font-medium text-foreground">
-                            {form.title}
-                          </span>
-                          {form.description && (
-                            <span className="block truncate text-xs text-muted-foreground">
-                              {form.description}
-                            </span>
-                          )}
-                        </span>
-                        {isSelected && (
-                          <span className="tabular shrink-0 rounded bg-muted px-1.5 text-xs text-muted-foreground">
-                            {index + 1}
-                          </span>
-                        )}
-                      </label>
-                    );
-                  })}
-                </div>
-              )}
-            </Card>
+              </Card>
+            ) : (
+              <AppStepsDesigner
+                appId={app.id}
+                steps={steps}
+                subjectTypeId={app.subjectTypeId}
+                availableForms={publishedForms}
+                registrationFormId={subjectType?.registrationFormId ?? null}
+              />
+            )}
 
             {/* ── Dashboard cards ──────────────────────────────────────── */}
             <Card className="space-y-4 p-5">
@@ -582,14 +603,14 @@ function AppBuilderForm({
                                 },
                               })
                             }
-                            disabled={card.source !== 'submissions' || selectedForms.length === 0}
+                            disabled={card.source !== 'submissions' || stepForms.length === 0}
                           >
                             <SelectTrigger className="w-full" aria-label="Card form filter">
                               <SelectValue placeholder="Any form" />
                             </SelectTrigger>
                             <SelectContent>
                               <SelectItem value={NONE}>Any form</SelectItem>
-                              {selectedForms.map((form) => (
+                              {stepForms.map((form) => (
                                 <SelectItem key={form.id} value={form.id}>
                                   {form.title}
                                 </SelectItem>
@@ -613,18 +634,18 @@ function AppBuilderForm({
                   icon={icon || null}
                   subjectTypeName={subjectType?.name ?? 'No record type'}
                   subjectTypeId={subjectTypeId === NONE ? null : subjectTypeId}
-                  // The picker lists plain forms, which carry no subject role.
-                  // Derive it from the record type's registration binding, so
-                  // the preview labels the entry point correctly while editing
-                  // rather than calling everything "standalone".
-                  forms={selectedForms.map((form) => ({
-                    id: form.id,
-                    title: form.title,
-                    slug: form.slug,
+                  // One entry per STEP, not per form: a programme that collects
+                  // the same form under two headings shows two rows on the
+                  // device, and the preview exists to say exactly that.
+                  forms={steps.map((step) => ({
+                    id: step.id,
+                    title: step.title,
+                    slug: step.form?.slug ?? step.key,
                     subjectRole:
-                      form.id === subjectType?.registrationFormId
+                      step.form?.subjectRole ??
+                      (step.formId === subjectType?.registrationFormId
                         ? ('REGISTERS' as const)
-                        : ('ATTACHES' as const),
+                        : ('ATTACHES' as const)),
                     subjectTypeId: subjectTypeId === NONE ? null : subjectTypeId,
                   }))}
                   // Titles only. The counts come from the server once the card

@@ -46,6 +46,14 @@ export interface EvalContext extends OpContext {
    * genuinely have no prior submission of that form.
    */
   refs: Record<string, RuleValue>;
+  /**
+   * Choice-list column values, pre-resolved and keyed by `lookupKey()`.
+   *
+   * Same contract as `refs`: filled by the caller before evaluation, read-only
+   * here. A missing entry is `null`, never an error — the respondent may not
+   * have picked an item yet, or the item may have nothing in that column.
+   */
+  lookups?: Record<string, RuleValue>;
 }
 
 /** Raised only for budget exhaustion. Never for bad data — operators are total. */

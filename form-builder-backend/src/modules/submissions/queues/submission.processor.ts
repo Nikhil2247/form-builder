@@ -64,6 +64,38 @@ export class SubmissionProcessor extends WorkerHost {
     }
 
     const questions = formVersion.questionsJson as any[];
+
+    // ── Already persisted? ──────────────────────────────────────────────────
+    // Two callers reach this worker with a row that already exists:
+    //
+    //   • a FORM-APP SESSION submit, which must create every entry's submission
+    //     inside ONE transaction — a report where some school visits landed and
+    //     others did not is worse than a rejected one — and then hands the
+    //     side effects here;
+    //   • a RETRY, after the job failed somewhere past the commit. Without this
+    //     check the retry died on the primary key and the side effects were
+    //     never performed at all, which is the exact failure retries exist for.
+    //
+    // In both cases the answers of record are the stored ones, not the payload's.
+    const existing = await this.prisma.reader.formSubmission.findUnique({
+      where: { id: submissionId },
+      select: { id: true, answers: true, subjectId: true },
+    });
+
+    if (existing) {
+      const storedAnswers = (existing.answers ?? {}) as Record<string, any>;
+      this.logger.log(`Submission ${submissionId} already persisted; running side effects only.`);
+      await this.runSideEffects({
+        formId,
+        submissionId,
+        questions,
+        answers: storedAnswers,
+        formTitle: formVersion.form.title,
+        notifyEmails: formVersion.form.notifyEmails,
+      });
+      return;
+    }
+
     const grade = formVersion.form.isQuizMode
       ? gradeQuiz(questions, answers)
       : { score: null, max: null, passed: null };
@@ -134,23 +166,46 @@ export class SubmissionProcessor extends WorkerHost {
 
     this.logger.log(`Submission ${submissionId} persisted.`);
 
-    // ── Post-commit side effects ────────────────────────────────────────────
-    // Deliberately AFTER the transaction and individually guarded: a failing
-    // mail server must not roll back (or endlessly re-insert) the submission.
-    await this.linkAndVerifyFiles(questions, answers, submissionId);
-    await this.enqueueWebhooks(formId, submissionId, answers);
+    await this.runSideEffects({
+      formId,
+      submissionId,
+      questions,
+      answers,
+      formTitle: formVersion.form.title,
+      notifyEmails: formVersion.form.notifyEmails,
+    });
+  }
 
-    const notifyEmails = Array.isArray(formVersion.form.notifyEmails)
-      ? formVersion.form.notifyEmails.filter((e): e is string => typeof e === 'string')
+  /**
+   * Everything that happens once a submission is safely committed.
+   *
+   * Deliberately AFTER the transaction and individually guarded: a failing mail
+   * server must not roll back (or endlessly re-insert) the submission. Split
+   * into its own method so the already-persisted path above runs exactly this
+   * and nothing else.
+   */
+  private async runSideEffects(input: {
+    formId: string;
+    submissionId: string;
+    questions: any[];
+    answers: Record<string, any>;
+    formTitle: string;
+    notifyEmails: unknown;
+  }) {
+    await this.linkAndVerifyFiles(input.questions, input.answers, input.submissionId);
+    await this.enqueueWebhooks(input.formId, input.submissionId, input.answers);
+
+    const notifyEmails = Array.isArray(input.notifyEmails)
+      ? input.notifyEmails.filter((e): e is string => typeof e === 'string')
       : [];
 
     if (notifyEmails.length > 0) {
       this.mailService
         .sendSubmissionNotificationEmail(
           notifyEmails,
-          formVersion.form.title,
-          submissionId,
-          answers,
+          input.formTitle,
+          input.submissionId,
+          input.answers,
         )
         .catch((e) => this.logger.error('Failed to send notification emails', e));
     }

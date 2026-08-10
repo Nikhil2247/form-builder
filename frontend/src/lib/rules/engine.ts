@@ -38,6 +38,8 @@ export interface ApplyRulesInput {
   answers: Record<string, RuleValue>;
   /** Pre-resolved cross-form values, keyed by `refKey()`. */
   refs?: Record<string, RuleValue>;
+  /** Pre-resolved choice-list column values, keyed by `lookupKey()`. */
+  lookups?: Record<string, RuleValue>;
   /** Defaults to now. Pass explicitly so server and client agree. */
   evalTime?: Date;
 }
@@ -87,6 +89,7 @@ export function applyRules(input: ApplyRulesInput): ApplyRulesResult {
   const ctx: EvalContext = {
     fields: answers,
     refs: input.refs ?? {},
+    lookups: input.lookups ?? {},
     evalTime,
   };
 

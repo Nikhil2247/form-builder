@@ -36,6 +36,8 @@ export interface RunFormRulesInput {
   answersById: Record<string, RuleValue>;
   /** Pre-resolved cross-form values, keyed by `refKey()`. */
   refs?: Record<string, RuleValue>;
+  /** Pre-resolved choice-list column values, keyed by `lookupKey()`. */
+  lookups?: Record<string, RuleValue>;
   evalTime?: Date;
 }
 
@@ -62,6 +64,7 @@ export const EMPTY_PLAN: CompiledPlan = {
   validate: [],
   references: [],
   calculatedKeys: [],
+  lookups: [],
 };
 
 /**
@@ -85,6 +88,9 @@ export function readPlan(stored: unknown): CompiledPlan {
     validate: list(raw.validate),
     references: list(raw.references),
     calculatedKeys: list(raw.calculatedKeys).filter((k): k is string => typeof k === 'string'),
+    // Absent on every plan compiled before choice lists existed, which is the
+    // common case for a while yet.
+    lookups: list(raw.lookups),
   };
 }
 
@@ -148,6 +154,7 @@ export function runFormRules(input: RunFormRulesInput): RunFormRulesResult {
     plan,
     answers: answersByKey,
     refs: input.refs,
+    lookups: input.lookups,
     evalTime: input.evalTime,
   });
 
