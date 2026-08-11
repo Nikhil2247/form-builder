@@ -13,10 +13,23 @@
  * until it expires, usable from anywhere. A module variable dies with the tab
  * and is not enumerable by other scripts.
  *
- * Durability across reloads comes from the HttpOnly `refresh_token` cookie the
- * API sets: on boot we call /auth/refresh once and put a fresh access token
- * back in memory. JavaScript can never read that cookie, so the long-lived
- * credential is the one the page cannot touch.
+ * ── The session is one day long and cannot be extended ───────────────────
+ * A session ends exactly `JWT_REFRESH_TTL_DAYS` after the user signs in — one
+ * day — and NOTHING moves that deadline. There is no background refresh loop,
+ * no refresh on a timer, and no retry-on-401 that transparently mints a new
+ * token. The API enforces this: every token it issues for a session expires at
+ * the deadline fixed at login, so exchanging one buys no extra time.
+ *
+ * The single exchange that does happen is `bootstrapSession` below: once per
+ * page load, only when there is no token in memory yet. That is what lets a
+ * reload keep you signed in without letting anything keep you signed in
+ * forever — the token it gets back carries the ORIGINAL expiry, so reloading
+ * the tab a hundred times still logs you out one day after you signed in.
+ *
+ * When that moment arrives — whether the tab is open (`scheduleExpiryLogout`)
+ * or the API rejects the token outright — the session is dropped, the refresh
+ * cookie is cleared server-side, and `onSessionExpired` fires so the app can
+ * send the user back to /login.
  */
 
 import { API_BASE_URL as BASE_URL } from './config';
@@ -48,14 +61,26 @@ export class ApiError extends Error {
 // ─────────────────────────────────────────────────────────────────────────────
 
 let accessToken: string | null = null;
+let expiryTimer: ReturnType<typeof setTimeout> | null = null;
 
 /** Notified whenever the token changes, so React can react to sign-out. */
 type SessionListener = (token: string | null) => void;
 const sessionListeners = new Set<SessionListener>();
 
+/**
+ * Notified when a session that WAS valid ends on its own — the access token's
+ * `exp` was reached, or the API rejected it — as distinct from the user
+ * choosing to sign out via `clearSession`. The app uses this to show "your
+ * session expired" and route back to /login from wherever the user happens
+ * to be, rather than leaving pages quietly holding stale, unusable data.
+ */
+type ExpiryListener = () => void;
+const expiryListeners = new Set<ExpiryListener>();
+
 export function setAccessToken(token: string | null) {
   accessToken = token;
   sessionListeners.forEach((fn) => fn(token));
+  scheduleExpiryLogout(token);
 }
 
 export function getAccessToken() {
@@ -64,66 +89,128 @@ export function getAccessToken() {
 
 export function onSessionChange(fn: SessionListener) {
   sessionListeners.add(fn);
-  return () => sessionListeners.delete(fn);
+  return () => {
+    sessionListeners.delete(fn);
+  };
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Refresh — single-flight
-// ─────────────────────────────────────────────────────────────────────────────
+export function onSessionExpired(fn: ExpiryListener) {
+  expiryListeners.add(fn);
+  return () => {
+    expiryListeners.delete(fn);
+  };
+}
 
-/**
- * Only ever one refresh request in flight. Ten queries firing on a dashboard
- * mount with an expired token used to trigger ten refreshes; with rotating
- * refresh tokens that is a race where nine of them present an already-rotated
- * token and get logged out.
- */
-let refreshInFlight: Promise<string | null> | null = null;
-
-async function requestRefresh(): Promise<string | null> {
+/** Reads the `exp` claim out of a JWT without verifying it — for scheduling
+ * the client-side logout timer only. The API is what actually enforces it. */
+function decodeJwtExpiry(token: string): number | null {
   try {
-    const res = await fetch(`${BASE_URL}/auth/refresh`, {
-      method: 'POST',
-      credentials: 'include', // sends the HttpOnly refresh_token cookie
-      headers: { 'Content-Type': 'application/json' },
-    });
-
-    if (!res.ok) return null;
-
-    const json = await res.json().catch(() => null);
-    const token: string | undefined = (json?.data ?? json)?.accessToken;
-    return typeof token === 'string' && token.length > 0 ? token : null;
+    const payload = token.split('.')[1];
+    const json = JSON.parse(
+      atob(payload.replace(/-/g, '+').replace(/_/g, '/')),
+    );
+    return typeof json.exp === 'number' ? json.exp : null;
   } catch {
-    // Network failure — treat as "no token", but do not sign the user out;
-    // the next call will try again.
     return null;
   }
 }
 
-/** Refresh the access token, coalescing concurrent callers onto one request. */
-export function refreshAccessToken(): Promise<string | null> {
-  if (!refreshInFlight) {
-    refreshInFlight = requestRefresh()
-      .then((token) => {
-        setAccessToken(token);
-        return token;
-      })
-      .finally(() => {
-        refreshInFlight = null;
-      });
+/**
+ * Fires `expireSession()` at the exact moment the current token's `exp` is
+ * reached, so a tab left open for the full session length logs itself out
+ * proactively instead of waiting for the next API call to discover the 401.
+ */
+function scheduleExpiryLogout(token: string | null) {
+  if (expiryTimer) {
+    clearTimeout(expiryTimer);
+    expiryTimer = null;
   }
-  return refreshInFlight;
+  if (!token) return;
+
+  const exp = decodeJwtExpiry(token);
+  if (exp === null) return;
+
+  const msUntilExpiry = exp * 1000 - Date.now();
+  if (msUntilExpiry <= 0) {
+    queueMicrotask(expireSession);
+    return;
+  }
+  // A one-day session is comfortably inside setTimeout's ~24.8-day ceiling.
+  expiryTimer = setTimeout(expireSession, msUntilExpiry);
 }
 
 /**
- * Called once when the app mounts to restore the session after a page load.
- * Resolves to true when a token was obtained.
+ * Ends the session because it is no longer valid — expired, or rejected by
+ * the API — rather than because the user asked to sign out. Notifies
+ * `onSessionExpired` listeners; `clearSession` deliberately does not.
  */
-export async function bootstrapSession(): Promise<boolean> {
-  const token = await refreshAccessToken();
-  return token !== null;
+export function expireSession() {
+  if (accessToken === null) return; // already signed out; nothing to announce
+  setAccessToken(null);
+  // Drop the refresh cookie too. It is HttpOnly, so only the API can remove
+  // it, and leaving it behind is not cosmetic: `middleware.ts` reads its
+  // presence as "this browser has a session" and would bounce the user from
+  // /login straight back into an app they can no longer use. Fire-and-forget,
+  // and deliberately NOT through `fetchApi` — a failure here must not turn
+  // into another expiry event.
+  void fetch(`${BASE_URL}/auth/logout`, { method: 'POST', credentials: 'include' }).catch(
+    () => {},
+  );
+  expiryListeners.forEach((fn) => fn());
 }
 
-/** Drop the in-memory token. Does not call the API. */
+// ─────────────────────────────────────────────────────────────────────────────
+// Bootstrap
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Module-scoped, so the exchange happens at most once per page load however
+ *  many components ask for it. */
+let bootstrapPromise: Promise<void> | null = null;
+
+/**
+ * Recover the in-memory access token after a page load, if the browser still
+ * holds a live session.
+ *
+ * The access token lives in a module variable and therefore dies with the
+ * page; the refresh cookie survives. This exchanges one for the other EXACTLY
+ * ONCE per page load, and only when there is nothing in memory already.
+ *
+ * This is not a refresh loop and cannot become one:
+ *   • it runs on a cold load only, never on a timer and never on a 401;
+ *   • the token it receives expires when the session does, not a day from now,
+ *     so no number of reloads extends anything;
+ *   • a failure is simply "signed out" — there is no retry.
+ *
+ * A 401 here is the normal answer for a visitor who is not signed in, so it is
+ * swallowed rather than surfaced.
+ */
+export function bootstrapSession(): Promise<void> {
+  if (bootstrapPromise) return bootstrapPromise;
+
+  bootstrapPromise = (async () => {
+    if (accessToken) return;
+
+    try {
+      const response = await fetch(`${BASE_URL}/auth/refresh`, {
+        method: 'POST',
+        credentials: 'include',
+      });
+      if (!response.ok) return;
+
+      const body = await response.json().catch(() => null);
+      const token = (body?.data ?? body)?.accessToken;
+      if (typeof token === 'string' && token) setAccessToken(token);
+    } catch {
+      // Offline or the API is down. Treated as signed out; the user can retry
+      // by reloading, which is what they would do anyway.
+    }
+  })();
+
+  return bootstrapPromise;
+}
+
+/** Drop the in-memory token because the user is signing out. Does not call
+ * the API and does not notify expiry listeners — the caller already knows. */
 export function clearSession() {
   setAccessToken(null);
 }
@@ -133,21 +220,11 @@ export function clearSession() {
 // ─────────────────────────────────────────────────────────────────────────────
 
 export interface FetchOptions extends RequestInit {
-  /** Skip the Authorization header and the 401-refresh dance. */
+  /** Skip the Authorization header and never treat a 401 as session expiry. */
   anonymous?: boolean;
   /** Milliseconds before the request is aborted. Defaults to 30s. */
   timeoutMs?: number;
 }
-
-/** Endpoints where a 401 is the *answer*, not a signal to refresh. */
-const NO_REFRESH = new Set([
-  '/auth/refresh',
-  '/auth/login',
-  '/auth/login/mfa',
-  '/auth/register',
-  '/auth/forgot-password',
-  '/auth/reset-password',
-]);
 
 async function toApiError(response: Response): Promise<ApiError> {
   const body = await response.json().catch(() => null);
@@ -210,20 +287,14 @@ export async function fetchApi(endpoint: string, options: FetchOptions = {}) {
     throw new ApiError('Could not reach the server. Check your connection.', 0);
   }
 
-  // 401 → refresh once, then retry the original request.
-  if (response.status === 401 && !anonymous && !NO_REFRESH.has(endpoint)) {
-    const token = await refreshAccessToken();
-
-    if (!token) {
-      clearSession();
-      throw new ApiError('Your session has expired. Please sign in again.', 401);
-    }
-
-    try {
-      response = await send(token);
-    } catch {
-      throw new ApiError('Could not reach the server. Check your connection.', 0);
-    }
+  // A 401 on a request that carried a bearer token means that token is no
+  // longer good — expired, or revoked server-side — so the session is over.
+  // No retry: the caller must sign in again. A 401 with no token attached
+  // (an anonymous visitor, or a call made before any login) is just the
+  // normal "not authenticated" answer and does not end anything.
+  if (response.status === 401 && !anonymous && accessToken) {
+    expireSession();
+    throw new ApiError('Your session has expired. Please sign in again.', 401);
   }
 
   if (!response.ok) {

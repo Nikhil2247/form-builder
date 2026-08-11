@@ -49,6 +49,25 @@ async function bootstrap() {
   // large body. Submission payloads are additionally size-checked per form by
   // AnswerValidatorService.
   const bodyLimit = process.env.MAX_REQUEST_BODY ?? '256kb';
+
+  // ── …except the choice-list dictionary importer ──────────────────────────
+  //
+  // It is the one route that carries a file on purpose: a CSV of states,
+  // districts or schools, as text, in a JSON body. Under the 256 kB ceiling it
+  // handled roughly 2 000 rows, so the service's documented 20 000-row import
+  // limit was unreachable — every upload past a couple of thousand rows died
+  // with a bare 413 that named no size and suggested no fix.
+  //
+  // Scoped to those paths rather than raised globally: the small default is
+  // load-bearing everywhere else, and body-parser skips a request whose body is
+  // already parsed, so the general `json()` below simply passes these through.
+  const csvBodyLimit = process.env.MAX_CSV_BODY ?? '12mb';
+  const csvJson = json({ limit: csvBodyLimit });
+  const CSV_IMPORT_ROUTE = /\/choice-lists\/(?:[^/]+\/)?import\//;
+  app.use((req: any, res: any, next: any) =>
+    req.method === 'POST' && CSV_IMPORT_ROUTE.test(req.path) ? csvJson(req, res, next) : next(),
+  );
+
   app.use(json({ limit: bodyLimit }));
   app.use(urlencoded({ extended: true, limit: bodyLimit }));
 

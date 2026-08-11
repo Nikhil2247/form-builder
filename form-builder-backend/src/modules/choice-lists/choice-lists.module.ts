@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 
 import { ChoiceListsService } from './choice-lists.service';
 import { ChoiceListsController } from './choice-lists.controller';
+import { PlatformChoiceListsController } from './platform-choice-lists.controller';
 import { PublicChoiceItemsController } from './public-choice-items.controller';
 
 /**
@@ -15,7 +16,11 @@ import { PublicChoiceItemsController } from './public-choice-items.controller';
  */
 @Module({
   providers: [ChoiceListsService],
-  controllers: [ChoiceListsController, PublicChoiceItemsController],
+  controllers: [
+    ChoiceListsController,
+    PlatformChoiceListsController,
+    PublicChoiceItemsController,
+  ],
   exports: [ChoiceListsService],
 })
 export class ChoiceListsModule {}

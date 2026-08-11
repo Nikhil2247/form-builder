@@ -177,9 +177,19 @@ export function FormRunnerClient({ slug, initialData }: { slug: string, initialD
       theme={theme}
       className={cn('min-h-screen', formFontVariables)}
     >
-      {/* 42rem, not 48rem: a single-column form reads better in a narrower
-          measure, and every control inside is already capped at max-w-md. */}
-      <div className="animate-in fade-in slide-in-from-bottom-2 mx-auto w-full max-w-2xl px-4 py-8 duration-500 sm:px-6 sm:py-12">
+      {/* 42rem for a single column: a form reads better in a narrower measure,
+          and every control inside is already capped at max-w-md.
+
+          GRID needs more. Two columns inside 42rem leaves each field about
+          19rem wide, which is narrower than the max-w-md the controls already
+          use — so the layout paid the cost of two columns and delivered none of
+          the benefit. 64rem gives each column a full, comfortable field. */}
+      <div
+        className={cn(
+          'animate-in fade-in slide-in-from-bottom-2 mx-auto w-full px-4 py-8 duration-500 sm:px-6 sm:py-12',
+          layoutMode === 'GRID' ? 'max-w-5xl' : 'max-w-2xl',
+        )}
+      >
       {/* `requireAuth` is enforced at ingest: the API rejects a submission with
           no user attached. Saying so up front beats letting someone fill in
           twenty questions and then bounce off a 403 they cannot act on. */}

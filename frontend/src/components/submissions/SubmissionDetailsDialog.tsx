@@ -1,7 +1,16 @@
 'use client';
 
 import React, { useMemo } from 'react';
-import { Download, FileText, Mail, Timer, User } from 'lucide-react';
+import {
+  ChevronLeft,
+  ChevronRight,
+  Download,
+  FileText,
+  Loader2,
+  Mail,
+  Timer,
+  User,
+} from 'lucide-react';
 import { Modal, StatusBadge, CopyButton } from '@/components/shared';
 import { FormattedDate, formatDuration, formatBytes } from '@/components/shared/formatters';
 import { Button } from '@/components/ui/button';
@@ -28,6 +37,29 @@ interface SubmissionDetailsDialogProps {
   questions?: FormQuestion[];
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  /** Overrides the default "Response" heading — e.g. the form's own title. */
+  title?: React.ReactNode;
+  /**
+   * Still fetching the schema this response should be labelled against.
+   *
+   * Rendered as a note rather than by withholding the dialog: the answers are
+   * already in hand, and showing them under their question ids for a moment
+   * beats an empty modal that looks broken.
+   */
+  isLoadingQuestions?: boolean;
+  /**
+   * Step to the previous/next response without closing.
+   *
+   * Omitted where there is no sequence to step through. This is what keeps a
+   * reviewer on one page: reading six entries against a record used to mean six
+   * round trips out to a form's response list and back.
+   */
+  onPrev?: () => void;
+  onNext?: () => void;
+  /** e.g. "2 of 6", shown between the step buttons. */
+  positionLabel?: string;
+  /** Extra action rendered in the footer, before Close. */
+  footerAction?: React.ReactNode;
 }
 
 export function SubmissionDetailsDialog({
@@ -35,6 +67,12 @@ export function SubmissionDetailsDialog({
   questions,
   open,
   onOpenChange,
+  title,
+  isLoadingQuestions,
+  onPrev,
+  onNext,
+  positionLabel,
+  footerAction,
 }: SubmissionDetailsDialogProps) {
   const rows = useMemo(() => {
     if (!submission) return [];
@@ -68,7 +106,7 @@ export function SubmissionDetailsDialog({
       open={open}
       onOpenChange={onOpenChange}
       size="lg"
-      title="Response"
+      title={title ?? 'Response'}
       description={
         <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
           <span className="flex items-center gap-1.5">
@@ -94,16 +132,49 @@ export function SubmissionDetailsDialog({
         </span>
       }
       footer={
-        <>
-          <CopyButton
-            value={JSON.stringify(submission.answers, null, 2)}
-            label="Copy as JSON"
-            variant="ghost"
-          />
-          <Button size="sm" onClick={() => onOpenChange(false)}>
-            Close
-          </Button>
-        </>
+        <div className="flex w-full flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-1">
+            {(onPrev || onNext) && (
+              <>
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  onClick={onPrev}
+                  disabled={!onPrev}
+                  aria-label="Previous response"
+                >
+                  <ChevronLeft className="size-4" strokeWidth={1.5} />
+                </Button>
+                {positionLabel && (
+                  <span className="px-1 text-xs tabular-nums text-muted-foreground">
+                    {positionLabel}
+                  </span>
+                )}
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  onClick={onNext}
+                  disabled={!onNext}
+                  aria-label="Next response"
+                >
+                  <ChevronRight className="size-4" strokeWidth={1.5} />
+                </Button>
+              </>
+            )}
+          </div>
+
+          <div className="flex items-center gap-2">
+            {footerAction}
+            <CopyButton
+              value={JSON.stringify(submission.answers, null, 2)}
+              label="Copy as JSON"
+              variant="ghost"
+            />
+            <Button size="sm" onClick={() => onOpenChange(false)}>
+              Close
+            </Button>
+          </div>
+        </div>
       }
     >
       <div className="space-y-4">
@@ -120,6 +191,13 @@ export function SubmissionDetailsDialog({
             />
           )}
         </div>
+
+        {isLoadingQuestions && (
+          <p className="flex items-center gap-2 text-xs text-muted-foreground">
+            <Loader2 className="size-3 animate-spin" strokeWidth={1.5} />
+            Loading the form so answers can be labelled…
+          </p>
+        )}
 
         {rows.length === 0 ? (
           <p className="rounded-lg border border-dashed border-border-strong py-10 text-center text-sm text-muted-foreground">

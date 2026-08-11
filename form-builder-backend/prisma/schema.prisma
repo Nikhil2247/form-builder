@@ -1030,7 +1030,14 @@ model WebhookDelivery {
 model AuditLog {
   id             String  @id @default(uuid()) @db.Uuid
   /// The organization this action occurred within.
-  organizationId String  @map("organization_id") @db.Uuid
+  ///
+  /// NULL for a PLATFORM-level action, which genuinely belongs to no tenant —
+  /// a super admin curating the global choice-list dictionary every org reads,
+  /// for instance. These were previously unrecordable: the column was NOT NULL,
+  /// so the only options were to invent an organization or to skip the audit
+  /// entry, and skipping it left the platform's most widely-shared data with no
+  /// trail of who changed it.
+  organizationId String? @map("organization_id") @db.Uuid
   /// The user who performed the action. NULL for system-triggered events.
   userId         String? @map("user_id") @db.Uuid
   /// Dot-notation action name. Examples:
@@ -1052,7 +1059,7 @@ model AuditLog {
 
   createdAt DateTime @default(now()) @map("created_at")
 
-  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  organization Organization? @relation(fields: [organizationId], references: [id], onDelete: Cascade)
 
   /// The actor.
   ///

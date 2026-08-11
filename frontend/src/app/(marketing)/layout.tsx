@@ -1,8 +1,8 @@
 import React from 'react';
 import Link from 'next/link';
 import { Layers } from 'lucide-react';
-import { Button, buttonVariants } from '@/components/ui/button';
-import { ThemeToggle } from '@/components/theme/theme-toggle';
+
+import { PublicHeader } from '@/components/marketing/PublicHeader';
 
 export default function MarketingLayout({
   children,
@@ -11,77 +11,61 @@ export default function MarketingLayout({
 }) {
   return (
     <div className="min-h-screen flex flex-col bg-background text-foreground selection:bg-primary/20">
-      <header className="sticky top-0 z-50 w-full border-b border-border/40 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
-        <div className="container mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
-          <Link href="/" className="flex items-center gap-2.5 transition-opacity hover:opacity-80">
-            <div className="w-8 h-8 rounded-xl bg-primary flex items-center justify-center text-primary-foreground shadow-sm">
-              <Layers size={18} strokeWidth={2.5} />
-            </div>
-            <span className="font-bold text-lg tracking-tight">Formora</span>
-          </Link>
-          
-          <nav className="hidden md:flex items-center gap-6 text-sm font-medium text-muted-foreground">
-            <Link href="/features" className="hover:text-foreground transition-colors">Features</Link>
-            <Link href="/form-templates" className="hover:text-foreground transition-colors">Templates</Link>
-            <Link href="/pricing" className="hover:text-foreground transition-colors">Pricing</Link>
-          </nav>
-          
-          <div className="flex items-center gap-4">
-            <ThemeToggle />
-            <Link href="/login" className="hidden sm:inline-flex text-sm font-medium hover:text-primary transition-colors">
-              Log in
-            </Link>
-            <Link href="/signup" className={buttonVariants({ variant: 'default', size: 'sm' })}>
-              Get Started
-            </Link>
-          </div>
-        </div>
-      </header>
+      <PublicHeader />
 
       <main className="flex-1">
         {children}
       </main>
 
+      {/* Every link here resolves. The previous footer advertised a /blog that
+          does not exist and two `href="#"` social links that went nowhere —
+          three dead ends in the one place on the page a visitor goes when they
+          are looking for something specific. */}
       <footer className="border-t border-border bg-background py-16">
-        <div className="container mx-auto px-4 sm:px-6 lg:px-8 flex flex-col md:flex-row justify-between items-start md:items-center gap-8">
-          <div className="flex flex-col gap-4">
+        <div className="container mx-auto flex flex-col justify-between gap-10 px-4 sm:px-6 md:flex-row lg:px-8">
+          <div className="flex max-w-xs flex-col gap-4">
             <div className="flex items-center gap-2.5">
-              <div className="w-8 h-8 rounded-xl bg-slate-900 flex items-center justify-center text-white">
+              <div className="flex size-8 items-center justify-center rounded-xl bg-primary text-primary-foreground">
                 <Layers size={18} strokeWidth={2.5} />
               </div>
-              <span className="font-bold tracking-tight">Formora</span>
+              <span className="font-display font-bold tracking-tight">Formora</span>
             </div>
-            <div className="text-sm text-muted-foreground max-w-xs">
-              The modern form builder for teams who care about design and conversions.
-            </div>
+            <p className="text-sm leading-relaxed text-muted-foreground">
+              Forms with a rules engine, managed reference data and versioned publishing — for
+              teams whose answers have to hold up afterwards.
+            </p>
           </div>
-          
-          <div className="grid grid-cols-2 md:grid-cols-3 gap-8 text-sm">
+
+          <div className="grid grid-cols-2 gap-8 text-sm md:grid-cols-3">
             <div className="flex flex-col gap-3">
               <span className="font-semibold text-foreground">Product</span>
               <Link href="/features" className="text-muted-foreground hover:text-foreground">Features</Link>
               <Link href="/form-templates" className="text-muted-foreground hover:text-foreground">Templates</Link>
               <Link href="/pricing" className="text-muted-foreground hover:text-foreground">Pricing</Link>
+              <Link href="/docs" className="text-muted-foreground hover:text-foreground">Documentation</Link>
+            </div>
+            <div className="flex flex-col gap-3">
+              <span className="font-semibold text-foreground">Learn</span>
+              <Link href="/docs/quickstart" className="text-muted-foreground hover:text-foreground">Quickstart</Link>
+              <Link href="/docs/concepts" className="text-muted-foreground hover:text-foreground">Core concepts</Link>
+              <Link href="/docs/apps" className="text-muted-foreground hover:text-foreground">Data apps</Link>
+              <Link href="/about" className="text-muted-foreground hover:text-foreground">About</Link>
             </div>
             <div className="flex flex-col gap-3">
               <span className="font-semibold text-foreground">Company</span>
-              <Link href="/about" className="text-muted-foreground hover:text-foreground">About</Link>
               <Link href="/contact" className="text-muted-foreground hover:text-foreground">Contact</Link>
-              <Link href="/blog" className="text-muted-foreground hover:text-foreground">Blog</Link>
-            </div>
-            <div className="flex flex-col gap-3">
-              <span className="font-semibold text-foreground">Legal</span>
               <Link href="/terms" className="text-muted-foreground hover:text-foreground">Terms</Link>
               <Link href="/privacy" className="text-muted-foreground hover:text-foreground">Privacy</Link>
-              <Link href="/compliance" className="text-muted-foreground hover:text-foreground">Compliance</Link>
+              <Link href="/compliance" className="text-muted-foreground hover:text-foreground">Security</Link>
             </div>
           </div>
         </div>
-        <div className="container mx-auto px-4 sm:px-6 lg:px-8 mt-16 pt-8 border-t border-border/50 text-sm text-muted-foreground flex flex-col md:flex-row justify-between items-center">
-          <span>© {new Date().getFullYear()} Formora Inc. All rights reserved.</span>
-          <div className="flex gap-4 mt-4 md:mt-0">
-            <a href="#" className="hover:text-foreground">Twitter</a>
-            <a href="#" className="hover:text-foreground">GitHub</a>
+
+        <div className="container mx-auto mt-16 flex flex-col items-center justify-between gap-4 border-t border-border/50 px-4 pt-8 text-sm text-muted-foreground sm:px-6 md:flex-row lg:px-8">
+          <span>© {new Date().getFullYear()} Formora. All rights reserved.</span>
+          <div className="flex gap-6">
+            <Link href="/login" className="hover:text-foreground">Sign in</Link>
+            <Link href="/signup" className="hover:text-foreground">Create a workspace</Link>
           </div>
         </div>
       </footer>

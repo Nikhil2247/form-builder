@@ -1,4 +1,11 @@
-import { Controller, Get, Header, NotFoundException, Param, Query } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Header,
+  NotFoundException,
+  Param,
+  Query,
+} from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 
 import { ChoiceListsService } from './choice-lists.service';
@@ -36,9 +43,16 @@ export class PublicChoiceItemsController {
     @Param('slug') slug: string,
     @Query('question') questionId: string,
     @Query()
-    query: { parent?: string; q?: string; limit?: string; cursor?: string; values?: string },
+    query: {
+      parent?: string;
+      q?: string;
+      limit?: string;
+      cursor?: string;
+      values?: string;
+    },
   ) {
-    if (!questionId) throw new NotFoundException('Question not found on this form.');
+    if (!questionId)
+      throw new NotFoundException('Question not found on this form.');
 
     const form = await this.prisma.reader.form.findFirst({
       where: { slug, deletedAt: null, status: 'PUBLISHED' },
@@ -52,25 +66,42 @@ export class PublicChoiceItemsController {
         },
       },
     });
-    if (!form || form.versions.length === 0) throw new NotFoundException('Form not found.');
+    if (!form || form.versions.length === 0)
+      throw new NotFoundException('Form not found.');
 
     // The version the form actually points at, matching getPublicForm — a
     // respondent mid-publish must see the options for the schema they hold.
     const active =
-      form.versions.find((v) => v.version === form.currentVersion) ?? form.versions[0];
+      form.versions.find((v) => v.version === form.currentVersion) ??
+      form.versions[0];
 
-    const questions = Array.isArray(active.questionsJson) ? (active.questionsJson as any[]) : [];
+    const questions = Array.isArray(active.questionsJson)
+      ? (active.questionsJson as any[])
+      : [];
     const question = questions.find((q) => q?.id === questionId);
-    if (!question) throw new NotFoundException('Question not found on this form.');
+    if (!question)
+      throw new NotFoundException('Question not found on this form.');
 
     const source = question.optionsSource;
-    if (!source || source.kind !== 'CHOICE_LIST' || typeof source.listSlug !== 'string') {
-      throw new NotFoundException('This question does not draw its options from a list.');
+    if (
+      !source ||
+      source.kind !== 'CHOICE_LIST' ||
+      typeof source.listSlug !== 'string'
+    ) {
+      throw new NotFoundException(
+        'This question does not draw its options from a list.',
+      );
     }
 
     // Resolved against the FORM'S organization, not a caller-supplied one.
-    const list = await this.lists.resolveList(form.organizationId, source.listSlug);
-    if (!list) throw new NotFoundException('This question does not draw its options from a list.');
+    const list = await this.lists.resolveList(
+      form.organizationId,
+      source.listSlug,
+    );
+    if (!list)
+      throw new NotFoundException(
+        'This question does not draw its options from a list.',
+      );
 
     return this.lists.queryItems(list, {
       parent: query.parent,
@@ -79,7 +110,9 @@ export class PublicChoiceItemsController {
       cursor: query.cursor,
       // Comma-separated exact values, used by the runner to resolve `lookup()`
       // for a field the respondent has already answered.
-      values: query.values ? query.values.split(',').filter(Boolean) : undefined,
+      values: query.values
+        ? query.values.split(',').filter(Boolean)
+        : undefined,
     });
   }
 }

@@ -18,6 +18,65 @@ export type QuestionType =
   | 'SECTION_HEADER'
   | 'REPEATING_SECTION';
 
+/** How wide a question sits in a GRID-layout form. */
+export type QuestionWidth = 'AUTO' | 'HALF' | 'FULL';
+
+/**
+ * Question types that need the full row whatever the author asked for.
+ *
+ * A matrix squeezed into half a row scrolls sideways, and a long answer box at
+ * half width invites one-line replies to a question that wanted a paragraph.
+ * These are layout facts about the control, not preferences.
+ */
+const ALWAYS_FULL_WIDTH: ReadonlySet<QuestionType> = new Set<QuestionType>([
+  'LONG_TEXT',
+  'MATRIX',
+  'FILE_UPLOAD',
+  'SIGNATURE',
+  'REPEATING_SECTION',
+  'SECTION_HEADER',
+]);
+
+/**
+ * Types `AUTO` gives the whole row to, but which an author may still squeeze
+ * into one column if they want to.
+ *
+ * An NPS is eleven buttons in a row and a slider needs its track plus both end
+ * labels; at half width on a laptop both wrap into something unreadable. They
+ * are not *impossible* at half width the way a matrix is, though — a short
+ * 0–10 scale beside a related question is a legitimate thing to want — so
+ * these belong here rather than in ALWAYS_FULL_WIDTH, where the author's
+ * choice would be overridden rather than merely defaulted.
+ */
+const WIDE_BY_DEFAULT: ReadonlySet<QuestionType> = new Set<QuestionType>(['NPS', 'SLIDER']);
+
+/**
+ * Columns a question occupies in a two-column GRID form.
+ *
+ * The single place that decision is made, so the builder's preview, the public
+ * form, and the app runner cannot disagree about it.
+ *
+ * ── Why AUTO is not just "half" ────────────────────────────────────────────
+ * It used to be: AUTO and HALF both returned 1 for every type that was not in
+ * ALWAYS_FULL_WIDTH, and for the types that *were* in it the builder hid the
+ * control altogether. So HALF could not differ from AUTO anywhere, in any
+ * form — an author picked it, nothing moved, and the setting looked broken
+ * because for all practical purposes it was. AUTO now means what it says: the
+ * question type decides, and the two types that read badly in one column take
+ * the row. HALF is the override that forces one column anyway.
+ */
+export function gridSpanOf(question: Pick<FormQuestion, 'type' | 'width'>): 1 | 2 {
+  // Not a preference — a matrix or a signature pad in one column is broken,
+  // whatever was stored against it.
+  if (ALWAYS_FULL_WIDTH.has(question.type)) return 2;
+
+  if (question.width === 'FULL') return 2;
+  if (question.width === 'HALF') return 1;
+
+  // AUTO, or absent on a form authored before the setting existed.
+  return WIDE_BY_DEFAULT.has(question.type) ? 2 : 1;
+}
+
 export interface QuestionOption {
   id: string;
   label: string;
@@ -90,6 +149,22 @@ export interface FormQuestion {
   matrixRows?: string[];
   matrixColumns?: string[];
   validation: QuestionValidation;
+  /**
+   * How wide this question sits in a GRID-layout form. Ignored by DOCUMENT and
+   * CONVERSATIONAL, which are single-column by definition.
+   *
+   * `AUTO` (the default) picks by question type — a short answer takes half a
+   * row, a long answer or a matrix takes the whole one. See `gridSpanOf`.
+   *
+   * REPLACES `colSpan`, which could not express this. `colSpan` defaulted to 2
+   * in three separate places and the builder never offered a control for it, so
+   * every question on every form carried "full width" and GRID rendered exactly
+   * like DOCUMENT. Those stored 2s are indistinguishable from a deliberate
+   * choice, and no author ever made one, so the runner ignores `colSpan`
+   * entirely rather than honouring a preference nobody expressed.
+   */
+  width?: QuestionWidth;
+  /** @deprecated Superseded by `width`. Still normalised so old forms load. */
   colSpan?: 1 | 2;
   pageNumber?: number;
   

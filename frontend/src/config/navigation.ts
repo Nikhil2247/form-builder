@@ -10,6 +10,7 @@ import {
   Activity,
   BarChart2,
   Bell,
+  BookMarked,
   BookTemplate,
   Boxes,
   Building2,
@@ -145,6 +146,10 @@ export const organizationNav: NavGroup = {
         },
       ],
     },
+    // Reference data the org's dropdowns draw from. Sits under Organization
+    // rather than Build because it is curated once and used by every form,
+    // which is how settings behave and not how the builder does.
+    { title: 'Option lists', href: '/dictionary', icon: BookMarked, permissions: ['org:manage'] },
     { title: 'Audit log', href: '/org-audit', icon: ClipboardList, permissions: ['audit:view'] },
   ],
 };
@@ -166,6 +171,12 @@ export const platformNav: NavGroup = {
       permissions: ['platform:access'],
     },
     { title: 'Users', href: '/platform/users', icon: Users, permissions: ['platform:access'] },
+    {
+      title: 'Global dictionary',
+      href: '/platform/dictionary',
+      icon: BookMarked,
+      permissions: ['platform:access'],
+    },
     {
       title: 'Roles',
       href: '/platform/roles',

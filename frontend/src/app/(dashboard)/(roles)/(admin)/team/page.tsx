@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState } from 'react';
-import { Mail, MoreHorizontal, Plus, Shield, UserCheck, UserX, Users } from 'lucide-react';
+import { Check, Mail, MoreHorizontal, Plus, Shield, UserCheck, UserX, Users } from 'lucide-react';
 import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
@@ -12,6 +12,7 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
@@ -166,28 +167,47 @@ export default function TeamPage() {
             >
               <MoreHorizontal className="size-4" />
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              {(['ADMIN', 'EDITOR', 'VIEWER'] as OrgRole[]).map((role) => (
-                <DropdownMenuItem
-                  key={role}
-                  disabled={member.role === role}
-                  onClick={() => changeRole(member, role)}
-                  className="cursor-pointer"
-                >
-                  {role === 'ADMIN' ? (
-                    <Shield className="mr-2 size-3.5" />
-                  ) : (
-                    <UserCheck className="mr-2 size-3.5" />
-                  )}
-                  Make {ORG_ROLE_LABELS[role]}
-                </DropdownMenuItem>
-              ))}
+            {/* `min-w` and `whitespace-nowrap` are doing real work here. The
+                menu primitive is `w-auto min-w-[96px]`, so it shrank to the
+                widest word rather than the widest label and broke every item
+                across two or three lines — "Remove from organization" rendered
+                as a three-line paragraph in red. */}
+            <DropdownMenuContent align="end" className="min-w-52">
+              <DropdownMenuLabel className="text-xs font-medium text-muted-foreground">
+                Change role
+              </DropdownMenuLabel>
+
+              {(['ADMIN', 'EDITOR', 'VIEWER'] as OrgRole[]).map((role) => {
+                const isCurrent = member.role === role;
+                const Icon = role === 'ADMIN' ? Shield : UserCheck;
+                return (
+                  <DropdownMenuItem
+                    key={role}
+                    // The current role stays selectable-looking but inert, and
+                    // says WHY with a tick. Disabling it greyed the row out to
+                    // look like a permission problem rather than "already set".
+                    disabled={isCurrent}
+                    onClick={() => changeRole(member, role)}
+                    className="cursor-pointer justify-between gap-3 whitespace-nowrap"
+                  >
+                    <span className="flex items-center gap-2">
+                      <Icon className="size-3.5 shrink-0" strokeWidth={1.5} />
+                      {ORG_ROLE_LABELS[role]}
+                    </span>
+                    {isCurrent && (
+                      <Check className="size-3.5 shrink-0 text-primary" strokeWidth={2} />
+                    )}
+                  </DropdownMenuItem>
+                );
+              })}
+
               <DropdownMenuSeparator />
               <DropdownMenuItem
                 onClick={() => setRemoveTarget(member)}
-                className="cursor-pointer text-destructive focus:bg-destructive/10 focus:text-destructive"
+                className="cursor-pointer gap-2 whitespace-nowrap text-destructive focus:bg-destructive/10 focus:text-destructive"
               >
-                <UserX className="mr-2 size-3.5" /> Remove from organization
+                <UserX className="size-3.5 shrink-0" strokeWidth={1.5} />
+                Remove from organization
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>

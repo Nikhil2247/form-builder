@@ -97,6 +97,16 @@ export interface BuilderState {
   savedRevision: number;
   /** `updatedAt` of the last server response, for optimistic-concurrency checks. */
   baseUpdatedAt: string | null;
+  /**
+   * The slug the server last told us this form has.
+   *
+   * Kept beside `settings.slug` so a save can tell "the author retyped the
+   * public link" apart from "we are echoing back what the server just sent".
+   * Only the first is worth writing, and re-sending the second is how autosave
+   * used to 400 forever on forms whose auto-generated slug predates the
+   * lowercase rule — the API rejected a value the API itself had issued.
+   */
+  serverSlug: string;
 
   // ── Actions ───────────────────────────────────────────────────────────────
   load: (
@@ -223,7 +233,11 @@ function createQuestion(type: QuestionType): FormQuestion {
     placeholder: '',
     required: false,
     validation: { required: false },
-    colSpan: 2,
+    // Not `colSpan: 2`. That was the default that made GRID layout a no-op:
+    // every question claimed the full row, so a two-column form rendered as one
+    // column and looked identical to DOCUMENT. AUTO lets `gridSpanOf` pair
+    // narrow fields up and give wide ones the whole row.
+    width: 'AUTO',
     pageNumber: 1,
     options: CHOICE_TYPES.includes(type)
       ? [
@@ -260,6 +274,7 @@ function emptyState() {
     hasUnpublishedChanges: false,
     isLoading: true,
     baseUpdatedAt: null,
+    serverSlug: '',
   };
 }
 
@@ -328,6 +343,7 @@ export const useBuilderStore = create<BuilderState>()((set, get) => ({
       isDirty: false,
       isLoading: false,
       baseUpdatedAt: meta?.updatedAt ?? form.updatedAt ?? null,
+      serverSlug: meta?.settings?.slug ?? form.slug ?? '',
       // Monotonic. Selectors cache against this, so it must never repeat a
       // value it has already handed out for different content.
       revision: s.revision + 1,
@@ -532,6 +548,10 @@ export const useBuilderStore = create<BuilderState>()((set, get) => ({
       ...(meta?.slug && meta.slug !== s.settings.slug
         ? { settings: { ...s.settings, slug: meta.slug } }
         : {}),
+      // Tracked unconditionally, unlike `settings.slug`: this is a bare string,
+      // so re-setting it to the same value costs nothing and never invalidates
+      // a subscriber. It is the baseline `selectSavePayload` compares against.
+      ...(meta?.slug ? { serverSlug: meta.slug } : {}),
       ...(meta?.updatedAt !== undefined ? { baseUpdatedAt: meta.updatedAt } : {}),
       // The password has reached the server; there is no reason to keep it.
       pendingPassword: null,
@@ -795,9 +815,18 @@ export function selectSavePayload(state: BuilderState): FormSavePayload {
     questions: state.order.map((id) => state.byId[id]).filter(Boolean),
     logic: state.logic,
     rules: state.rules,
-    // An empty slug means "keep whatever the server generated"; sending `''`
-    // would fail @MaxLength/@IsString or, worse, claim the empty slug.
-    ...(settings.slug ? { slug: settings.slug } : {}),
+    // Sent only when the author actually retyped it.
+    //
+    // An empty slug means "keep whatever the server generated" — sending `''`
+    // would fail @MinLength or, worse, claim the empty slug. And a slug equal to
+    // the server's is not worth a round trip either: forms created before slugs
+    // were generated from a lowercase alphabet carry uppercase and underscores,
+    // which the API's own @Matches rejects, so echoing one back 400'd every
+    // autosave on that form permanently. Their public URLs still work; they are
+    // simply never re-submitted.
+    ...(settings.slug && settings.slug !== state.serverSlug
+      ? { slug: settings.slug }
+      : {}),
     layoutMode: settings.layoutMode,
     requireAuth: settings.requireAuth,
     allowMultiple: settings.allowMultiple,

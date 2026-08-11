@@ -1,70 +1,133 @@
-'use client';
+import type { Metadata } from 'next';
+import Link from 'next/link';
+import { Eye, GitCommitHorizontal, Lock, Ruler } from 'lucide-react';
 
-import React from 'react';
-import { Layers, Users, Globe, Target } from 'lucide-react';
+import { buttonVariants } from '@/components/ui/button';
+import {
+  CallToAction,
+  CardGrid,
+  FeatureCard,
+  Marked,
+  PageHero,
+  Reveal,
+  Section,
+  SectionHeading,
+} from '@/components/marketing/primitives';
+
+export const metadata: Metadata = {
+  title: 'About',
+  description:
+    'Why Formora exists: the awkward middle ground between a form tool that is too simple and a data system that takes six months to configure.',
+};
+
+/**
+ * About.
+ *
+ * The previous version of this page told a story that had not happened — "In
+ * 2023, our founders were working at a fast-growing startup…", "we're proud to
+ * power data collection for thousands of innovative teams", "from small
+ * non-profits to Fortune 500 enterprises" — and listed values the product does
+ * not implement (multi-language support among them).
+ *
+ * An about page that invents a history is worse than one that is short. This
+ * one says what the product is for and what it commits to, and claims no
+ * customers, no funding round and no founding year, because there is nothing
+ * here to substantiate any of them.
+ */
 
 export default function AboutPage() {
   return (
-    <div className="flex flex-col relative font-sans bg-background">
-      {/* Hero */}
-      <section className="py-24 lg:py-32 bg-muted/30 border-b border-border/50">
-        <div className="container mx-auto px-4 sm:px-6 lg:px-8 text-center max-w-4xl">
-          <h1 className="text-4xl md:text-6xl font-bold tracking-tight mb-6 text-foreground">
-            We're building the future of <span className="text-primary">data collection</span>
-          </h1>
-          <p className="text-xl text-muted-foreground max-w-2xl mx-auto">
-            Formora was founded on a simple belief: collecting data shouldn't be painful for the creator, and it shouldn't be ugly for the respondent.
-          </p>
-        </div>
-      </section>
+    <>
+      <PageHero
+        eyebrow="About"
+        title={
+          <>
+            Built for the forms that <Marked>carry weight</Marked>
+          </>
+        }
+        lead="Formora exists for the awkward middle ground: work too structured for a simple form tool, but nowhere near big enough to justify a data system that takes six months and a consultant to configure."
+      />
 
-      {/* Story */}
-      <section className="py-24">
-        <div className="container mx-auto px-4 sm:px-6 lg:px-8 max-w-3xl">
-          <div className="prose prose-lg dark:prose-invert max-w-none text-muted-foreground">
-            <h2 className="text-3xl font-bold text-foreground mb-6">Our Story</h2>
-            <p>
-              In 2023, our founders were working at a fast-growing startup and found themselves constantly frustrated by the existing form building tools. They were either too simple and lacked the logical power needed for enterprise workflows, or they were incredibly powerful but looked like they were built in the 1990s.
-            </p>
-            <p>
-              We wanted a tool that respected the user experience of both the form creator and the person filling it out. A tool that could handle complex conditional branching, HIPAA-compliant data, and API webhooks—while still looking like a premium, modern software product.
-            </p>
-            <p>
-              So we built Formora. Today, we're proud to power data collection for thousands of innovative teams around the globe, from small non-profits to Fortune 500 enterprises.
-            </p>
-          </div>
-        </div>
-      </section>
+      <Section pattern>
+        <Reveal className="max-w-3xl">
+          <h2 className="font-display text-3xl font-bold tracking-tight text-foreground sm:text-4xl">
+            The gap this fills
+          </h2>
 
-      {/* Values */}
-      <section className="py-24 bg-muted/30">
-        <div className="container mx-auto px-4 sm:px-6 lg:px-8 max-w-6xl">
-          <div className="text-center mb-16">
-            <h2 className="text-3xl font-bold text-foreground">Our Core Values</h2>
+          <div className="mt-6 space-y-5 text-lg leading-relaxed text-muted-foreground">
+            <p>
+              Most data collection ends up in one of two places. Either a general-purpose form tool,
+              which handles the questions but nothing around them — no reference data, no way to
+              compute a value from two answers, no memory of which version of the form a response
+              belongs to — or a full data platform, which handles all of that and asks for a
+              six-month implementation first.
+            </p>
+            <p>
+              Between the two sits an enormous amount of real work. A monitoring visit with a
+              repeating section per school. An intake form where three questions only apply to some
+              applicants and one of them is calculated. A district list of several hundred entries
+              that four different forms need to agree on. None of that is exotic, and all of it is
+              exactly where a simple form tool runs out and a spreadsheet takes over.
+            </p>
+            <p>
+              That is what this is for. The rules engine, the managed option lists, the immutable
+              published versions and the record timeline are all answers to the same question: what
+              does a form builder need before the data coming out of it can be trusted six months
+              later?
+            </p>
           </div>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-            {[
-              { icon: Target, title: "Design Matters", desc: "A beautiful form converts better. We prioritize aesthetics as a core feature, not an afterthought." },
-              { icon: Layers, title: "Powerful simplicity", desc: "Complexity should be hidden until it's needed. The tool should scale with your needs seamlessly." },
-              { icon: Globe, title: "Accessible to all", desc: "We build for everyone. That means WCAG compliance, multi-language support, and keyboard navigation." },
-              { icon: Users, title: "Privacy first", desc: "Your data is yours. We build with security and compliance at the foundation of our architecture." }
-            ].map((val, i) => {
-              const Icon = val.icon;
-              return (
-                <div key={i} className="bg-card p-8 rounded-2xl border border-border shadow-sm flex gap-6">
-                  <div className="w-12 h-12 shrink-0 bg-primary/10 rounded-xl flex items-center justify-center text-primary">
-                    <Icon size={24} />
-                  </div>
-                  <div>
-                    <h3 className="font-bold text-xl text-foreground mb-2">{val.title}</h3>
-                    <p className="text-muted-foreground leading-relaxed">{val.desc}</p>
-                  </div>
-                </div>
-              )
-            })}
-          </div>
-        </div>
-      </section>
-    </div>
+        </Reveal>
+      </Section>
+
+      <Section tone="muted">
+        <SectionHeading
+          eyebrow="What we commit to"
+          title="Four things we hold ourselves to"
+          lead="Stated as commitments rather than values, because a commitment can be checked."
+        />
+
+        <CardGrid className="grid gap-6 sm:grid-cols-2">
+          <FeatureCard icon={Eye} title="We describe what exists">
+            Every capability on this site is built and documented. We do not list a feature as
+            shipped because it is on a roadmap, and we do not claim a certification we do not hold —
+            see <Link href="/compliance" className="font-medium text-primary hover:underline">security
+            and compliance</Link> for exactly where we stand.
+          </FeatureCard>
+
+          <FeatureCard icon={Lock} title="Your data stays yours">
+            Export it to CSV whenever you want and delete it whenever you want, in whole or one
+            response at a time. We do not sell it, mine it, or train anything on it.
+          </FeatureCard>
+
+          <FeatureCard icon={GitCommitHorizontal} title="Answers stay readable">
+            A published version is frozen and every response records the version it belongs to, so
+            editing a form next year cannot quietly change what last year's data appears to say.
+          </FeatureCard>
+
+          <FeatureCard icon={Ruler} title="The interface is not the security">
+            Permissions are enforced by the API on every request. Hiding a button is a courtesy to
+            the user, never a control — and the two are never confused here.
+          </FeatureCard>
+        </CardGrid>
+      </Section>
+
+      <Section>
+        <SectionHeading
+          eyebrow="Getting in touch"
+          title="Questions, or something not working?"
+          lead="The documentation covers most of it. For anything else there is a person at the other end."
+        />
+        <Reveal className="flex flex-wrap gap-3">
+          <Link href="/contact" className={buttonVariants({ size: 'lg' })}>
+            Contact us
+          </Link>
+          <Link href="/docs" className={buttonVariants({ variant: 'outline', size: 'lg' })}>
+            Read the documentation
+          </Link>
+        </Reveal>
+      </Section>
+
+      <CallToAction />
+    </>
   );
 }

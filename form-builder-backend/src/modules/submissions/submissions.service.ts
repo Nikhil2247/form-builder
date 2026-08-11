@@ -216,8 +216,21 @@ export class SubmissionsService {
     }
 
     // ── 9. Quotas — Redis counters, not COUNT(*) ────────────────────────────
+    //
+    // Both counters CLAIM a slot up front, so anything that fails after this
+    // point has to give it back. Without the rollback, a form sitting at its
+    // own cap burned a slot of the organization's MONTHLY allowance on every
+    // rejected attempt — the monthly counter had already been incremented and
+    // nothing put it back. A bot hammering a closed form could therefore
+    // exhaust an unrelated quota for the rest of the month, and the same leak
+    // applied to any enqueue failure.
     await this.assertWithinMonthlyQuota(policy);
-    await this.assertWithinFormCap(policy);
+    try {
+      await this.assertWithinFormCap(policy);
+    } catch (err) {
+      await this.releaseQuota(`quota:sub:${policy.organizationId}:${monthKey()}`);
+      throw err;
+    }
 
     // ── 10. Enqueue ─────────────────────────────────────────────────────────
     const submissionId = randomUUID();
@@ -236,9 +249,33 @@ export class SubmissionsService {
       submittedAt: new Date().toISOString(),
     };
 
-    await this.producer.enqueue(payload);
+    try {
+      await this.producer.enqueue(payload);
+    } catch (err) {
+      // The response never reached the queue, so it will never be stored. Both
+      // claims must be released or the quota drifts permanently upward on every
+      // Redis or BullMQ blip.
+      await this.releaseQuota(`quota:sub:${policy.organizationId}:${monthKey()}`);
+      if (policy.maxSubmissions) await this.releaseQuota(`quota:form:${policy.formId}`);
+      throw err;
+    }
 
     return { submissionId, status: 'ENQUEUED' };
+  }
+
+  /**
+   * Hand back a claimed quota slot.
+   *
+   * Never throws: a failure here means the counter reads one higher than the
+   * truth until it next expires, which is a far smaller problem than turning a
+   * rejected submission into a 500.
+   */
+  private async releaseQuota(key: string): Promise<void> {
+    try {
+      await this.redis.decr(key);
+    } catch (err) {
+      this.logger.warn(`Could not release quota slot ${key}`, err as any);
+    }
   }
 
   // ══════════════════════════════════════════════════════════════════════════
@@ -565,8 +602,7 @@ export class SubmissionsService {
    * should reseed it from the database to correct any drift.
    */
   private async assertWithinMonthlyQuota(policy: IngestPolicy) {
-    const period = new Date().toISOString().slice(0, 7); // YYYY-MM
-    const key = `quota:sub:${policy.organizationId}:${period}`;
+    const key = `quota:sub:${policy.organizationId}:${monthKey()}`;
 
     try {
       const used = await this.redis.incr(key);
@@ -834,6 +870,17 @@ export class SubmissionsService {
 
     return paginated('submissions', submissions, pagination, total);
   }
+}
+
+/**
+ * The bucket the monthly quota counter lives in, as `YYYY-MM`.
+ *
+ * One definition, because the claim and the release must agree on it. Deriving
+ * it twice would silently stop releasing at a month boundary — the rollback
+ * would decrement a fresh month's counter instead of the one it incremented.
+ */
+function monthKey(): string {
+  return new Date().toISOString().slice(0, 7);
 }
 
 function isUuid(v: string): boolean {

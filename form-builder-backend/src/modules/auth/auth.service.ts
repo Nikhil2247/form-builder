@@ -1,4 +1,5 @@
 import { Injectable, Logger, UnauthorizedException, ConflictException } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { resolveActiveOrganization } from '../../common/tenancy/active-organization';
@@ -37,6 +38,7 @@ export class AuthService {
     private totp: TotpService,
     private crypto: CryptoService,
     private featureFlags: FeatureFlagsService,
+    private config: ConfigService,
   ) {}
 
   private async hashPassword(password: string): Promise<string> {
@@ -360,13 +362,17 @@ export class AuthService {
       user.lastActiveOrganizationId,
     );
 
-    // Issue new tokens
+    // The SAME session, continued — not a new one. `tokenRecord.expiresAt` is
+    // the deadline set when this user signed in, and passing it through is what
+    // stops an exchange from extending anything: the replacement pair expires
+    // at the same instant the one it replaced would have.
     return this.generateTokens(
       user.id,
       user.email,
       user.systemRole,
       membership?.organizationId,
       membership?.role,
+      tokenRecord.expiresAt,
     );
   }
 
@@ -657,36 +663,81 @@ export class AuthService {
     return false;
   }
 
+  /**
+   * Mint the token pair for a session.
+   * ═════════════════════════════════════════════════════════════════════════
+   *
+   * ── A session has a fixed end, and nothing can move it ────────────────────
+   * `sessionExpiresAt` is the moment this session dies, decided once when the
+   * user signs in and then carried forward unchanged by every subsequent call.
+   * Omit it and a NEW session starts, ending `JWT_REFRESH_TTL_DAYS` from now;
+   * pass the existing deadline (what `refresh` does) and the session keeps the
+   * end it already had.
+   *
+   * That parameter is the whole point. This method used to compute both
+   * lifetimes from `Date.now()` on every call, including from `refresh()` — so
+   * each refresh minted a fresh full-length access token AND a fresh
+   * full-length refresh token. A client that refreshed once a day would have
+   * stayed signed in forever, and the configured one-day session would never
+   * once have expired for anybody actually using the app. That is a rolling
+   * session wearing a fixed session's clothes.
+   *
+   * The access token is additionally capped so it can never outlive the
+   * session: near the end of the day the last token issued is a short one,
+   * and the client's expiry timer fires at the real deadline rather than a
+   * day past it.
+   */
   private async generateTokens(
     userId: string,
     email: string,
     systemRole: string,
     organizationId?: string,
     orgRole?: string,
+    sessionExpiresAt?: Date,
   ) {
-    // Generate short-lived access token (15 mins)
     const payload: Record<string, any> = { sub: userId, email, systemRole };
     if (organizationId) payload.organizationId = organizationId;
     if (orgRole) payload.orgRole = orgRole;
 
-    const accessToken = this.jwtService.sign(payload, { expiresIn: '15m' });
+    const refreshTtlDays = this.config.get<number>('jwt.refreshTtlDays', 1);
+    const sessionEnd =
+      sessionExpiresAt ?? new Date(Date.now() + refreshTtlDays * 24 * 60 * 60 * 1000);
 
-    // Generate opaque refresh token (7 days)
+    const secondsLeft = Math.floor((sessionEnd.getTime() - Date.now()) / 1000);
+    if (secondsLeft <= 0) {
+      throw new UnauthorizedException('Your session has expired. Please sign in again.');
+    }
+
+    // Previously hardcoded to '15m' here regardless of JWT_ACCESS_TTL_SECONDS —
+    // the env var was validated and parsed into config.jwt.accessTtl but never
+    // actually reached the token. JwtModule's own default (also read from the
+    // same env var) only applies when `sign()` is called without an explicit
+    // `expiresIn`, so the two never conflicted; the configured value just
+    // silently never took effect.
+    const configuredAccessTtl = this.config.get<number>('jwt.accessTtl', 86_400);
+    const accessTtlSeconds = Math.min(configuredAccessTtl, secondsLeft);
+    const accessToken = this.jwtService.sign(payload, { expiresIn: accessTtlSeconds });
+
+    // Opaque refresh token, expiring with the session rather than a fresh day
+    // from now. It exists so that reloading the tab does not sign the user
+    // out — the access token is held in memory only and dies with the page —
+    // and for nothing else: it is exchanged at most once per page load and
+    // never on a timer or a 401.
     const { plainTextToken, hashedToken } = this.generateRefreshToken();
-    const expiresAt = new Date();
-    expiresAt.setDate(expiresAt.getDate() + 7);
 
     await this.prisma.writer.refreshToken.create({
       data: {
         userId,
         tokenHash: hashedToken,
-        expiresAt,
+        expiresAt: sessionEnd,
       },
     });
 
     return {
       accessToken,
       refreshToken: plainTextToken,
+      /** When the whole session ends. The controller sizes the cookie to it. */
+      sessionExpiresAt: sessionEnd,
       user: {
         id: userId,
         email,

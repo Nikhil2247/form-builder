@@ -51,9 +51,23 @@ export interface AppSummary {
   isOutsidePeriod: boolean;
   branding: { headerTitle?: string; footerText?: string; logoUrl?: string; coverImageUrl?: string };
   organization: { name: string; logoUrl: string | null };
+  /** `{ layoutMode }` and the dashboard cards. Absent on older API builds. */
+  config?: { layoutMode?: AppLayoutMode };
 }
 
+/**
+ * How the app lays out the fields of each step.
+ *
+ * Only two, unlike a form's three: CONVERSATIONAL shows one question at a time
+ * and an app already paces the respondent with its own steps, so the two would
+ * be competing for the same job.
+ */
+export type AppLayoutMode = 'DOCUMENT' | 'GRID';
+
 export function AppRunner({ publicSlug, app }: { publicSlug: string; app: AppSummary }) {
+  // Anything unrecognised falls back to the stacked layout rather than
+  // rendering nothing, matching how the public form page treats PORTAL.
+  const layoutMode: AppLayoutMode = app.config?.layoutMode === 'GRID' ? 'GRID' : 'DOCUMENT';
   const session = useAppSession(publicSlug);
   const [issues, setIssues] = React.useState<SessionIssue[]>([]);
   const [submitError, setSubmitError] = React.useState('');
@@ -176,6 +190,7 @@ export function AppRunner({ publicSlug, app }: { publicSlug: string; app: AppSum
         <StepSection
           key={step.key}
           step={step}
+          layoutMode={layoutMode}
           drafts={session.drafts}
           issuesByStep={issuesByStep}
           collapsed={collapsed}
@@ -251,6 +266,7 @@ export function AppRunner({ publicSlug, app }: { publicSlug: string; app: AppSum
 
 function StepSection({
   step,
+  layoutMode,
   drafts,
   issuesByStep,
   collapsed,
@@ -260,6 +276,7 @@ function StepSection({
   onRemove,
 }: {
   step: AppSessionStep;
+  layoutMode: AppLayoutMode;
   drafts: Record<string, Record<string, unknown>>;
   issuesByStep: Map<string, SessionIssue[]>;
   collapsed: Set<string>;
@@ -382,7 +399,11 @@ function StepSection({
                     } as unknown as FormConfig
                   }
                   formSlug={step.form.slug}
-                  layoutMode="DOCUMENT"
+                  // The app's own setting, not the step form's. A step is a
+                  // section of one continuous session, so letting each form
+                  // bring its own column count would change the layout partway
+                  // through and read as a rendering fault.
+                  layoutMode={layoutMode}
                   initialAnswers={drafts[entryKey] ?? {}}
                   // Field-level rejections land on their own question, and the
                   // whole entry stops holding its problems back — a respondent

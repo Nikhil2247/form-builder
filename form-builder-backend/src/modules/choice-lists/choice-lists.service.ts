@@ -6,6 +6,9 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 
+import { Prisma } from '@prisma/client';
+import { randomUUID } from 'node:crypto';
+
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { RedisService } from '../../common/redis/redis.service';
 import { AuditService } from '../audit/audit.service';
@@ -51,6 +54,30 @@ export const CHOICE_LIMITS = {
 } as const;
 
 const ITEMS_CACHE_TTL_SECONDS = 3600;
+
+/**
+ * Rows per SQL statement during an import.
+ *
+ * The whole import is one statement per chunk, not one per row. At 20 000 rows
+ * the previous row-at-a-time loop issued 20 000 round trips inside a single
+ * interactive transaction, which exceeded Prisma's 5 s transaction timeout long
+ * before it finished and rolled the entire upload back — so the largest imports,
+ * the ones this feature exists for, were the ones that could never succeed.
+ *
+ * 1 000 keeps each statement's parameter arrays small enough to plan quickly
+ * while cutting the round trips by three orders of magnitude.
+ */
+const IMPORT_CHUNK_SIZE = 1_000;
+
+/**
+ * Who is acting on a list.
+ *
+ * `null` is the platform itself — a super admin curating the global dictionary
+ * every tenant reads (India's states and districts ship that way). A string is
+ * one organization acting on its own lists. It is deliberately the same shape as
+ * `ChoiceList.organizationId`, so the scope and the column can never drift.
+ */
+export type ChoiceListScope = string | null;
 
 export interface ChoiceItemInput {
   value: string;
@@ -107,17 +134,38 @@ export class ChoiceListsService {
     return [...new Set(rows.map((row) => row.slug))];
   }
 
-  private assertEditable(list: { organizationId: string | null }, orgId: string) {
-    if (list.organizationId === null) {
-      throw new BadRequestException(
-        'This list is provided by the platform and cannot be edited. Create your own copy to change it.',
-      );
+  /**
+   * The list a write is allowed to touch, or a refusal explaining why not.
+   *
+   * Writes do NOT go through `resolveList`. That one falls back to the global
+   * list when the org has none of its own, which is exactly right for reading
+   * and exactly wrong for writing — an org editing "in-districts" it does not
+   * own must be told so, not silently handed the row every other tenant reads.
+   * Scoping the lookup by `organizationId` makes that impossible to get wrong:
+   * a super admin (`scope === null`) matches only global rows, an org matches
+   * only its own.
+   */
+  private async resolveForWrite(scope: ChoiceListScope, slug: string) {
+    const list = await this.prisma.reader.choiceList.findFirst({
+      where: { organizationId: scope, slug, deletedAt: null },
+    });
+    if (list) return list;
+
+    // Nothing owned. If a global list answers to this slug, say which wall the
+    // caller has hit rather than claiming the list does not exist.
+    if (scope !== null) {
+      const global = await this.prisma.reader.choiceList.findFirst({
+        where: { organizationId: null, slug, deletedAt: null },
+        select: { id: true },
+      });
+      if (global) {
+        throw new BadRequestException(
+          'This list is provided by the platform and cannot be edited here. Create your own copy to change it.',
+        );
+      }
     }
-    if (list.organizationId !== orgId) {
-      // Should be unreachable — visibilityWhere already excludes other orgs —
-      // but an ownership check on the write path is not something to infer.
-      throw new NotFoundException('List not found.');
-    }
+
+    throw new NotFoundException('List not found.');
   }
 
   // ══════════════════════════════════════════════════════════════════════════
@@ -127,7 +175,10 @@ export class ChoiceListsService {
   async listLists(orgId: string) {
     const lists = await this.prisma.reader.choiceList.findMany({
       where: this.visibilityWhere(orgId),
-      orderBy: [{ organizationId: { sort: 'desc', nulls: 'last' } }, { name: 'asc' }],
+      orderBy: [
+        { organizationId: { sort: 'desc', nulls: 'last' } },
+        { name: 'asc' },
+      ],
       select: {
         id: true,
         slug: true,
@@ -184,7 +235,13 @@ export class ChoiceListsService {
   /** Shared by the authenticated and public paths, which differ only in how they authorise. */
   async queryItems(
     list: { id: string; version: number; parentListId: string | null },
-    query: { parent?: string; q?: string; limit?: number; cursor?: string; values?: string[] },
+    query: {
+      parent?: string;
+      q?: string;
+      limit?: number;
+      cursor?: string;
+      values?: string[];
+    },
   ) {
     // ── Fetch specific items by value ──────────────────────────────────────
     // Used by the browser to resolve `lookup()` for live auto-fill: it needs
@@ -196,7 +253,13 @@ export class ChoiceListsService {
       const values = query.values.slice(0, CHOICE_LIMITS.MAX_PAGE_SIZE);
       const items = await this.prisma.reader.choiceItem.findMany({
         where: { listId: list.id, value: { in: values } },
-        select: { id: true, value: true, label: true, parentValue: true, metadata: true },
+        select: {
+          id: true,
+          value: true,
+          label: true,
+          parentValue: true,
+          metadata: true,
+        },
       });
       return { items, nextCursor: null, total: items.length };
     }
@@ -205,8 +268,10 @@ export class ChoiceListsService {
       Math.max(Number(query.limit) || CHOICE_LIMITS.DEFAULT_PAGE_SIZE, 1),
       CHOICE_LIMITS.MAX_PAGE_SIZE,
     );
-    const search = typeof query.q === 'string' ? query.q.trim().slice(0, 100) : '';
-    const parent = typeof query.parent === 'string' ? query.parent.trim().slice(0, 120) : '';
+    const search =
+      typeof query.q === 'string' ? query.q.trim().slice(0, 100) : '';
+    const parent =
+      typeof query.parent === 'string' ? query.parent.trim().slice(0, 120) : '';
 
     // A child list with no parent selected returns nothing rather than
     // everything. Showing all 784 districts before a state is chosen defeats
@@ -231,7 +296,9 @@ export class ChoiceListsService {
       listId: list.id,
       isActive: true,
       ...(list.parentListId ? { parentValue: parent } : {}),
-      ...(search ? { label: { contains: search, mode: 'insensitive' as const } } : {}),
+      ...(search
+        ? { label: { contains: search, mode: 'insensitive' as const } }
+        : {}),
     };
 
     const rows = await this.prisma.reader.choiceItem.findMany({
@@ -240,7 +307,13 @@ export class ChoiceListsService {
       // One extra row tells us whether another page exists without a COUNT.
       take: limit + 1,
       ...(query.cursor ? { cursor: { id: query.cursor }, skip: 1 } : {}),
-      select: { id: true, value: true, label: true, parentValue: true, metadata: true },
+      select: {
+        id: true,
+        value: true,
+        label: true,
+        parentValue: true,
+        metadata: true,
+      },
     });
 
     const hasMore = rows.length > limit;
@@ -277,7 +350,12 @@ export class ChoiceListsService {
   async resolveItemsForValidation(
     orgId: string,
     wanted: ReadonlyArray<{ listSlug: string; value: string }>,
-  ): Promise<Map<string, { value: string; parentValue: string | null; metadata: unknown }>> {
+  ): Promise<
+    Map<
+      string,
+      { value: string; parentValue: string | null; metadata: unknown }
+    >
+  > {
     const found = new Map<
       string,
       { value: string; parentValue: string | null; metadata: unknown }
@@ -292,7 +370,10 @@ export class ChoiceListsService {
     }
 
     const lists = await this.prisma.reader.choiceList.findMany({
-      where: { ...this.visibilityWhere(orgId), slug: { in: [...bySlug.keys()] } },
+      where: {
+        ...this.visibilityWhere(orgId),
+        slug: { in: [...bySlug.keys()] },
+      },
       orderBy: { organizationId: { sort: 'desc', nulls: 'last' } },
       select: { id: true, slug: true, organizationId: true },
     });
@@ -337,14 +418,19 @@ export class ChoiceListsService {
 
     const resolved = await this.resolveItemsForValidation(
       orgId,
-      requests.map((request) => ({ listSlug: request.list, value: request.value })),
+      requests.map((request) => ({
+        listSlug: request.list,
+        value: request.value,
+      })),
     );
 
     const metadataByKey = new Map<string, Record<string, unknown>>();
     for (const [key, item] of resolved) {
       metadataByKey.set(
         key,
-        item.metadata && typeof item.metadata === 'object' && !Array.isArray(item.metadata)
+        item.metadata &&
+          typeof item.metadata === 'object' &&
+          !Array.isArray(item.metadata)
           ? (item.metadata as Record<string, unknown>)
           : {},
       );
@@ -358,7 +444,7 @@ export class ChoiceListsService {
   // ══════════════════════════════════════════════════════════════════════════
 
   async createList(
-    orgId: string,
+    scope: ChoiceListScope,
     dto: {
       name: string;
       slug?: string;
@@ -368,36 +454,66 @@ export class ChoiceListsService {
     },
     userId?: string,
   ) {
-    const slug = normalizeSlug(dto.slug || dto.name);
-    if (!slug) throw new BadRequestException('A list needs a name.');
+    if (typeof dto?.name !== 'string' || !dto.name.trim()) {
+      throw new BadRequestException('A list needs a name.');
+    }
 
-    const count = await this.prisma.reader.choiceList.count({
-      where: { organizationId: orgId, deletedAt: null },
-    });
-    if (count >= CHOICE_LIMITS.MAX_LISTS_PER_ORG) {
+    const slug = normalizeSlug(dto.slug || dto.name);
+    // A name of only punctuation ("---") slugifies to nothing, which would
+    // otherwise be stored as an empty slug that no question could ever bind to.
+    if (slug.length < 2) {
       throw new BadRequestException(
-        `An organization may have at most ${CHOICE_LIMITS.MAX_LISTS_PER_ORG} lists.`,
+        'The list id must contain at least two letters or digits. Try naming it after what it holds, like "Districts".',
       );
     }
 
+    // Global lists are curated by the platform, not by a tenant, so the
+    // per-organization ceiling does not apply to them.
+    if (scope !== null) {
+      const count = await this.prisma.reader.choiceList.count({
+        where: { organizationId: scope, deletedAt: null },
+      });
+      if (count >= CHOICE_LIMITS.MAX_LISTS_PER_ORG) {
+        throw new BadRequestException(
+          `An organization may have at most ${CHOICE_LIMITS.MAX_LISTS_PER_ORG} lists.`,
+        );
+      }
+    }
+
     const clash = await this.prisma.reader.choiceList.findFirst({
-      where: { organizationId: orgId, slug, deletedAt: null },
+      where: { organizationId: scope, slug, deletedAt: null },
       select: { id: true },
     });
-    if (clash) throw new ConflictException(`A list with the id "${slug}" already exists.`);
+    if (clash)
+      throw new ConflictException(
+        `A list with the id "${slug}" already exists.`,
+      );
 
+    // A global list may only cascade from another global list. Pointing one at
+    // a tenant's list would expose that tenant's values to every other org
+    // through the cascade, which is a data leak dressed as a dropdown.
     let parentListId: string | null = null;
     if (dto.parentListSlug) {
-      const parent = await this.resolveList(orgId, dto.parentListSlug);
-      if (!parent) throw new BadRequestException('The parent list does not exist.');
+      const parent =
+        scope === null
+          ? await this.prisma.reader.choiceList.findFirst({
+              where: {
+                organizationId: null,
+                slug: dto.parentListSlug,
+                deletedAt: null,
+              },
+            })
+          : await this.resolveList(scope, dto.parentListSlug);
+      if (!parent)
+        throw new BadRequestException('The parent list does not exist.');
       parentListId = parent.id;
     }
 
     const list = await this.prisma.writer.choiceList.create({
       data: {
-        organizationId: orgId,
+        organizationId: scope,
         slug,
-        name: dto.name.slice(0, 120),
+        name: dto.name.trim().slice(0, 120),
         description: dto.description?.slice(0, 500) ?? null,
         parentListId,
         metadataSchema: normalizeMetadataSchema(dto.metadataSchema) as any,
@@ -405,40 +521,50 @@ export class ChoiceListsService {
     });
 
     this.audit.log({
-      organizationId: orgId,
+      organizationId: scope ?? undefined,
       userId,
-      action: 'CHOICE_LIST_CREATED',
+      action:
+        scope === null ? 'CHOICE_LIST_GLOBAL_CREATED' : 'CHOICE_LIST_CREATED',
       resource: 'ChoiceList',
       resourceId: list.id,
       metadata: { slug, name: list.name },
     });
 
-    return list;
+    return { ...list, isGlobal: list.organizationId === null };
   }
 
   async updateList(
-    orgId: string,
+    scope: ChoiceListScope,
     slug: string,
-    dto: { name?: string; description?: string; parentListSlug?: string | null; metadataSchema?: unknown },
+    dto: {
+      name?: string;
+      description?: string;
+      parentListSlug?: string | null;
+      metadataSchema?: unknown;
+    },
     userId?: string,
   ) {
-    const list = await this.resolveList(orgId, slug);
-    if (!list) throw new NotFoundException('List not found.');
-    this.assertEditable(list, orgId);
+    const list = await this.resolveForWrite(scope, slug);
 
     let parentListId: string | null | undefined;
     if (dto.parentListSlug !== undefined) {
       if (dto.parentListSlug === null) {
         parentListId = null;
       } else {
-        const parent = await this.resolveList(orgId, dto.parentListSlug);
-        if (!parent) throw new BadRequestException('The parent list does not exist.');
-        // A list that is its own ancestor makes the cascade query recurse
-        // forever the first time a respondent opens the form.
-        if (parent.id === list.id) {
-          throw new BadRequestException('A list cannot be its own parent.');
-        }
+        const parent =
+          scope === null
+            ? await this.prisma.reader.choiceList.findFirst({
+                where: {
+                  organizationId: null,
+                  slug: dto.parentListSlug,
+                  deletedAt: null,
+                },
+              })
+            : await this.resolveList(scope, dto.parentListSlug);
+        if (!parent)
+          throw new BadRequestException('The parent list does not exist.');
         parentListId = parent.id;
+        await this.assertNoCycle(list.id, parent.id);
       }
     }
 
@@ -446,7 +572,9 @@ export class ChoiceListsService {
       where: { id: list.id },
       data: {
         ...(dto.name !== undefined && { name: dto.name.slice(0, 120) }),
-        ...(dto.description !== undefined && { description: dto.description?.slice(0, 500) ?? null }),
+        ...(dto.description !== undefined && {
+          description: dto.description?.slice(0, 500) ?? null,
+        }),
         ...(parentListId !== undefined && { parentListId }),
         ...(dto.metadataSchema !== undefined && {
           metadataSchema: normalizeMetadataSchema(dto.metadataSchema) as any,
@@ -456,14 +584,44 @@ export class ChoiceListsService {
     });
 
     this.audit.log({
-      organizationId: orgId,
+      organizationId: scope ?? undefined,
       userId,
-      action: 'CHOICE_LIST_UPDATED',
+      action:
+        scope === null ? 'CHOICE_LIST_GLOBAL_UPDATED' : 'CHOICE_LIST_UPDATED',
       resource: 'ChoiceList',
       resourceId: list.id,
+      metadata: { slug },
     });
 
-    return updated;
+    return { ...updated, isGlobal: updated.organizationId === null };
+  }
+
+  /**
+   * Refuse a parent link that would make the hierarchy a ring.
+   *
+   * The previous check only rejected a list naming *itself*, which catches
+   * A → A and nothing else. A → B → A is just as fatal and was allowed: the
+   * cascade walks parents to decide what to load, so a ring made the first
+   * respondent to open the form loop until the request timed out. Walking up
+   * from the proposed parent is cheap — hierarchies here are two or three deep
+   * — and the step ceiling stops even a ring that predates this check from
+   * hanging the request that tries to repair it.
+   */
+  private async assertNoCycle(listId: string, proposedParentId: string) {
+    let cursor: string | null = proposedParentId;
+    for (let step = 0; cursor && step < 64; step++) {
+      if (cursor === listId) {
+        throw new BadRequestException(
+          'That would make the lists cascade in a circle. Pick a parent that does not already sit under this list.',
+        );
+      }
+      const row: { parentListId: string | null } | null =
+        await this.prisma.reader.choiceList.findUnique({
+          where: { id: cursor },
+          select: { parentListId: true },
+        });
+      cursor = row?.parentListId ?? null;
+    }
   }
 
   /**
@@ -475,93 +633,162 @@ export class ChoiceListsService {
    * submissions into bare codes.
    */
   async importItems(
-    orgId: string,
+    scope: ChoiceListScope,
     slug: string,
     dto: { items: ChoiceItemInput[]; mode?: 'replace' | 'merge' },
     userId?: string,
   ) {
-    const list = await this.resolveList(orgId, slug);
-    if (!list) throw new NotFoundException('List not found.');
-    this.assertEditable(list, orgId);
+    const list = await this.resolveForWrite(scope, slug);
 
-    if (!Array.isArray(dto.items)) throw new BadRequestException('`items` must be an array.');
+    if (!Array.isArray(dto.items))
+      throw new BadRequestException('`items` must be an array.');
     if (dto.items.length > CHOICE_LIMITS.MAX_IMPORT_ITEMS) {
       throw new BadRequestException(
-        `At most ${CHOICE_LIMITS.MAX_IMPORT_ITEMS} items can be imported at once; this had ${dto.items.length}. Split the file.`,
+        `At most ${CHOICE_LIMITS.MAX_IMPORT_ITEMS} rows can be imported at once; this had ${dto.items.length}. Upload the file in parts using "Add and update".`,
       );
     }
 
     const normalized = normalizeItems(dto.items, !!list.parentListId);
     if (normalized.length === 0) {
-      throw new BadRequestException('No usable items in the payload.');
+      throw new BadRequestException(
+        list.parentListId
+          ? 'No usable rows. This list cascades from another one, so every row needs a parent value naming the item it sits under.'
+          : 'No usable rows — every row was missing a value.',
+      );
     }
 
     const mode = dto.mode === 'merge' ? 'merge' : 'replace';
+    const skipped = dto.items.length - normalized.length;
 
-    await this.prisma.writer.$transaction(async (tx) => {
-      const existing = await tx.choiceItem.findMany({
-        where: { listId: list.id },
-        select: { id: true, value: true },
-      });
-      const idByValue = new Map(existing.map((item) => [item.value, item.id]));
-
-      const incoming = new Set(normalized.map((item) => item.value));
-      const toCreate = normalized.filter((item) => !idByValue.has(item.value));
-
-      if (toCreate.length > 0) {
-        await tx.choiceItem.createMany({
-          data: toCreate.map((item) => ({ listId: list.id, ...item })) as any,
-          skipDuplicates: true,
+    const result = await this.prisma.writer.$transaction(
+      async (tx) => {
+        const before = await tx.choiceItem.count({
+          where: { listId: list.id },
         });
-      }
 
-      for (const item of normalized) {
-        const id = idByValue.get(item.value);
-        if (!id) continue;
-        await tx.choiceItem.update({
-          where: { id },
-          data: { ...item, isActive: true } as any,
-        });
-      }
+        // ── Upsert, in chunks, one statement each ───────────────────────────
+        //
+        // The row-at-a-time loop this replaces issued an UPDATE per existing
+        // row: re-importing a 20 000-row district file meant 20 000 sequential
+        // round trips inside one interactive transaction, which blew the
+        // transaction timeout and rolled back the entire upload. Here each
+        // chunk is a single INSERT ... ON CONFLICT, so the same import is 20
+        // statements rather than 20 000.
+        for (
+          let offset = 0;
+          offset < normalized.length;
+          offset += IMPORT_CHUNK_SIZE
+        ) {
+          const chunk = normalized.slice(offset, offset + IMPORT_CHUNK_SIZE);
 
-      if (mode === 'replace') {
-        const stale = existing.filter((item) => !incoming.has(item.value)).map((item) => item.id);
-        if (stale.length > 0) {
-          await tx.choiceItem.updateMany({
-            where: { id: { in: stale } },
-            data: { isActive: false },
-          });
+          // `id` is generated here rather than in SQL: the Prisma schema
+          // declares `@default(uuid())`, which Prisma applies client-side, so
+          // the column carries no database-level default to fall back on.
+          const ids = chunk.map(() => randomUUID());
+          const values = chunk.map((item) => item.value);
+          const labels = chunk.map((item) => item.label);
+          const parents = chunk.map((item) => item.parentValue);
+          const metadata = chunk.map((item) => JSON.stringify(item.metadata));
+          const sortOrders = chunk.map((item) => item.sortOrder);
+
+          await tx.$executeRaw`
+            INSERT INTO "choice_items"
+              ("id", "list_id", "value", "label", "parent_value", "metadata", "sort_order", "is_active")
+            SELECT
+              t.id::uuid,
+              ${list.id}::uuid,
+              t.value,
+              t.label,
+              t.parent_value,
+              t.metadata::jsonb,
+              t.sort_order,
+              true
+            FROM unnest(
+              ${ids}::text[],
+              ${values}::text[],
+              ${labels}::text[],
+              ${parents}::text[],
+              ${metadata}::text[],
+              ${sortOrders}::int[]
+            ) AS t(id, value, label, parent_value, metadata, sort_order)
+            ON CONFLICT ("list_id", "value") DO UPDATE SET
+              "label"        = EXCLUDED."label",
+              "parent_value" = EXCLUDED."parent_value",
+              "metadata"     = EXCLUDED."metadata",
+              "sort_order"   = EXCLUDED."sort_order",
+              -- A value that comes back in a later import is offered again.
+              "is_active"    = true
+          `;
         }
-      }
 
-      const itemCount = await tx.choiceItem.count({ where: { listId: list.id, isActive: true } });
-      await tx.choiceList.update({
-        where: { id: list.id },
-        // Moving `version` is what invalidates the items cache.
-        data: { itemCount, version: { increment: 1 } },
-      });
-    });
+        // ── Retire what the file no longer contains ─────────────────────────
+        //
+        // Deactivated, never deleted: a retired option must still resolve to a
+        // label in every historical answer that references it, or those
+        // submissions render as bare codes.
+        let retired = 0;
+        if (mode === 'replace') {
+          retired = await tx.$executeRaw`
+            UPDATE "choice_items"
+               SET "is_active" = false
+             WHERE "list_id" = ${list.id}::uuid
+               AND "is_active" = true
+               AND "value" <> ALL(${normalized.map((item) => item.value)}::text[])
+          `;
+        }
+
+        const [{ count }] = await tx.$queryRaw<Array<{ count: bigint }>>`
+          SELECT count(*)::bigint AS count
+            FROM "choice_items"
+           WHERE "list_id" = ${list.id}::uuid AND "is_active" = true
+        `;
+        const itemCount = Number(count);
+
+        await tx.choiceList.update({
+          where: { id: list.id },
+          // Moving `version` is what invalidates the items cache.
+          data: { itemCount, version: { increment: 1 } },
+        });
+
+        const after = await tx.choiceItem.count({ where: { listId: list.id } });
+
+        return {
+          itemCount,
+          retired,
+          created: after - before,
+          updated: normalized.length - (after - before),
+        };
+      },
+      // The default 5 s ceiling is not enough for a 20 000-row upload even at
+      // one statement per thousand rows, and a timeout here discards the whole
+      // file after the user has waited for it to upload.
+      { timeout: 120_000, maxWait: 15_000 },
+    );
 
     this.audit.log({
-      organizationId: orgId,
+      organizationId: scope ?? undefined,
       userId,
-      action: 'CHOICE_LIST_ITEMS_IMPORTED',
+      action:
+        scope === null
+          ? 'CHOICE_LIST_GLOBAL_ITEMS_IMPORTED'
+          : 'CHOICE_LIST_ITEMS_IMPORTED',
       resource: 'ChoiceList',
       resourceId: list.id,
-      metadata: { slug, mode, count: normalized.length },
+      metadata: { slug, mode, submitted: dto.items.length, ...result, skipped },
     });
 
-    const refreshed = await this.prisma.reader.choiceList.findUniqueOrThrow({
-      where: { id: list.id },
-      select: { id: true, slug: true, itemCount: true, version: true },
-    });
-    return refreshed;
+    return {
+      id: list.id,
+      slug: list.slug,
+      mode,
+      /** Rows in the payload that had no usable value (or no parent, on a child list). */
+      skipped,
+      ...result,
+    };
   }
 
-  async deleteList(orgId: string, slug: string, userId?: string) {
-    const list = await this.resolveList(orgId, slug);
-    if (!list) throw new NotFoundException('List not found.');
-    this.assertEditable(list, orgId);
+  async deleteList(scope: ChoiceListScope, slug: string, userId?: string) {
+    const list = await this.resolveForWrite(scope, slug);
 
     // A list that other lists cascade from cannot go: deleting it would leave
     // every child unreachable and every question bound to one silently empty.
@@ -580,9 +807,10 @@ export class ChoiceListsService {
     });
 
     this.audit.log({
-      organizationId: orgId,
+      organizationId: scope ?? undefined,
       userId,
-      action: 'CHOICE_LIST_DELETED',
+      action:
+        scope === null ? 'CHOICE_LIST_GLOBAL_DELETED' : 'CHOICE_LIST_DELETED',
       resource: 'ChoiceList',
       resourceId: list.id,
       metadata: { slug },
@@ -590,9 +818,280 @@ export class ChoiceListsService {
 
     return { message: 'List deleted.' };
   }
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // DICTIONARY MANAGEMENT
+  //
+  // The authoring surface, as opposed to the respondent-facing reads above. It
+  // differs in three ways that matter: it shows retired items (an editor needs
+  // to see what was dropped by the last import), it does not require a parent
+  // on a child list (the point is to review the whole file that was uploaded),
+  // and it reports a true total so the page count is real.
+  // ══════════════════════════════════════════════════════════════════════════
+
+  /**
+   * The list a READ may see, which is a wider set than a write may touch.
+   *
+   * An org admin looking at the dictionary sees the platform's global lists
+   * alongside their own — they need to know `in-districts` exists before they
+   * decide whether to shadow it — so browsing and exporting resolve org-then-
+   * global, exactly as `resolveList` does for the builder. Writes deliberately
+   * do not: see `resolveForWrite`.
+   */
+  private async resolveForRead(scope: ChoiceListScope, slug: string) {
+    const list =
+      scope === null
+        ? await this.prisma.reader.choiceList.findFirst({
+            where: { organizationId: null, slug, deletedAt: null },
+          })
+        : await this.resolveList(scope, slug);
+
+    if (!list) throw new NotFoundException('List not found.');
+    return list;
+  }
+
+  /** Lists in one scope. `null` is the platform's global dictionary. */
+  async listListsForScope(scope: ChoiceListScope) {
+    const lists = await this.prisma.reader.choiceList.findMany({
+      where: { organizationId: scope, deletedAt: null },
+      orderBy: { name: 'asc' },
+      select: {
+        id: true,
+        slug: true,
+        name: true,
+        description: true,
+        organizationId: true,
+        parentListId: true,
+        metadataSchema: true,
+        itemCount: true,
+        version: true,
+        updatedAt: true,
+        parentList: { select: { id: true, slug: true, name: true } },
+      },
+    });
+
+    return lists.map((list) => ({
+      ...list,
+      isGlobal: list.organizationId === null,
+    }));
+  }
+
+  /**
+   * One page of a list's items for the dictionary browser.
+   *
+   * OFFSET-paginated, unlike the respondent-facing `queryItems`, because an
+   * editor needs to jump to page 40 and a cursor cannot do that. The offset is
+   * capped so the cost of the skip stays bounded — past the cap the answer is
+   * "narrow your search", which is also the more useful answer.
+   */
+  async browseItems(
+    scope: ChoiceListScope,
+    slug: string,
+    query: {
+      q?: string;
+      parent?: string;
+      page?: number;
+      limit?: number;
+      includeInactive?: boolean;
+    },
+  ) {
+    const list = await this.resolveForRead(scope, slug);
+
+    const limit = Math.min(
+      Math.max(Number(query.limit) || CHOICE_LIMITS.DEFAULT_PAGE_SIZE, 1),
+      CHOICE_LIMITS.MAX_PAGE_SIZE,
+    );
+    const page = Math.max(Number(query.page) || 1, 1);
+    const MAX_PAGE = 500;
+    if (page > MAX_PAGE) {
+      throw new BadRequestException(
+        `Only the first ${MAX_PAGE} pages can be paged through directly. Search for what you need instead.`,
+      );
+    }
+
+    const search =
+      typeof query.q === 'string' ? query.q.trim().slice(0, 100) : '';
+    const parent =
+      typeof query.parent === 'string' ? query.parent.trim().slice(0, 120) : '';
+
+    const where: Prisma.ChoiceItemWhereInput = {
+      listId: list.id,
+      ...(query.includeInactive ? {} : { isActive: true }),
+      ...(parent ? { parentValue: parent } : {}),
+      ...(search
+        ? {
+            OR: [
+              { label: { contains: search, mode: 'insensitive' } },
+              { value: { contains: search, mode: 'insensitive' } },
+            ],
+          }
+        : {}),
+    };
+
+    const [items, total] = await Promise.all([
+      this.prisma.reader.choiceItem.findMany({
+        where,
+        orderBy: [{ sortOrder: 'asc' }, { id: 'asc' }],
+        skip: (page - 1) * limit,
+        take: limit,
+        select: {
+          id: true,
+          value: true,
+          label: true,
+          parentValue: true,
+          metadata: true,
+          sortOrder: true,
+          isActive: true,
+        },
+      }),
+      this.prisma.reader.choiceItem.count({ where }),
+    ]);
+
+    return {
+      items,
+      total,
+      page,
+      limit,
+      pageCount: Math.max(1, Math.ceil(total / limit)),
+      metadataSchema: list.metadataSchema,
+      cascades: !!list.parentListId,
+    };
+  }
+
+  /**
+   * The whole list as CSV, in the same column layout the importer accepts.
+   *
+   * Round-tripping is the point: export, correct a few labels in a spreadsheet,
+   * re-import. Streaming is deliberately not attempted — a list is bounded by
+   * MAX_IMPORT_ITEMS, so the largest possible export is a few megabytes.
+   */
+  async exportCsv(scope: ChoiceListScope, slug: string): Promise<string> {
+    const list = await this.resolveForRead(scope, slug);
+    const schema = normalizeMetadataSchema(list.metadataSchema);
+    const items = await this.prisma.reader.choiceItem.findMany({
+      where: { listId: list.id },
+      orderBy: [{ sortOrder: 'asc' }, { id: 'asc' }],
+      select: {
+        value: true,
+        label: true,
+        parentValue: true,
+        metadata: true,
+        isActive: true,
+      },
+      take: CHOICE_LIMITS.MAX_IMPORT_ITEMS,
+    });
+
+    const header = [
+      'value',
+      'label',
+      ...(list.parentListId ? ['parent_value'] : []),
+      ...schema.map((column) => column.key),
+      'is_active',
+    ];
+
+    const rows = items.map((item) => {
+      const metadata = (item.metadata ?? {}) as Record<string, unknown>;
+      return [
+        item.value,
+        item.label,
+        ...(list.parentListId ? [item.parentValue ?? ''] : []),
+        ...schema.map((column) => stringifyCell(metadata[column.key])),
+        item.isActive ? 'true' : 'false',
+      ]
+        .map(csvCell)
+        .join(',');
+    });
+
+    return [header.join(','), ...rows].join('\r\n');
+  }
+
+  /**
+   * A blank starter file for this list: the right headers, and example rows.
+   *
+   * "Export" is not a substitute for this. An empty list exports a header and
+   * nothing else, which tells a first-time user what the columns are called but
+   * not what belongs in them — and the column that matters most, `parent_value`,
+   * is the one whose meaning is least obvious from its name. The examples are
+   * drawn from the PARENT list where there is one, so the sample rows a user
+   * downloads for "Nagaland — Blocks" already carry real district values they
+   * can cascade under rather than a placeholder they must go and look up.
+   */
+  async templateCsv(scope: ChoiceListScope, slug: string): Promise<string> {
+    const list = await this.resolveForRead(scope, slug);
+    const schema = normalizeMetadataSchema(list.metadataSchema);
+
+    const header = [
+      'value',
+      'label',
+      ...(list.parentListId ? ['parent_value'] : []),
+      ...schema.map((column) => column.key),
+    ];
+
+    // Real parent values beat an invented one: a row whose parent does not
+    // resolve is silently skipped at import, and a user whose sample file was
+    // skipped has no way to tell that from "the upload did nothing".
+    let parentSamples: string[] = [];
+    if (list.parentListId) {
+      const parents = await this.prisma.reader.choiceItem.findMany({
+        where: { listId: list.parentListId, isActive: true },
+        orderBy: [{ sortOrder: 'asc' }, { id: 'asc' }],
+        select: { value: true },
+        take: 2,
+      });
+      parentSamples = parents.map((parent) => parent.value);
+    }
+
+    const EXAMPLES = [
+      { value: 'example-001', label: 'First example — replace this row' },
+      { value: 'example-002', label: 'Second example — replace this row' },
+    ];
+
+    const rows = EXAMPLES.map((example, index) =>
+      [
+        example.value,
+        example.label,
+        ...(list.parentListId
+          ? [parentSamples[index] ?? parentSamples[0] ?? 'parent-value-from-the-list-above']
+          : []),
+        ...schema.map((column) => `sample ${column.label || column.key}`),
+      ]
+        .map(csvCell)
+        .join(','),
+    );
+
+    return [header.join(','), ...rows].join('\r\n');
+  }
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────────
+
+function stringifyCell(value: unknown): string {
+  if (value === null || value === undefined) return '';
+  // Metadata is JSONB, so a cell can legitimately hold a nested object even
+  // though the importer only ever writes scalars — an older row, or one written
+  // by the API directly. `String({})` would export "[object Object]" and lose it
+  // on the round trip through a spreadsheet.
+  if (typeof value === 'object') return JSON.stringify(value);
+  if (typeof value === 'string') return value;
+  if (typeof value === 'number' || typeof value === 'boolean')
+    return String(value);
+  return '';
+}
+
+/**
+ * Escape a cell for CSV, defending against CSV injection.
+ *
+ * A cell beginning with = + - @ (or tab/CR) is interpreted as a formula by
+ * Excel and Sheets. A dictionary is uploaded by one admin and downloaded by
+ * another, so a list item labelled `=cmd|'/c calc'!A1` would execute on whoever
+ * opens the export. The leading quote neutralises it and still displays the
+ * original text. Same treatment as the submission export in FormsService.
+ */
+function csvCell(value: string): string {
+  let cell = value ?? '';
+  if (/^[=+\-@\t\r]/.test(cell)) cell = `'${cell}`;
+  return `"${cell.replace(/"/g, '""')}"`;
+}
 
 function normalizeSlug(input: string): string {
   return input
@@ -603,13 +1102,18 @@ function normalizeSlug(input: string): string {
     .slice(0, 60);
 }
 
-function normalizeMetadataSchema(input: unknown): Array<{ key: string; label: string; type: string }> {
+function normalizeMetadataSchema(
+  input: unknown,
+): Array<{ key: string; label: string; type: string }> {
   if (!Array.isArray(input)) return [];
   const out: Array<{ key: string; label: string; type: string }> = [];
   for (const raw of input.slice(0, CHOICE_LIMITS.MAX_METADATA_KEYS)) {
     if (!raw || typeof raw !== 'object') continue;
     const entry = raw as Record<string, unknown>;
-    const key = typeof entry.key === 'string' ? normalizeSlug(entry.key).replace(/-/g, '_') : '';
+    const key =
+      typeof entry.key === 'string'
+        ? normalizeSlug(entry.key).replace(/-/g, '_')
+        : '';
     if (!key) continue;
     out.push({
       key,
@@ -648,7 +1152,8 @@ function normalizeItems(
 
   items.forEach((raw, index) => {
     if (!raw || typeof raw !== 'object') return;
-    const value = typeof raw.value === 'string' ? raw.value.trim().slice(0, 120) : '';
+    const value =
+      typeof raw.value === 'string' ? raw.value.trim().slice(0, 120) : '';
     if (!value) return;
     // A duplicate value would collide on the unique index and abort the whole
     // import; the first occurrence wins.
@@ -663,7 +1168,11 @@ function normalizeItems(
     if (requiresParent && !parentValue) return;
 
     const metadata: Record<string, unknown> = {};
-    if (raw.metadata && typeof raw.metadata === 'object' && !Array.isArray(raw.metadata)) {
+    if (
+      raw.metadata &&
+      typeof raw.metadata === 'object' &&
+      !Array.isArray(raw.metadata)
+    ) {
       for (const [key, entry] of Object.entries(raw.metadata).slice(
         0,
         CHOICE_LIMITS.MAX_METADATA_KEYS,
@@ -680,7 +1189,9 @@ function normalizeItems(
     out.push({
       value,
       label:
-        typeof raw.label === 'string' && raw.label.trim() ? raw.label.trim().slice(0, 300) : value,
+        typeof raw.label === 'string' && raw.label.trim()
+          ? raw.label.trim().slice(0, 300)
+          : value,
       parentValue,
       metadata,
       sortOrder: Number.isFinite(raw.sortOrder) ? Number(raw.sortOrder) : index,

@@ -39,9 +39,20 @@ async function loadForm(slug: string): Promise<LoadResult> {
 
   try {
     response = await fetch(`${API_BASE_URL_SERVER}/public-forms/${encodeURIComponent(slug)}`, {
-      // Published versions are immutable, so caching is safe. Revalidating
-      // keeps an unpublish or an expiry from being served for long.
-      next: { revalidate: 300 },
+      // NOT cached by Next, deliberately.
+      //
+      // A published version is immutable, but *which* version this slug serves
+      // is not — republishing swaps it. The API keeps its own 5-minute Redis
+      // cache of this exact payload and drops it on publish, update, slug
+      // change, delete and restore, so the load this avoids is already
+      // absorbed one layer down. Next's data cache sits in FRONT of that and
+      // is keyed by URL with no way for the API to invalidate it: with
+      // `revalidate: 300` an author could publish a change and still be served
+      // the previous version for five more minutes, with nothing they could do
+      // about it. That is exactly how field widths set in the builder appeared
+      // "not to work" — the page was rendering the version published before
+      // they were set.
+      cache: 'no-store',
       headers: { Accept: 'application/json' },
     });
   } catch {

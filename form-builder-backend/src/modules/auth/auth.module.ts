@@ -13,7 +13,11 @@ import { MailModule } from '../mail/mail.module';
     JwtModule.registerAsync({
       useFactory: () => ({
         secret: process.env.JWT_SECRET,
-        signOptions: { expiresIn: parseInt(process.env.JWT_ACCESS_TTL_SECONDS ?? '900', 10) },
+        // AuthService.generateTokens always passes its own `expiresIn`
+        // (sourced from the same env var via ConfigService), so this default
+        // only matters for other `jwtService.sign()` callers — currently just
+        // the short-lived MFA challenge token, which sets its own 5m anyway.
+        signOptions: { expiresIn: parseInt(process.env.JWT_ACCESS_TTL_SECONDS ?? '86400', 10) },
       }),
     }),
     MailModule,

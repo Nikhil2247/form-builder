@@ -29,9 +29,11 @@ async function loadApp(slug: string): Promise<LoadResult> {
   let response: Response;
   try {
     response = await fetch(`${API_BASE_URL_SERVER}/public-apps/${encodeURIComponent(slug)}`, {
-      // The app's shape changes rarely; the session is fetched separately and
-      // never cached.
-      next: { revalidate: 60 },
+      // Not cached by Next — same reasoning as /f/[id]: the API owns a Redis
+      // cache of this payload that it invalidates when the app changes, and a
+      // Next-side cache in front of it would keep serving an edited app's old
+      // shape with no way to clear it.
+      cache: 'no-store',
       headers: { Accept: 'application/json' },
     });
   } catch {

@@ -25,7 +25,8 @@ import { Badge } from '@/components/ui/badge';
 import { Switch } from '@/components/ui/switch';
 import { Label } from '@/components/ui/label';
 import { useBuilderStore, useFormSnapshot, useQuestion } from '@/store/builder-store';
-import type { FormQuestion, QuestionOption } from '@/types/form';
+import { gridSpanOf } from '@/types/form';
+import type { FormQuestion, QuestionOption, QuestionWidth } from '@/types/form';
 import { OptionsSourcePicker } from './OptionsSourcePicker';
 
 /**
@@ -72,6 +73,8 @@ function EnterpriseFieldCardImpl({ id, index }: EnterpriseFieldCardProps) {
   const logicRuleCount = useBuilderStore(
     (s) => s.logic.filter((r) => r.triggerQuestionId === id || r.targetQuestionId === id).length,
   );
+
+  const isGridLayout = useBuilderStore((s) => s.settings.layoutMode === 'GRID');
 
   const patchQuestion = useBuilderStore((s) => s.patchQuestion);
   const deleteQuestion = useBuilderStore((s) => s.deleteQuestion);
@@ -161,6 +164,9 @@ function EnterpriseFieldCardImpl({ id, index }: EnterpriseFieldCardProps) {
 
   const isChoice = (CHOICE_TYPES as readonly string[]).includes(question.type);
   const required = question.validation?.required ?? false;
+  // A matrix or a long answer takes the whole row whatever the author picks, so
+  // offering the toggle would be offering a control that does nothing.
+  const isAlwaysFullWidth = gridSpanOf({ type: question.type, width: 'HALF' }) === 2;
 
   return (
     <div ref={setNodeRef} style={style} data-question-id={id} className="group/field">
@@ -236,6 +242,17 @@ function EnterpriseFieldCardImpl({ id, index }: EnterpriseFieldCardProps) {
                 <Key className="size-3" />
                 <span className="tabular">{question.points || 0} pts</span>
               </Button>
+            )}
+
+            {/* Width matters only in a GRID form, so the control appears only
+                there. Showing it on a DOCUMENT form would offer a setting that
+                changes nothing the author can see. */}
+            {isGridLayout && !isAlwaysFullWidth && (
+              <WidthToggle
+                value={question.width ?? 'AUTO'}
+                onChange={(width) => patch({ width })}
+                questionId={id}
+              />
             )}
 
             <div className="flex items-center gap-2">
@@ -630,3 +647,56 @@ function QuestionPreview({
  */
 export const EnterpriseFieldCard = memo(EnterpriseFieldCardImpl);
 EnterpriseFieldCard.displayName = 'EnterpriseFieldCard';
+
+/**
+ * How wide this question sits in a two-column form.
+ *
+ * Three states rather than a half/full switch, because "Auto" is a real and
+ * usually correct answer — it means "pair up unless the control needs room",
+ * which is what an author wants for almost every field. A binary toggle would
+ * force a decision on all of them.
+ */
+function WidthToggle({
+  value,
+  onChange,
+  questionId,
+}: {
+  value: QuestionWidth;
+  onChange: (width: QuestionWidth) => void;
+  questionId: string;
+}) {
+  const OPTIONS: Array<{ value: QuestionWidth; label: string; title: string }> = [
+    { value: 'AUTO', label: 'Auto', title: 'Pair up with the next field unless this control needs the full row' },
+    { value: 'HALF', label: 'Half', title: 'Always take half the row' },
+    { value: 'FULL', label: 'Full', title: 'Always take the whole row' },
+  ];
+
+  return (
+    <div
+      role="radiogroup"
+      aria-label="Field width"
+      className="flex items-center overflow-hidden rounded-md border border-border"
+      onClick={(e) => e.stopPropagation()}
+    >
+      {OPTIONS.map((option) => (
+        <button
+          key={option.value}
+          type="button"
+          role="radio"
+          aria-checked={value === option.value}
+          title={option.title}
+          id={`width-${option.value}-${questionId}`}
+          onClick={() => onChange(option.value)}
+          className={cn(
+            'px-2 py-1 text-[11px] font-medium transition-colors',
+            value === option.value
+              ? 'bg-primary/10 text-foreground'
+              : 'text-muted-foreground hover:bg-muted hover:text-foreground',
+          )}
+        >
+          {option.label}
+        </button>
+      ))}
+    </div>
+  );
+}

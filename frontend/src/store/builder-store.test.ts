@@ -171,15 +171,35 @@ describe('selectSavePayload', () => {
       },
     });
 
+    useBuilderStore.getState().patchSettings({ slug: 'my-renamed-form' });
+
     const payload = selectSavePayload(useBuilderStore.getState());
 
-    expect(payload.slug).toBe('my-form');
+    expect(payload.slug).toBe('my-renamed-form');
     expect(payload.layoutMode).toBe('CONVERSATIONAL');
     expect(payload.requireAuth).toBe(true);
     expect(payload.allowMultiple).toBe(false);
     expect(payload.maxSubmissions).toBe(50);
     expect(payload.expiresAt).toBe('2026-12-01T00:00:00.000Z');
     expect(payload.notifyEmails).toEqual(['a@b.com']);
+  });
+
+  it('omits a slug the server issued, so a legacy slug cannot 400 its own autosave', () => {
+    // Forms created before slugs were generated from a lowercase alphabet carry
+    // uppercase and underscores, which the API's own `@Matches` rejects. Echoing
+    // one back made every autosave on that form fail permanently.
+    useBuilderStore.getState().load(sample(1), {
+      settings: { slug: 'V1StGXR8_Z' },
+    });
+
+    expect(selectSavePayload(useBuilderStore.getState())).not.toHaveProperty('slug');
+
+    // A save that echoes the same slug back must not re-arm it either.
+    useBuilderStore.getState().markSaved(useBuilderStore.getState().revision, {
+      slug: 'V1StGXR8_Z',
+    });
+
+    expect(selectSavePayload(useBuilderStore.getState())).not.toHaveProperty('slug');
   });
 
   it('sends null rather than omitting a cleared cap, so clearing it takes effect', () => {

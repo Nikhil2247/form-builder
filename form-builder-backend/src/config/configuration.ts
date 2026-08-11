@@ -8,8 +8,8 @@ export const validationSchema = Joi.object({
   DATABASE_REPLICA_URL: Joi.string().optional(),
   REDIS_URL: Joi.string().default('redis://localhost:6379'),
   JWT_SECRET: Joi.string().min(32).required(),
-  JWT_ACCESS_TTL_SECONDS: Joi.number().default(900),
-  JWT_REFRESH_TTL_DAYS: Joi.number().default(7),
+  JWT_ACCESS_TTL_SECONDS: Joi.number().default(86_400),
+  JWT_REFRESH_TTL_DAYS: Joi.number().default(1),
   STORAGE_PROVIDER: Joi.string().valid('minio', 's3').default('minio'),
   MINIO_ENDPOINT: Joi.string().default('localhost'),
   MINIO_PORT: Joi.number().default(9000),
@@ -44,8 +44,8 @@ export default () => ({
   redis: { url: getRedisUrl() },
   jwt: {
     secret: process.env.JWT_SECRET!,
-    accessTtl: parseInt(process.env.JWT_ACCESS_TTL_SECONDS ?? '900', 10),
-    refreshTtlDays: parseInt(process.env.JWT_REFRESH_TTL_DAYS ?? '7', 10),
+    accessTtl: parseInt(process.env.JWT_ACCESS_TTL_SECONDS ?? '86400', 10),
+    refreshTtlDays: parseInt(process.env.JWT_REFRESH_TTL_DAYS ?? '1', 10),
   },
   smtp: {
     host: process.env.SMTP_HOST,

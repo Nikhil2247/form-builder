@@ -23,6 +23,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { ThemeCustomizer } from '@/components/builder/ThemeCustomizer';
 import { PanelBlock, PanelRow, PanelSection } from '@/components/builder/panel-primitives';
 import { EmptyState } from '@/components/shared';
+import { cn } from '@/lib/utils';
+import type { AppLayoutMode } from '@/components/apps/AppRunner';
 import type { FormConfig, FormTheme } from '@/types/form';
 import {
   useCreateAppPeriod,
@@ -116,6 +118,7 @@ export function AppSettingsPanel({
       </TabsList>
 
       <TabsContent value="design" className="space-y-4">
+        <LayoutSection app={app} onPatch={patch} />
         <BrandingSection app={app} onPatch={patch} />
         <AppThemeEditor app={app} onPatch={patch} />
       </TabsContent>
@@ -241,6 +244,89 @@ function BrandingSection({
           />
         </div>
       </PanelBlock>
+    </PanelSection>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * How each step's fields are arranged.
+ *
+ * App-wide rather than per-step: a session is one continuous act, and changing
+ * column count between step two and step three reads as a rendering fault.
+ *
+ * Both modes are a single column below the `md` breakpoint, so this is a
+ * desktop-only distinction and a phone is unaffected by the choice.
+ */
+function LayoutSection({
+  app,
+  onPatch,
+}: {
+  app: FormAppDetail;
+  onPatch: (dto: AppSettingsDto) => void | Promise<void>;
+}) {
+  const current: AppLayoutMode = app.config?.layoutMode === 'GRID' ? 'GRID' : 'DOCUMENT';
+
+  const OPTIONS: Array<{ value: AppLayoutMode; label: string; hint: string }> = [
+    {
+      value: 'DOCUMENT',
+      label: 'Stacked',
+      hint: 'One field per row. Best for long questionnaires and for filling on a phone.',
+    },
+    {
+      value: 'GRID',
+      label: 'Two column',
+      hint: 'Narrow fields pair up on wide screens. Best for desk-based data entry.',
+    },
+  ];
+
+  return (
+    <PanelSection
+      title="Layout"
+      description="How the fields of every step are arranged on screen."
+    >
+      <div className="grid grid-cols-2 gap-2">
+        {OPTIONS.map((option) => {
+          const isActive = current === option.value;
+          return (
+            <button
+              key={option.value}
+              type="button"
+              aria-pressed={isActive}
+              onClick={() => onPatch({ layoutMode: option.value })}
+              className={cn(
+                'flex flex-col gap-1.5 rounded-lg border p-2.5 text-left transition-colors',
+                isActive
+                  ? 'border-primary bg-primary/5'
+                  : 'border-border hover:border-border-strong hover:bg-muted/50',
+              )}
+            >
+              {/* A tiny diagram beats the words: "two column" is only
+                  meaningful once you can see what it does to the fields. */}
+              <span aria-hidden className="flex gap-1">
+                {option.value === 'DOCUMENT' ? (
+                  <span className="flex w-full flex-col gap-1">
+                    <span className="h-1.5 w-full rounded-sm bg-muted-foreground/30" />
+                    <span className="h-1.5 w-full rounded-sm bg-muted-foreground/30" />
+                    <span className="h-1.5 w-full rounded-sm bg-muted-foreground/30" />
+                  </span>
+                ) : (
+                  <span className="grid w-full grid-cols-2 gap-1">
+                    <span className="h-1.5 rounded-sm bg-muted-foreground/30" />
+                    <span className="h-1.5 rounded-sm bg-muted-foreground/30" />
+                    <span className="h-1.5 rounded-sm bg-muted-foreground/30" />
+                    <span className="h-1.5 rounded-sm bg-muted-foreground/30" />
+                    <span className="col-span-2 h-1.5 rounded-sm bg-muted-foreground/30" />
+                  </span>
+                )}
+              </span>
+              <span className="text-xs font-medium text-foreground">{option.label}</span>
+              <span className="text-[11px] leading-snug text-muted-foreground">{option.hint}</span>
+            </button>
+          );
+        })}
+      </div>
     </PanelSection>
   );
 }

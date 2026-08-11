@@ -1,4 +1,16 @@
-import { Controller, Post, Get, Body, Res, Req, HttpCode, HttpStatus, UseGuards } from '@nestjs/common';
+import {
+  Controller,
+  Post,
+  Get,
+  Body,
+  Res,
+  Req,
+  HttpCode,
+  HttpStatus,
+  UnauthorizedException,
+  UseGuards,
+} from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { Throttle } from '@nestjs/throttler';
 import { AuthService } from './auth.service';
 import { DisableMfaDto } from './dto/disable-mfa.dto';
@@ -14,21 +26,34 @@ const COOKIE_NAME = 'refresh_token';
 
 @Controller('auth')
 export class AuthController {
-  constructor(private readonly authService: AuthService) {}
+  constructor(
+    private readonly authService: AuthService,
+    private readonly config: ConfigService,
+  ) {}
 
-  private setRefreshTokenCookie(res: Response, token: string) {
+  /**
+   * Size the cookie to the session's real end, not to a fresh full term.
+   *
+   * `expiresAt` is the deadline the service decided when the user signed in and
+   * has carried through every exchange since. Deriving the cookie's lifetime
+   * from JWT_REFRESH_TTL_DAYS instead — which is what this did — handed the
+   * browser a full extra day on every refresh, so the cookie outlived the
+   * token record inside it and `middleware.ts` went on believing there was a
+   * session long after the API would honour one.
+   */
+  private setRefreshTokenCookie(res: Response, token: string, expiresAt: Date) {
     res.cookie(COOKIE_NAME, token, {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
       sameSite: 'strict',
-      maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
+      expires: expiresAt,
     });
   }
 
   @Post('register')
   async register(@Body() dto: RegisterDto, @Res({ passthrough: true }) res: Response) {
     const result = await this.authService.register(dto);
-    this.setRefreshTokenCookie(res, result.refreshToken);
+    this.setRefreshTokenCookie(res, result.refreshToken, result.sessionExpiresAt);
     return { accessToken: result.accessToken, user: result.user };
   }
 
@@ -46,7 +71,7 @@ export class AuthController {
       return result;
     }
 
-    this.setRefreshTokenCookie(res, result.refreshToken);
+    this.setRefreshTokenCookie(res, result.refreshToken, result.sessionExpiresAt);
     return { accessToken: result.accessToken, user: result.user };
   }
 
@@ -58,7 +83,7 @@ export class AuthController {
   @HttpCode(HttpStatus.OK)
   async loginMfa(@Body() dto: VerifyMfaLoginDto, @Res({ passthrough: true }) res: Response) {
     const result = await this.authService.verifyMfaLogin(dto.mfaToken, dto.code);
-    this.setRefreshTokenCookie(res, result.refreshToken);
+    this.setRefreshTokenCookie(res, result.refreshToken, result.sessionExpiresAt);
     return { accessToken: result.accessToken, user: result.user };
   }
 
@@ -67,12 +92,30 @@ export class AuthController {
   async refresh(@Req() req: Request, @Res({ passthrough: true }) res: Response) {
     const oldRefreshToken = req.cookies?.[COOKIE_NAME];
     if (!oldRefreshToken) {
-      res.status(HttpStatus.UNAUTHORIZED).send({ message: 'No refresh token provided' });
-      return;
+      // `passthrough: true` means Nest still owns the response after this
+      // handler returns — it serialises whatever comes back (or, for a thrown
+      // exception, hands it to the exception filter) and sends it exactly
+      // once. Writing to `res` directly here as well as returning made Nest
+      // try to send a second response on top of the first and crash with
+      // ERR_HTTP_HEADERS_SENT. Throwing keeps this on the one path that
+      // handler is actually written for.
+      throw new UnauthorizedException('No refresh token provided');
     }
 
-    const result = await this.authService.refresh(oldRefreshToken);
-    this.setRefreshTokenCookie(res, result.refreshToken);
+    let result: Awaited<ReturnType<AuthService['refresh']>>;
+    try {
+      result = await this.authService.refresh(oldRefreshToken);
+    } catch (err) {
+      // The cookie is spent — revoked, expired, or from a session that has run
+      // its full day. Clearing it here matters because `middleware.ts` reads
+      // the cookie's PRESENCE as "this browser has a session": leaving a dead
+      // one in place sent signed-out visitors from /login to /dashboard, which
+      // then sent them back to /login, forever.
+      res.clearCookie(COOKIE_NAME);
+      throw err;
+    }
+
+    this.setRefreshTokenCookie(res, result.refreshToken, result.sessionExpiresAt);
     return { accessToken: result.accessToken, user: result.user };
   }
 

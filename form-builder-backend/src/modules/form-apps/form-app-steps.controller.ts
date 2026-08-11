@@ -11,7 +11,7 @@ import {
 } from '@nestjs/common';
 import type { Request } from 'express';
 
-import { FormAppsService } from './form-apps.service';
+import { FormAppsService, type AppLayoutMode } from './form-apps.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { OrgMemberGuard } from '../../common/guards/org-member.guard';
 import { RoleGuard } from '../../common/guards/role.guard';
@@ -153,6 +153,7 @@ export class FormAppStepsController {
       requireAuth?: boolean;
       allowDrafts?: boolean;
       isPublished?: boolean;
+      layoutMode?: AppLayoutMode;
     },
     @Req() req: Request,
   ) {

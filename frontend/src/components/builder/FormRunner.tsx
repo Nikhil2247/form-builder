@@ -18,6 +18,7 @@ import { Label } from '@/components/ui/label';
 import { useFormRules } from '@/hooks/use-form-rules';
 import { applyDefaultValues, checkAnswer, isBlank } from '@/lib/answer-checks';
 import { cn, generateId } from '@/lib/utils';
+import { gridSpanOf } from '@/types/form';
 import type { FormConfig, FormQuestion, FormSubmission } from '@/types/form';
 
 import { FormRunnerField } from './FormRunnerField';
@@ -826,7 +827,7 @@ export function FormRunner({
                 error={problems.get(q.id)}
                 violations={rules.violationsByQuestionId.get(q.id)}
                 showProblems={showProblemsFor(q.id)}
-                className={cn(isGrid && (q.colSpan ?? 2) === 2 && 'md:col-span-2')}
+                className={cn(isGrid && gridSpanOf(q) === 2 && 'md:col-span-2')}
               />
             );
 

@@ -42,10 +42,34 @@ export interface DashboardCard {
   };
 }
 
+/**
+ * How an app's step forms are laid out.
+ *
+ * `DOCUMENT` stacks fields one per row, which is right for a long questionnaire
+ * filled on a phone. `GRID` pairs narrow fields up on wide screens, which is
+ * what a data-entry operator working through a hundred records on a desktop
+ * wants — the same distinction `Form.layoutMode` draws, applied to every step of
+ * the app at once rather than form by form.
+ *
+ * Deliberately app-wide: a session that changed column count between step two
+ * and step three would read as a rendering fault, not a design.
+ */
+export const APP_LAYOUT_MODES = ['DOCUMENT', 'GRID'] as const;
+export type AppLayoutMode = (typeof APP_LAYOUT_MODES)[number];
+
+/** Read the layout out of a stored `config` blob, defaulting safely. */
+export function appLayoutModeOf(config: unknown): AppLayoutMode {
+  const mode = (config as FormAppConfig | null)?.layoutMode;
+  return (APP_LAYOUT_MODES as readonly string[]).includes(mode ?? '')
+    ? (mode as AppLayoutMode)
+    : 'DOCUMENT';
+}
+
 export interface FormAppConfig {
   /** Forms available in the app, in display order. */
   formIds?: string[];
   dashboardCards?: DashboardCard[];
+  layoutMode?: AppLayoutMode;
 }
 
 @Injectable()
@@ -529,10 +553,12 @@ export class FormAppsService {
       requireAuth?: boolean;
       allowDrafts?: boolean;
       isPublished?: boolean;
+      /** Presentation only. Dashboard cards are edited through `updateApp`. */
+      layoutMode?: AppLayoutMode;
     },
     userId?: string,
   ) {
-    await this.assertApp(orgId, appId);
+    const app = await this.assertApp(orgId, appId);
 
     let publicSlug: string | null | undefined;
     if (dto.publicSlug !== undefined) {
@@ -552,6 +578,15 @@ export class FormAppsService {
           ...(dto.requireAuth !== undefined && { requireAuth: !!dto.requireAuth }),
           ...(dto.allowDrafts !== undefined && { allowDrafts: !!dto.allowDrafts }),
           ...(dto.isPublished !== undefined && { isPublished: !!dto.isPublished }),
+          // Merged into the existing config rather than replacing it: the
+          // dashboard cards live in the same column and are edited elsewhere,
+          // so writing `{ layoutMode }` wholesale would delete them.
+          ...(dto.layoutMode !== undefined && {
+            config: {
+              ...((app.config ?? {}) as Record<string, unknown>),
+              layoutMode: appLayoutModeOf({ layoutMode: dto.layoutMode }),
+            } as any,
+          }),
         },
       });
 
@@ -610,6 +645,9 @@ export class FormAppsService {
       icon: app.icon,
       theme: app.themeConfig ?? {},
       branding: app.branding ?? {},
+      // Only the presentational part of `config`. The dashboard cards describe
+      // internal reporting and have no business on a public page.
+      config: { layoutMode: appLayoutModeOf(app.config) },
       requireAuth: app.requireAuth,
       allowDrafts: app.allowDrafts,
       subjectType: app.subjectType,
@@ -811,7 +849,14 @@ export class FormAppsService {
       });
     }
 
-    return { dashboardCards };
+    // Allow-listed, like the cards: `validateConfig` returns a freshly built
+    // object rather than a spread of the input, so anything not named here is
+    // dropped instead of being stored unchecked.
+    const layoutMode = (APP_LAYOUT_MODES as readonly string[]).includes(config.layoutMode ?? '')
+      ? (config.layoutMode as AppLayoutMode)
+      : 'DOCUMENT';
+
+    return { dashboardCards, layoutMode };
   }
 
   private async assertApp(orgId: string, appId: string) {

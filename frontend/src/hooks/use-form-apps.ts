@@ -3,6 +3,7 @@ import { fetchApi, unwrap } from '@/lib/api';
 import { useOrgId } from './use-auth';
 import type { SubjectType, SubjectTypeRef } from './use-subjects';
 import type { FormTheme } from '@/types/form';
+import type { AppLayoutMode } from '@/components/apps/AppRunner';
 
 /**
  * Form Apps — a data-entry surface over one subject type.
@@ -41,6 +42,8 @@ export interface DashboardCardConfig {
 
 export interface FormAppConfig {
   dashboardCards: DashboardCardConfig[];
+  /** How each step's fields are arranged. See AppRunner. */
+  layoutMode?: AppLayoutMode;
 }
 
 /** How a form relates to the record it is filled against. */
@@ -405,6 +408,8 @@ export interface AppSettingsDto {
   requireAuth?: boolean;
   allowDrafts?: boolean;
   isPublished?: boolean;
+  /** How each step's fields are laid out. See AppRunner. */
+  layoutMode?: AppLayoutMode;
 }
 
 export function useUpdateAppSettings() {

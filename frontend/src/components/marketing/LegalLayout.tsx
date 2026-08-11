@@ -1,6 +1,8 @@
 import React from 'react';
 import Link from 'next/link';
 
+import { GridPattern } from '@/components/marketing/primitives';
+
 interface LegalLayoutProps {
   children: React.ReactNode;
   title: string;
@@ -9,17 +11,20 @@ interface LegalLayoutProps {
 
 export function LegalLayout({ children, title, lastUpdated }: LegalLayoutProps) {
   const links = [
-    { name: 'Terms & Conditions', href: '/terms' },
+    { name: 'Terms and Conditions', href: '/terms' },
     { name: 'Privacy Policy', href: '/privacy' },
-    { name: 'Security & Compliance', href: '/compliance' }
+    { name: 'Security', href: '/compliance' },
   ];
 
   return (
-    <div className="flex flex-col relative font-sans bg-background min-h-screen pb-24">
-      {/* Header */}
-      <section className="pt-24 pb-16 bg-muted/30 border-b border-border/50">
-        <div className="container mx-auto px-4 sm:px-6 lg:px-8 max-w-6xl">
-          <h1 className="text-4xl md:text-5xl font-bold tracking-tight mb-4 text-foreground">
+    <div className="relative flex min-h-screen flex-col bg-background pb-24 font-sans">
+      {/* Header. Carries the same grid texture as the rest of the public site
+          so a legal page reads as part of it rather than as a plain document
+          someone forgot to style. */}
+      <section className="relative isolate overflow-hidden border-b border-border/60 bg-muted/40 pb-16 pt-24">
+        <GridPattern fade="top" />
+        <div className="container relative mx-auto max-w-6xl px-4 sm:px-6 lg:px-8">
+          <h1 className="font-display mb-4 text-4xl font-bold tracking-tight text-foreground md:text-5xl">
             {title}
           </h1>
           <p className="text-muted-foreground">Last updated: {lastUpdated}</p>

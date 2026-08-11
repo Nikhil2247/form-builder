@@ -11,7 +11,7 @@ import { PrismaService } from '../../common/prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { CreateFormDto } from './dto/create-form.dto';
 import { UpdateFormDto } from './dto/update-form.dto';
-import { nanoid } from 'nanoid';
+import { customAlphabet } from 'nanoid';
 import * as argon2 from 'argon2';
 
 import { RedisService } from '../../common/redis/redis.service';
@@ -33,6 +33,22 @@ import {
   normalizeNotifyEmails,
   normalizeTheme,
 } from './form-structure';
+
+/**
+ * Generate a public form slug.
+ *
+ * NOT plain `nanoid()`. Its default alphabet is `A-Za-z0-9_-`, which produces
+ * slugs like `V1StGXR8_Z`, and `CreateFormDto.slug` only accepts lowercase
+ * letters, digits and hyphens. The builder loads a form, holds the server's
+ * slug in `settings`, and echoes it back on every autosave — so a form created
+ * with a default-alphabet slug 400'd on the *next save after creation* and kept
+ * doing so forever, showing the author "slug must be lowercase..." against a
+ * slug they never typed.
+ *
+ * 36^10 ≈ 3.6e15 keeps collision probability negligible, and P2002 on the
+ * unique index is handled at the call sites that can hit it.
+ */
+const publicSlug = customAlphabet('0123456789abcdefghijklmnopqrstuvwxyz', 10);
 
 /**
  * Escape a value for CSV, defending against CSV injection.
@@ -107,7 +123,7 @@ export class FormsService {
       throw new ForbiddenException('Organization form limit reached. Contact your admin.');
     }
 
-    const slug = dto.slug || nanoid(10);
+    const slug = dto.slug || publicSlug();
 
     let passwordHash = null;
     if (dto.isPasswordProtected && dto.password) {
@@ -193,7 +209,7 @@ export class FormsService {
       data: {
         organizationId: orgId,
         createdById,
-        slug: nanoid(10),
+        slug: publicSlug(),
         title: template.name,
         description: template.description,
         pagesJson: formData.pages || [],
@@ -269,7 +285,7 @@ Respond ONLY with a valid JSON object matching this structure:
         data: {
           organizationId: orgId,
           createdById,
-          slug: (await import('nanoid')).nanoid(10),
+          slug: publicSlug(),
           title: formData.title || 'AI Generated Form',
           description: formData.description || '',
           questionsJson: formData.questions || [],
@@ -961,7 +977,7 @@ Respond ONLY with a valid JSON object matching this structure:
       data: {
         organizationId: orgId,
         createdById,
-        slug: nanoid(10),
+        slug: publicSlug(),
         title: `${original.title} (Copy)`,
         description: original.description,
         isQuizMode: original.isQuizMode,

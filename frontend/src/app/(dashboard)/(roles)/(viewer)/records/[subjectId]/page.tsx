@@ -1,9 +1,8 @@
 'use client';
 
 import React, { useState } from 'react';
-import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
-import { Boxes, Contact, FileBox, Hash, Inbox, Trash2 } from 'lucide-react';
+import { Boxes, ChevronRight, Contact, FileBox, Hash, Inbox, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
@@ -24,8 +23,11 @@ import {
 import { Can } from '@/components/auth/RoleGuard';
 import { AttributeList } from '@/components/apps/AttributeList';
 import { DataAppsDisabled } from '@/components/apps/DataAppsGate';
+import { SubmissionDetailsDialog } from '@/components/submissions/SubmissionDetailsDialog';
 import { FEATURES, useFeature } from '@/hooks/use-features';
+import { useForm } from '@/hooks/use-forms';
 import { usePagination } from '@/hooks/use-pagination';
+import type { Submission } from '@/hooks/use-submissions';
 import {
   useDeleteSubject,
   useSubject,
@@ -50,6 +52,16 @@ export default function RecordDetailPage() {
   const appsEnabled = useFeature(FEATURES.FORM_APPS);
   const pager = usePagination();
   const [confirmDelete, setConfirmDelete] = useState(false);
+  /**
+   * Which timeline entry is open, by INDEX rather than id.
+   *
+   * The index is what makes stepping through entries possible without closing
+   * the dialog — which is the whole point of opening them here. Clicking an
+   * entry used to navigate to `/forms/{id}`, the form's full response list for
+   * every respondent, where finding the one response you had just clicked meant
+   * searching a table for it.
+   */
+  const [openEntryIndex, setOpenEntryIndex] = useState<number | null>(null);
 
   const subject = useSubject(subjectId, { enabled: appsEnabled });
   const timeline = useSubjectTimeline(
@@ -199,8 +211,12 @@ export default function RecordDetailPage() {
         ) : (
           <div className="space-y-3">
             <ol className="relative space-y-3 border-l border-border pl-6">
-              {entries.map((entry) => (
-                <TimelineRow key={entry.id} entry={entry} />
+              {entries.map((entry, index) => (
+                <TimelineRow
+                  key={entry.id}
+                  entry={entry}
+                  onOpen={() => setOpenEntryIndex(index)}
+                />
               ))}
             </ol>
 
@@ -214,6 +230,12 @@ export default function RecordDetailPage() {
           </div>
         )}
       </section>
+
+      <EntryDialog
+        entries={entries}
+        index={openEntryIndex}
+        onIndexChange={setOpenEntryIndex}
+      />
 
       <ConfirmDialog
         open={confirmDelete}
@@ -236,7 +258,15 @@ export default function RecordDetailPage() {
 
 // ─────────────────────────────────────────────────────────────────────────────
 
-function TimelineRow({ entry }: { entry: TimelineEntry }) {
+/**
+ * One entry in the record's history.
+ *
+ * The whole card is the control, not a link on the title. The previous version
+ * linked the form's name to `/forms/{id}` — the form's editor — which is both a
+ * different destination from what the row is about and a page most viewers
+ * cannot open. Activating a row now shows the response it represents.
+ */
+function TimelineRow({ entry, onOpen }: { entry: TimelineEntry; onOpen: () => void }) {
   const answerCount = Object.keys(entry.answers ?? {}).length;
 
   return (
@@ -249,27 +279,92 @@ function TimelineRow({ entry }: { entry: TimelineEntry }) {
         <FileBox className="size-3" strokeWidth={1.5} />
       </span>
 
-      <Card className="p-4">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div className="min-w-0">
-            {entry.form ? (
-              <Link
-                href={`/forms/${entry.form.id}`}
-                className="truncate text-sm font-medium text-foreground underline-offset-2 hover:underline"
-              >
-                {entry.form.title}
-              </Link>
-            ) : (
-              <span className="truncate text-sm font-medium text-foreground">Deleted form</span>
-            )}
-            <p className="mt-0.5 text-xs text-muted-foreground">
-              <RelativeTime value={entry.submittedAt} /> · {answerCount}{' '}
-              {answerCount === 1 ? 'answer' : 'answers'}
-            </p>
+      <button
+        type="button"
+        onClick={onOpen}
+        className="w-full rounded-xl text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      >
+        <Card className="p-4 transition-colors hover:border-border-strong hover:bg-muted/40">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="min-w-0 flex-1">
+              <span className="block truncate text-sm font-medium text-foreground">
+                {entry.form?.title ?? 'Deleted form'}
+              </span>
+              <p className="mt-0.5 text-xs text-muted-foreground">
+                <RelativeTime value={entry.submittedAt} /> · {answerCount}{' '}
+                {answerCount === 1 ? 'answer' : 'answers'}
+              </p>
+            </div>
+            <span className="flex shrink-0 items-center gap-2">
+              <StatusBadge status={entry.status} dot />
+              <ChevronRight className="size-4 text-muted-foreground" strokeWidth={1.5} />
+            </span>
           </div>
-          <StatusBadge status={entry.status} dot />
-        </div>
-      </Card>
+        </Card>
+      </button>
     </li>
+  );
+}
+
+/**
+ * A timeline entry's answers, in place.
+ *
+ * Reuses the submissions table's dialog rather than growing a second response
+ * renderer: labelling answers against the form's schema, per-type formatting
+ * and the "this question was removed" case are all decisions that must not
+ * differ depending on which page you opened a response from.
+ *
+ * The form is fetched lazily — only once an entry is opened, and cached per
+ * form id afterwards, so a record whose six entries span three forms costs
+ * three requests however many times the reviewer steps back and forth.
+ */
+function EntryDialog({
+  entries,
+  index,
+  onIndexChange,
+}: {
+  entries: TimelineEntry[];
+  index: number | null;
+  onIndexChange: (index: number | null) => void;
+}) {
+  const entry = index === null ? null : (entries[index] ?? null);
+  const form = useForm(entry?.formId);
+
+  if (!entry) return null;
+
+  const submission: Submission = {
+    id: entry.id,
+    formId: entry.formId,
+    answers: entry.answers ?? {},
+    submittedAt: entry.submittedAt,
+    completionTimeMs: 0,
+    status: entry.status as Submission['status'],
+    form: entry.form ?? undefined,
+  };
+
+  return (
+    <SubmissionDetailsDialog
+      open
+      onOpenChange={(open) => !open && onIndexChange(null)}
+      submission={submission}
+      questions={form.data?.questionsJson}
+      isLoadingQuestions={form.isLoading}
+      title={entry.form?.title ?? 'Response'}
+      positionLabel={`${index! + 1} of ${entries.length}`}
+      onPrev={index! > 0 ? () => onIndexChange(index! - 1) : undefined}
+      onNext={index! < entries.length - 1 ? () => onIndexChange(index! + 1) : undefined}
+      footerAction={
+        entry.form ? (
+          <ButtonLink
+            variant="ghost"
+            size="sm"
+            href={`/forms/${entry.form.id}/submissions`}
+            title={`See every response to ${entry.form.title}`}
+          >
+            All responses
+          </ButtonLink>
+        ) : undefined
+      }
+    />
   );
 }

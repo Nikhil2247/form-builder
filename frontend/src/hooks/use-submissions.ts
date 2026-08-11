@@ -1,6 +1,6 @@
 import { useQuery, useMutation, keepPreviousData } from '@tanstack/react-query';
 import { DEFAULT_PAGE_SIZE } from './use-pagination';
-import { fetchApi, unwrap, getAccessToken, refreshAccessToken, ApiError } from '@/lib/api';
+import { fetchApi, unwrap, getAccessToken, expireSession, ApiError } from '@/lib/api';
 import { useOrgId } from './use-auth';
 import { API_BASE_URL } from '@/lib/config';
 
@@ -125,11 +125,10 @@ export function useExportSubmissions(formId: string | undefined, formTitle?: str
           headers: token ? { Authorization: `Bearer ${token}` } : {},
         });
 
-      let response = await request(getAccessToken());
+      const response = await request(getAccessToken());
       if (response.status === 401) {
-        const token = await refreshAccessToken();
-        if (!token) throw new ApiError('Your session has expired. Please sign in again.', 401);
-        response = await request(token);
+        expireSession();
+        throw new ApiError('Your session has expired. Please sign in again.', 401);
       }
 
       if (!response.ok) {

@@ -59,10 +59,11 @@ export interface UserSession {
 /**
  * The current session.
  *
- * Gated on the bootstrap in AuthProvider: until the refresh cookie has been
- * exchanged for an access token there is nothing to authenticate with, and
- * firing /auth/me early would return a spurious null and flash the signed-out
- * UI on every page load.
+ * Held until `ready` — the one-shot refresh-cookie exchange the AuthProvider
+ * performs on a cold load. Asking /auth/me before that settles would answer
+ * "signed out" for every user who reloaded the page, and then need a second
+ * call to correct itself; gating here means exactly one /auth/me per page load
+ * and no flash of a signed-out shell.
  */
 export function useUser() {
   const { ready } = useSessionBootstrap();

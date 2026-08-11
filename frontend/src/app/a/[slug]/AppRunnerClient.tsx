@@ -27,7 +27,16 @@ export function AppRunnerClient({ slug, app }: { slug: string; app: AppSummary &
 
   return (
     <FormThemeScope theme={theme} className={cn('min-h-screen', formFontVariables)}>
-      <div className="mx-auto w-full max-w-2xl px-4 py-8 sm:px-6 sm:py-12">
+      {/* Widened for GRID, same reasoning as the public form page: two columns
+          inside 42rem give each field less room than the controls already use,
+          so the layout costs a column and buys nothing. Both widths still
+          collapse to one column below `md`, so a phone is unaffected. */}
+      <div
+        className={cn(
+          'mx-auto w-full px-4 py-8 sm:px-6 sm:py-12',
+          app.config?.layoutMode === 'GRID' ? 'max-w-5xl' : 'max-w-2xl',
+        )}
+      >
         {/* ── Masthead ─────────────────────────────────────────────────── */}
         <div
           className={cn(

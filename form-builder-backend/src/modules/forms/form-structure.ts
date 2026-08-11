@@ -359,6 +359,15 @@ function normalizeQuestions(input: unknown, validPages: Set<number>): any[] {
       placeholder: str(raw.placeholder, STRUCTURE_LIMITS.MAX_LABEL_LENGTH),
       validation: normalizeValidation(raw.validation),
       pageNumber,
+      /**
+       * Grid width. `AUTO` lets the runner decide from the question type.
+       *
+       * `colSpan` is carried through unchanged for forms authored before this
+       * existed, but nothing reads it any more — it defaulted to 2 here, in the
+       * builder store, and in the runner, which is why GRID-layout forms
+       * rendered every field full-width and looked exactly like DOCUMENT ones.
+       */
+      width: raw.width === 'HALF' || raw.width === 'FULL' ? raw.width : 'AUTO',
       colSpan: raw.colSpan === 1 ? 1 : 2,
     };
 

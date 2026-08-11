@@ -26,7 +26,13 @@ export class AuditService {
    * @param params.ipAddress - Actor's IP address
    */
   async log(params: {
-    organizationId: string;
+    /**
+     * The tenant this happened in, or `null`/omitted for a PLATFORM action that
+     * belongs to no tenant — a super admin editing the global choice-list
+     * dictionary, say. Those entries are visible on /platform/audit-logs, which
+     * does not filter by organization unless asked to.
+     */
+    organizationId?: string | null;
     userId?: string;
     action: string;
     resource: string;
@@ -38,7 +44,7 @@ export class AuditService {
     this.prisma.writer.auditLog
       .create({
         data: {
-          organizationId: params.organizationId,
+          organizationId: params.organizationId ?? null,
           userId: params.userId ?? null,
           action: params.action,
           resource: params.resource,
