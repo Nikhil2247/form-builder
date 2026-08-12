@@ -36,6 +36,12 @@ export interface AppSessionStep {
     title: string;
     subjectRole: 'NONE' | 'REGISTERS' | 'ATTACHES';
     formVersionId: string;
+    /**
+     * The form's own arrangement, used only when the app's layout is INHERIT.
+     * Optional because an app served by an API older than that option omits it,
+     * and the resolver treats anything other than `GRID` as stacked.
+     */
+    layoutMode?: string;
     pages: unknown[];
     questions: unknown[];
     logic: unknown[];

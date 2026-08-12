@@ -206,6 +206,12 @@ interface Scenario {
     requireAuth: boolean;
     allowDrafts: boolean;
     isPublished: boolean;
+    /**
+     * How every step's fields are arranged. `INHERIT` defers to each step
+     * form's own `layoutMode`, which is the only setting under which a
+     * question's HALF/FULL width is honoured inside an app.
+     */
+    layoutMode?: 'DOCUMENT' | 'GRID' | 'INHERIT';
     dashboardCards: (formId: (slug: string) => string) => unknown[];
   };
   choiceLists: ScenarioChoiceList[];
@@ -1006,6 +1012,11 @@ const KHARIF: Scenario = {
     // Enumerators walk between plots and lose signal constantly.
     allowDrafts: true,
     isPublished: true,
+    // The one app that defers to its forms. Farm registration and the plot
+    // record are authored as two-column with paired fields; the pest report
+    // is stacked because it is mostly a matrix. Forcing either arrangement on
+    // all three would throw one of them away.
+    layoutMode: 'INHERIT',
     dashboardCards: (formId) => [
       { title: 'Farms registered', source: 'subjects' },
       {
@@ -1064,14 +1075,20 @@ const KHARIF: Scenario = {
       title: 'Farm Registration',
       description: 'The farm and its holding. Filled once; every plot record is checked against the acreage declared here.',
       role: 'REGISTERS',
-      settings: { requireAuth: true },
+      // Two-column, with the widths below. Only meaningful because the app is
+      // INHERIT — under DOCUMENT or GRID the app imposes its own arrangement
+      // and every `width` here is ignored.
+      settings: { requireAuth: true, layoutMode: 'GRID' },
       pages: [{ pageNumber: 1, title: 'Farmer and holding' }],
       questions: [
+        // Short, related fields paired across the row. `width` is only read
+        // inside a grid, so a form set to DOCUMENT would ignore all of it.
         {
           id: 'krf_farmer',
           key: 'farmer_name',
           type: 'SHORT_TEXT',
           label: 'Farmer name',
+          width: 'HALF',
           validation: { required: true, maxLength: 120 },
         },
         {
@@ -1080,6 +1097,7 @@ const KHARIF: Scenario = {
           type: 'SHORT_TEXT',
           label: 'Farm code',
           placeholder: 'FARM-2026-0001',
+          width: 'HALF',
           validation: { required: true, pattern: '^FARM-[0-9]{4}-[0-9]{4}$' },
         },
         {
@@ -1087,6 +1105,7 @@ const KHARIF: Scenario = {
           key: 'state',
           type: 'DROPDOWN',
           label: 'State',
+          width: 'HALF',
           validation: { required: true },
           optionsSource: { kind: 'CHOICE_LIST', listSlug: 'in-states', searchable: true },
         },
@@ -1095,6 +1114,7 @@ const KHARIF: Scenario = {
           key: 'district',
           type: 'DROPDOWN',
           label: 'District',
+          width: 'HALF',
           validation: { required: true },
           optionsSource: {
             kind: 'CHOICE_LIST',
@@ -1108,6 +1128,7 @@ const KHARIF: Scenario = {
           key: 'village',
           type: 'SHORT_TEXT',
           label: 'Village',
+          width: 'HALF',
           validation: { required: true, maxLength: 120 },
         },
         {
@@ -1115,6 +1136,7 @@ const KHARIF: Scenario = {
           key: 'total_area_acre',
           type: 'NUMBER',
           label: 'Total holding (acres)',
+          width: 'HALF',
           validation: { required: true, min: 1, max: 500 },
         },
         {
@@ -1122,6 +1144,7 @@ const KHARIF: Scenario = {
           key: 'ownership',
           type: 'SINGLE_CHOICE',
           label: 'Ownership',
+          width: 'HALF',
           options: choices(['Owned', 'Leased', 'Shared cropping']),
           validation: { required: true },
         },
@@ -1131,6 +1154,7 @@ const KHARIF: Scenario = {
           type: 'NUMBER',
           label: 'Years remaining on the lease',
           description: 'Asked only for a leased holding.',
+          width: 'HALF',
           validation: { min: 0, max: 99 },
         },
         {
@@ -1138,6 +1162,7 @@ const KHARIF: Scenario = {
           key: 'irrigation_source',
           type: 'SINGLE_CHOICE',
           label: 'Main irrigation source',
+          width: 'HALF',
           options: choices(['Canal', 'Borewell', 'Tank', 'Rainfed']),
           validation: { required: true },
         },
@@ -1147,6 +1172,7 @@ const KHARIF: Scenario = {
           type: 'SINGLE_CHOICE',
           label: 'Any pest or disease problem this season?',
           description: 'Answering Yes opens the pest reporting step later in the app.',
+          width: 'HALF',
           options: YES_NO(),
           validation: { required: true },
         },
@@ -1155,6 +1181,9 @@ const KHARIF: Scenario = {
           key: 'farm_photo',
           type: 'FILE_UPLOAD',
           label: 'Photograph of the holding',
+          // Explicitly the whole row: a drop zone squeezed into one column is
+          // a smaller target than the thing being dropped on it.
+          width: 'FULL',
           validation: { maxSizeMb: 5, allowedTypes: ['image/jpeg', 'image/png'] },
         },
       ],
@@ -1193,7 +1222,9 @@ const KHARIF: Scenario = {
       description:
         'One entry per plot. Yield, support price and expected value are all derived — the enumerator types an area and picks a crop.',
       role: 'ATTACHES',
-      settings: { requireAuth: true },
+      // Nine short fields, repeated up to 25 times. Stacked, that is a very
+      // long scroll for what is really four pairs and a date.
+      settings: { requireAuth: true, layoutMode: 'GRID' },
       pages: [{ pageNumber: 1, title: 'Plot' }],
       questions: [
         {
@@ -1202,6 +1233,7 @@ const KHARIF: Scenario = {
           type: 'SHORT_TEXT',
           label: 'Plot code',
           description: 'Unique within the farm.',
+          width: 'HALF',
           validation: { required: true, maxLength: 40 },
         },
         {
@@ -1209,6 +1241,7 @@ const KHARIF: Scenario = {
           key: 'plot_area_acre',
           type: 'NUMBER',
           label: 'Plot area (acres)',
+          width: 'HALF',
           validation: { required: true, min: 1, max: 500 },
         },
         {
@@ -1216,6 +1249,7 @@ const KHARIF: Scenario = {
           key: 'crop',
           type: 'DROPDOWN',
           label: 'Crop sown',
+          width: 'HALF',
           validation: { required: true },
           optionsSource: { kind: 'CHOICE_LIST', listSlug: 'crops', searchable: true },
         },
@@ -1224,6 +1258,7 @@ const KHARIF: Scenario = {
           key: 'variety',
           type: 'DROPDOWN',
           label: 'Variety',
+          width: 'HALF',
           validation: {},
           optionsSource: {
             kind: 'CHOICE_LIST',
@@ -1236,6 +1271,7 @@ const KHARIF: Scenario = {
           key: 'sowing_date',
           type: 'DATE',
           label: 'Date of sowing',
+          width: 'HALF',
           validation: { required: true },
         },
         {
@@ -1244,14 +1280,18 @@ const KHARIF: Scenario = {
           type: 'NUMBER',
           label: 'Support price (₹/quintal)',
           description: 'Read from the crop list.',
+          width: 'HALF',
           validation: {},
         },
+        // The three derived figures sit together as a pair and a total, which
+        // only reads as a group because they are laid out as one.
         {
           id: 'kpc_yield',
           key: 'expected_yield_quintal',
           type: 'NUMBER',
           label: 'Expected yield (quintal)',
           description: 'Plot area × the typical yield for this crop.',
+          width: 'HALF',
           validation: {},
         },
         {
@@ -1260,6 +1300,7 @@ const KHARIF: Scenario = {
           type: 'NUMBER',
           label: 'Expected value (₹)',
           description: 'Expected yield × support price. Depends on two other calculated fields.',
+          width: 'HALF',
           validation: {},
         },
         {
@@ -1268,6 +1309,7 @@ const KHARIF: Scenario = {
           type: 'DATE',
           label: 'Expected harvest',
           description: '120 days from sowing.',
+          width: 'FULL',
           validation: {},
         },
       ],
@@ -4160,6 +4202,7 @@ async function seedScenario(scenario: Scenario, ctx: SeedContext) {
         if (!id) throw new Error(`${scenario.key}: dashboard card names unknown form "${slug}".`);
         return id;
       }),
+      ...(scenario.app.layoutMode ? { layoutMode: scenario.app.layoutMode } : {}),
     } as any,
     deletedAt: null,
   };

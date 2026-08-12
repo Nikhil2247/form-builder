@@ -115,11 +115,20 @@ export default function LayoutPage() {
 
       <DocSectionBlock title="Layout in data apps">
         <P>
-          A data app has the same choice, applied to every step at once, in{' '}
-          <UI>App settings → Design → Layout</UI>. It is app-wide rather than per-form on purpose:
-          a session that changed column count between step two and step three reads as a rendering
-          fault rather than a design. Apps offer stacked and two-column only — conversational paces
-          one question at a time, and an app already paces the respondent with its own steps.
+          A data app makes the same choice in <UI>App settings → Design → Layout</UI>, with a third
+          option: <UI>Stacked</UI> and <UI>Two column</UI> impose one arrangement on every step,
+          while <UI>Follow each form</UI> lets each step keep the layout its form was built with.
+        </P>
+        <P>
+          Imposing one arrangement is the default because a session that changes column count
+          between step two and step three reads as a rendering fault rather than a design. The cost
+          is that it overrides the widths above: a two-column form with paired fields renders as a
+          stacked list inside a <UI>Stacked</UI> app, from the same definition that pairs correctly
+          on its own link. Choose <UI>Follow each form</UI> to keep them.
+        </P>
+        <P>
+          Conversational is never used inside an app — it paces one question at a time, and an app
+          already paces the respondent with its own steps. Such a form is shown stacked instead.
         </P>
       </DocSectionBlock>
     </DocPage>

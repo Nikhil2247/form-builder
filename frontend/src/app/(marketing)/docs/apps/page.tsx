@@ -87,13 +87,19 @@ export default function AppsPage() {
       <DocSectionBlock title="What a session looks like">
         <P>
           A respondent opens the app&apos;s link, identifies or creates the record, then works
-          through the steps on one page — no navigating between forms. Progress can be saved and
-          resumed if drafts are allowed. On submit, every step becomes a response against that
-          record, all bound to the same session.
+          through the steps — either on one page or a step at a time, depending on how the app is
+          set up. Progress can be saved and resumed if drafts are allowed. On submit, every step
+          becomes a response against that record, all bound to the same session.
         </P>
         <P>
           Validation runs across the whole session, so problems in step one and step three are
-          reported together rather than one screen at a time.
+          reported together rather than one screen at a time. Nothing is filed until it all passes:
+          a half-submitted report, where some entries landed and others did not, is worse than a
+          rejected one, because there is no way to tell which is which.
+        </P>
+        <P>
+          How the steps are paged, how wide the page runs and how it is dressed are covered in{' '}
+          <Term>App appearance</Term>.
         </P>
       </DocSectionBlock>
 

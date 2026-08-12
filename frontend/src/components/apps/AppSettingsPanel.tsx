@@ -445,7 +445,9 @@ function LayoutSection({
   app: FormAppDetail;
   onPatch: (dto: AppSettingsDto) => void | Promise<void>;
 }) {
-  const current: AppLayoutMode = app.config?.layoutMode === 'GRID' ? 'GRID' : 'DOCUMENT';
+  const declared = app.config?.layoutMode;
+  const current: AppLayoutMode =
+    declared === 'GRID' || declared === 'INHERIT' ? declared : 'DOCUMENT';
 
   const OPTIONS: Array<{ value: AppLayoutMode; label: string; hint: string }> = [
     {
@@ -458,6 +460,11 @@ function LayoutSection({
       label: 'Two column',
       hint: 'Narrow fields pair up on wide screens. Best for desk-based data entry.',
     },
+    {
+      value: 'INHERIT',
+      label: 'Follow each form',
+      hint: "Each step uses the layout it was built with, so per-question half and full widths apply. Steps can look different from one another.",
+    },
   ];
 
   return (
@@ -465,7 +472,7 @@ function LayoutSection({
       title="Layout"
       description="How the fields of every step are arranged on screen."
     >
-      <div className="grid grid-cols-2 gap-2">
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
         {OPTIONS.map((option) => {
           const isActive = current === option.value;
           return (
@@ -484,19 +491,32 @@ function LayoutSection({
               {/* A tiny diagram beats the words: "two column" is only
                   meaningful once you can see what it does to the fields. */}
               <span aria-hidden className="flex gap-1">
-                {option.value === 'DOCUMENT' ? (
+                {option.value === 'DOCUMENT' && (
                   <span className="flex w-full flex-col gap-1">
                     <span className="h-1.5 w-full rounded-sm bg-muted-foreground/30" />
                     <span className="h-1.5 w-full rounded-sm bg-muted-foreground/30" />
                     <span className="h-1.5 w-full rounded-sm bg-muted-foreground/30" />
                   </span>
-                ) : (
+                )}
+                {option.value === 'GRID' && (
                   <span className="grid w-full grid-cols-2 gap-1">
                     <span className="h-1.5 rounded-sm bg-muted-foreground/30" />
                     <span className="h-1.5 rounded-sm bg-muted-foreground/30" />
                     <span className="h-1.5 rounded-sm bg-muted-foreground/30" />
                     <span className="h-1.5 rounded-sm bg-muted-foreground/30" />
                     <span className="col-span-2 h-1.5 rounded-sm bg-muted-foreground/30" />
+                  </span>
+                )}
+                {/* Mixed on purpose — the whole point of this option is that
+                    one step can be paired and the next stacked. */}
+                {option.value === 'INHERIT' && (
+                  <span className="grid w-full grid-cols-2 gap-1">
+                    <span className="h-1.5 rounded-sm bg-muted-foreground/30" />
+                    <span className="h-1.5 rounded-sm bg-muted-foreground/30" />
+                    <span className="col-span-2 h-1.5 rounded-sm bg-muted-foreground/30" />
+                    <span className="col-span-2 h-1.5 rounded-sm bg-muted-foreground/30" />
+                    <span className="h-1.5 rounded-sm bg-muted-foreground/30" />
+                    <span className="h-1.5 rounded-sm bg-muted-foreground/30" />
                   </span>
                 )}
               </span>

@@ -71,6 +71,8 @@ interface LoadedStep {
     slug: string;
     subjectRole: 'NONE' | 'REGISTERS' | 'ATTACHES';
     currentVersion: number;
+    /** The form's own arrangement. Read only when the app's layout is INHERIT. */
+    layoutMode: string;
     versions: Array<{
       id: string;
       version: number;
@@ -119,6 +121,7 @@ export class FormAppSessionsService {
             status: true,
             deletedAt: true,
             currentVersion: true,
+            layoutMode: true,
             versions: {
               orderBy: { version: 'desc' },
               take: 5,
@@ -352,6 +355,11 @@ export class FormAppSessionsService {
             title: step.form.title,
             subjectRole: step.form.subjectRole,
             formVersionId: version.id,
+            // The form's OWN arrangement, which the app uses only when its
+            // layout is INHERIT. Sent unconditionally because the app cannot
+            // ask for it later — the session payload is the only thing the
+            // public runner ever loads.
+            layoutMode: step.form.layoutMode,
             // Flattened into exactly the shape FormRunner already consumes, so
             // the app runner mounts it unchanged.
             pages: version.pagesJson ?? [],

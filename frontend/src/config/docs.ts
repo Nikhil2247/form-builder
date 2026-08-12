@@ -156,6 +156,12 @@ export const DOC_SECTIONS: DocSection[] = [
         href: '/docs/apps/records',
         summary: 'Reading everything collected about one subject in one place.',
       },
+      {
+        title: 'App appearance',
+        href: '/docs/apps/appearance',
+        summary:
+          'Paging steps, page width, headers, spacing, and why field widths need the right layout.',
+      },
     ],
   },
   {

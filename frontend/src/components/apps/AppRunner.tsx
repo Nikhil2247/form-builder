@@ -66,11 +66,33 @@ export interface AppSummary {
 /**
  * How the app lays out the fields of each step.
  *
- * Only two, unlike a form's three: CONVERSATIONAL shows one question at a time
- * and an app already paces the respondent with its own steps, so the two would
- * be competing for the same job.
+ * CONVERSATIONAL is absent on purpose: it shows one question at a time, and an
+ * app already paces the respondent with its own steps — inside the wizard that
+ * would be a wizard within a wizard.
+ *
+ * `INHERIT` defers to each step form's own `layoutMode`. It exists because
+ * imposing one arrangement silently discards the per-question HALF/FULL widths
+ * an author set: those are only consulted inside a grid, so a two-column form
+ * with paired fields renders as a single stacked column the moment it becomes
+ * a step, from the very same definition that renders correctly at /f/{slug}.
  */
-export type AppLayoutMode = 'DOCUMENT' | 'GRID';
+export type AppLayoutMode = 'DOCUMENT' | 'GRID' | 'INHERIT';
+
+/** What a step form is rendered as. INHERIT is resolved away before this. */
+type ResolvedLayout = 'DOCUMENT' | 'GRID';
+
+/**
+ * The arrangement for one step.
+ *
+ * Only GRID is inherited. A form authored as CONVERSATIONAL or PORTAL falls
+ * back to the stacked layout rather than being refused — an app step is a
+ * section of a longer session, and those two modes both assume they own the
+ * whole page.
+ */
+function resolveStepLayout(appMode: AppLayoutMode, formMode: string | undefined): ResolvedLayout {
+  if (appMode !== 'INHERIT') return appMode;
+  return formMode === 'GRID' ? 'GRID' : 'DOCUMENT';
+}
 
 export function AppRunner({
   publicSlug,
@@ -84,7 +106,9 @@ export function AppRunner({
 }) {
   // Anything unrecognised falls back to the stacked layout rather than
   // rendering nothing, matching how the public form page treats PORTAL.
-  const layoutMode: AppLayoutMode = app.config?.layoutMode === 'GRID' ? 'GRID' : 'DOCUMENT';
+  const declared = app.config?.layoutMode;
+  const layoutMode: AppLayoutMode =
+    declared === 'GRID' || declared === 'INHERIT' ? declared : 'DOCUMENT';
   const density = DENSITY[appearance.density];
   const session = useAppSession(publicSlug);
   const [issues, setIssues] = React.useState<SessionIssue[]>([]);
@@ -701,11 +725,14 @@ function StepSection({
                     } as unknown as FormConfig
                   }
                   formSlug={step.form.slug}
-                  // The app's own setting, not the step form's. A step is a
-                  // section of one continuous session, so letting each form
-                  // bring its own column count would change the layout partway
-                  // through and read as a rendering fault.
-                  layoutMode={layoutMode}
+                  // Resolved per step. DOCUMENT and GRID impose one
+                  // arrangement on the whole session — a column count that
+                  // changes partway through reads as a rendering fault, which
+                  // is why that remains the default. INHERIT is the author
+                  // saying the forms were designed individually and their own
+                  // layouts, and therefore their per-question widths, should
+                  // stand.
+                  layoutMode={resolveStepLayout(layoutMode, step.form.layoutMode)}
                   initialAnswers={drafts[entryKey] ?? {}}
                   // Field-level rejections land on their own question, and the
                   // whole entry stops holding its problems back — a respondent

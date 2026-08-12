@@ -54,7 +54,18 @@ export interface DashboardCard {
  * Deliberately app-wide: a session that changed column count between step two
  * and step three would read as a rendering fault, not a design.
  */
-export const APP_LAYOUT_MODES = ['DOCUMENT', 'GRID'] as const;
+/**
+ * How an app arranges the fields of each step.
+ *
+ * `INHERIT` means "whatever each step's form was designed as". The other two
+ * impose one arrangement on every step, which is the safer default — a column
+ * count that changes partway through one continuous session reads as a
+ * rendering fault. But imposing it also throws away the per-question HALF/FULL
+ * widths an author set on a GRID form, because those are only consulted inside
+ * a grid: the form renders two-up at /f/{slug} and full width as a step, from
+ * the same stored definition. INHERIT is how an author gets those back.
+ */
+export const APP_LAYOUT_MODES = ['DOCUMENT', 'GRID', 'INHERIT'] as const;
 export type AppLayoutMode = (typeof APP_LAYOUT_MODES)[number];
 
 /** Read the layout out of a stored `config` blob, defaulting safely. */
