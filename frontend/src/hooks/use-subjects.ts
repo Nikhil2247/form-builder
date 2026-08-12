@@ -256,6 +256,7 @@ export function useCreateSubjectType() {
   const orgId = useOrgId();
 
   return useMutation({
+    meta: { errorFallback: 'Could not create this record type' },
     mutationFn: async (dto: CreateSubjectTypeDto) => {
       if (!orgId) throw new Error('No active organization');
       return unwrap<SubjectType>(
@@ -276,6 +277,7 @@ export function useUpdateSubjectType() {
   const orgId = useOrgId();
 
   return useMutation({
+    meta: { errorFallback: 'Could not save these settings' },
     mutationFn: async ({
       subjectTypeId,
       ...dto
@@ -301,6 +303,7 @@ export function useDeleteSubjectType() {
   const orgId = useOrgId();
 
   return useMutation({
+    meta: { errorFallback: 'Could not delete this record type' },
     mutationFn: async (subjectTypeId: string) => {
       if (!orgId) throw new Error('No active organization');
       await fetchApi(`/organizations/${orgId}/subject-types/${subjectTypeId}`, {
@@ -318,6 +321,7 @@ export function useDeleteSubject() {
   const orgId = useOrgId();
 
   return useMutation({
+    meta: { errorFallback: 'Could not delete this record' },
     mutationFn: async (subjectId: string) => {
       if (!orgId) throw new Error('No active organization');
       await fetchApi(`/organizations/${orgId}/subjects/${subjectId}`, { method: 'DELETE' });

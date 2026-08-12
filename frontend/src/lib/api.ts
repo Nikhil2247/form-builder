@@ -44,12 +44,18 @@ export interface ValidationIssue {
 /**
  * Error carrying the HTTP status and any field-level validation issues, so
  * callers can render inline messages instead of a single toast.
+ *
+ * `retryAfterSeconds` is populated from the `Retry-After` header on a 429. The
+ * API sets it and CORS exposes it; without reading it here the only thing the
+ * UI could say was "too many requests" with no indication of how long to wait,
+ * which reliably produces a user hammering the button.
  */
 export class ApiError extends Error {
   constructor(
     message: string,
     public readonly status: number,
     public readonly issues?: ValidationIssue[],
+    public readonly retryAfterSeconds?: number,
   ) {
     super(message);
     this.name = 'ApiError';
@@ -226,6 +232,18 @@ export interface FetchOptions extends RequestInit {
   timeoutMs?: number;
 }
 
+/** `Retry-After` is either a delta in seconds or an HTTP date. Both are legal. */
+function parseRetryAfter(header: string | null): number | undefined {
+  if (!header) return undefined;
+
+  const seconds = Number(header);
+  if (Number.isFinite(seconds) && seconds >= 0) return Math.ceil(seconds);
+
+  const at = Date.parse(header);
+  if (Number.isNaN(at)) return undefined;
+  return Math.max(0, Math.ceil((at - Date.now()) / 1000));
+}
+
 async function toApiError(response: Response): Promise<ApiError> {
   const body = await response.json().catch(() => null);
 
@@ -238,6 +256,7 @@ async function toApiError(response: Response): Promise<ApiError> {
     message || `Request failed (${response.status})`,
     response.status,
     body?.error?.issues ?? body?.issues,
+    parseRetryAfter(response.headers.get('Retry-After')),
   );
 }
 

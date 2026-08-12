@@ -1,15 +1,7 @@
 'use client';
 
 import React, { useMemo, useState } from 'react';
-import {
-  Area,
-  AreaChart,
-  CartesianGrid,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from 'recharts';
+import dynamic from 'next/dynamic';
 import { BarChart2, CheckCircle2, Clock, Eye, Inbox } from 'lucide-react';
 
 import { Card } from '@/components/ui/card';
@@ -29,6 +21,17 @@ import {
 } from '@/components/shared';
 import { formatCompact, formatDuration } from '@/components/shared/formatters';
 import { useOrgSummary, useOrgTimeseries, useTopForms, type TopForm } from '@/hooks/use-analytics';
+
+/**
+ * `recharts` is the heaviest thing on this route and nothing above the chart
+ * needs it, so the summary tiles paint without waiting on it. Rendered only
+ * once there is activity to plot, which also means an empty organization never
+ * downloads a charting library at all. Same skeleton as the loading state, so
+ * arrival is not a layout jump.
+ */
+const ActivityChart = dynamic(() => import('@/components/analytics/ActivityChart'), {
+  loading: () => <Skeleton className="h-64 w-full" />,
+});
 
 const RANGE_OPTIONS = [
   { value: '7', label: 'Last 7 days' },
@@ -209,66 +212,7 @@ export default function AnalyticsPage() {
             description="Publish a form and share its link — views and responses will appear here."
           />
         ) : (
-          <div className="h-64 w-full">
-            <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={chartData} margin={{ top: 8, right: 8, left: -20, bottom: 0 }}>
-                <defs>
-                  <linearGradient id="fill-submissions" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor="var(--chart-1)" stopOpacity={0.28} />
-                    <stop offset="100%" stopColor="var(--chart-1)" stopOpacity={0.02} />
-                  </linearGradient>
-                  <linearGradient id="fill-views" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor="var(--chart-3)" stopOpacity={0.18} />
-                    <stop offset="100%" stopColor="var(--chart-3)" stopOpacity={0.02} />
-                  </linearGradient>
-                </defs>
-
-                <CartesianGrid vertical={false} stroke="var(--border)" strokeDasharray="3 3" />
-                <XAxis
-                  dataKey="label"
-                  tickLine={false}
-                  axisLine={false}
-                  tick={{ fontSize: 11, fill: 'var(--muted-foreground)' }}
-                  // A 365-day range would otherwise print 365 overlapping labels.
-                  interval={Math.max(0, Math.floor(chartData.length / 8) - 1)}
-                />
-                <YAxis
-                  tickLine={false}
-                  axisLine={false}
-                  width={44}
-                  allowDecimals={false}
-                  tick={{ fontSize: 11, fill: 'var(--muted-foreground)' }}
-                />
-                <Tooltip
-                  cursor={{ stroke: 'var(--border-strong)' }}
-                  contentStyle={{
-                    background: 'var(--popover)',
-                    border: '1px solid var(--border)',
-                    borderRadius: 'var(--radius)',
-                    fontSize: 12,
-                    color: 'var(--popover-foreground)',
-                  }}
-                  labelStyle={{ color: 'var(--muted-foreground)', marginBottom: 4 }}
-                />
-                <Area
-                  type="monotone"
-                  dataKey="views"
-                  name="Views"
-                  stroke="var(--chart-3)"
-                  fill="url(#fill-views)"
-                  strokeWidth={1.5}
-                />
-                <Area
-                  type="monotone"
-                  dataKey="submissions"
-                  name="Responses"
-                  stroke="var(--chart-1)"
-                  fill="url(#fill-submissions)"
-                  strokeWidth={2}
-                />
-              </AreaChart>
-            </ResponsiveContainer>
-          </div>
+          <ActivityChart data={chartData} />
         )}
       </Card>
 

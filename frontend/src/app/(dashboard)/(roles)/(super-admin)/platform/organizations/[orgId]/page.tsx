@@ -60,9 +60,13 @@ import {
 
 const BYTES_PER_GB = 1024 ** 3;
 
-function reportError(error: unknown, fallback: string) {
-  toast.error(error instanceof Error ? error.message : fallback);
-}
+/**
+ * Failures are reported by the global MutationCache handler in query-provider,
+ * using the fallback copy each mutation declares in its `meta`. The `catch`
+ * blocks below exist only to keep `mutateAsync` from rejecting unhandled and to
+ * leave the dialog open — they deliberately do not toast, because doing so here
+ * as well would put two toasts on screen for one failure.
+ */
 
 export default function PlatformOrganizationDetailPage() {
   const params = useParams<{ orgId: string }>();
@@ -121,8 +125,8 @@ export default function PlatformOrganizationDetailPage() {
       await suspendOrg.mutateAsync({ orgId: org.id, reason });
       toast.success(`${org.name} suspended`);
       setSuspending(false);
-    } catch (err) {
-      reportError(err, 'Could not suspend this organization');
+    } catch {
+      // Reported globally; the dialog stays open so the reason is not lost.
     }
   }
 
@@ -132,8 +136,8 @@ export default function PlatformOrganizationDetailPage() {
       await activateOrg.mutateAsync(org.id);
       toast.success(`${org.name} reactivated`);
       setActivating(false);
-    } catch (err) {
-      reportError(err, 'Could not reactivate this organization');
+    } catch {
+      // Reported globally.
     }
   }
 
@@ -403,8 +407,8 @@ function QuotasCard({ org }: { org: AdminOrganizationDetail }) {
         },
       });
       toast.success('Quotas updated');
-    } catch (err) {
-      reportError(err, 'Could not update quotas');
+    } catch {
+      // Reported globally; the edited values stay on screen for a retry.
     }
   }
 

@@ -261,8 +261,8 @@ function AppBuilderForm({
         // configuring without losing what they just typed.
         router.replace(`/apps/builder?id=${created.id}`);
       }
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Could not save this app');
+    } catch {
+      // Reported globally; the typed values stay on screen for a retry.
     }
   }
 
@@ -437,11 +437,9 @@ function AppBuilderForm({
                     onCheckedChange={(checked) =>
                       updateSettings
                         .mutateAsync({ appId: app.id, isPublished: checked })
-                        .catch((error: unknown) =>
-                          toast.error(
-                            error instanceof Error ? error.message : 'Could not change that',
-                          ),
-                        )
+                        // Swallowed only to keep the rejection handled — the
+                        // toast comes from the global handler.
+                        .catch(() => {})
                     }
                   />
                 </div>

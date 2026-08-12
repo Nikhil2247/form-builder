@@ -2,12 +2,30 @@
 
 import React from 'react';
 import Link from 'next/link';
-import { Boxes, LayoutGrid, Plus, Smartphone } from 'lucide-react';
+import {
+  Boxes,
+  ExternalLink,
+  LayoutGrid,
+  MoreHorizontal,
+  Plus,
+  Settings2,
+  Smartphone,
+  Trash2,
+} from 'lucide-react';
+import { toast } from 'sonner';
 
 import { Card } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
+import {
   ButtonLink,
+  ConfirmDialog,
   EmptyState,
   ErrorState,
   PageHeader,
@@ -17,7 +35,8 @@ import {
 import { Can } from '@/components/auth/RoleGuard';
 import { DataAppsDisabled } from '@/components/apps/DataAppsGate';
 import { FEATURES, useFeature } from '@/hooks/use-features';
-import { useFormApps, type FormApp } from '@/hooks/use-form-apps';
+import { usePermissions } from '@/hooks/use-auth';
+import { useDeleteFormApp, useFormApps, type FormApp } from '@/hooks/use-form-apps';
 
 /**
  * Every data-entry app in the organization.
@@ -28,6 +47,20 @@ import { useFormApps, type FormApp } from '@/hooks/use-form-apps';
 export default function AppsPage() {
   const appsEnabled = useFeature(FEATURES.FORM_APPS);
   const { data: apps, isLoading, error, refetch } = useFormApps({ enabled: appsEnabled });
+
+  const [deleteTarget, setDeleteTarget] = React.useState<FormApp | null>(null);
+  const deleteApp = useDeleteFormApp();
+
+  async function handleDelete() {
+    if (!deleteTarget) return;
+    try {
+      await deleteApp.mutateAsync(deleteTarget.id);
+      toast.success(`Deleted "${deleteTarget.name}"`);
+      setDeleteTarget(null);
+    } catch {
+      // Reported globally; the dialog stays open so the action can be retried.
+    }
+  }
 
   if (!appsEnabled) return <DataAppsDisabled title="Apps" />;
 
@@ -76,17 +109,92 @@ export default function AppsPage() {
       ) : (
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
           {apps.map((app) => (
-            <AppCard key={app.id} app={app} />
+            <AppCard key={app.id} app={app} onDelete={setDeleteTarget} />
           ))}
         </div>
       )}
+
+      {/* Apps have no trash screen — unlike a form, a deleted app cannot be
+          restored from the dashboard — so the copy says what actually survives
+          rather than implying a recovery path that does not exist. */}
+      <ConfirmDialog
+        open={!!deleteTarget}
+        onOpenChange={(open) => !open && setDeleteTarget(null)}
+        title="Delete app"
+        description={
+          <>
+            &ldquo;{deleteTarget?.name}&rdquo; will be removed from your apps list and its public
+            link will stop working. The records and submissions already collected are kept, and the
+            forms behind its steps are not deleted. There is no restore screen for apps.
+          </>
+        }
+        confirmLabel="Delete app"
+        onConfirm={handleDelete}
+        isPending={deleteApp.isPending}
+      />
     </PageShell>
   );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 
-function AppCard({ app }: { app: FormApp }) {
+/**
+ * The card's overflow menu.
+ *
+ * Delete is gated on `org:manage` rather than `form:delete`, because the API
+ * requires an organization ADMIN for this route. Gating on the editor
+ * permission would render a button that always 403s.
+ */
+function AppActions({ app, onDelete }: { app: FormApp; onDelete: (app: FormApp) => void }) {
+  const { can } = usePermissions();
+
+  const canConfigure = can('form:create');
+  const canDelete = can('org:manage');
+  if (!canConfigure && !canDelete) return null;
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger
+        aria-label={`Actions for ${app.name}`}
+        className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+      >
+        <MoreHorizontal className="size-4" />
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end">
+        {canConfigure && (
+          // Base UI composes via `render`, not Radix's `asChild`.
+          <DropdownMenuItem
+            render={<Link href={`/apps/builder?id=${app.id}`} />}
+            className="cursor-pointer"
+          >
+            <Settings2 className="mr-2 size-3.5" /> Configure
+          </DropdownMenuItem>
+        )}
+        {app.publicSlug && app.isPublished && (
+          <DropdownMenuItem
+            render={<a href={`/a/${app.publicSlug}`} target="_blank" rel="noreferrer" />}
+            className="cursor-pointer"
+          >
+            <ExternalLink className="mr-2 size-3.5" /> Open public link
+          </DropdownMenuItem>
+        )}
+        {canDelete && (
+          <>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem
+              onClick={() => onDelete(app)}
+              className="cursor-pointer text-destructive focus:bg-destructive/10 focus:text-destructive"
+            >
+              <Trash2 className="mr-2 size-3.5" /> Delete app
+            </DropdownMenuItem>
+          </>
+        )}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+function AppCard({ app, onDelete }: { app: FormApp; onDelete: (app: FormApp) => void }) {
   return (
     <Card className="flex min-h-44 flex-col justify-between p-4 transition-colors hover:border-border-strong">
       <div className="min-w-0">
@@ -101,11 +209,14 @@ function AppCard({ app }: { app: FormApp }) {
               <Smartphone className="size-4" strokeWidth={1.5} />
             )}
           </span>
-          <StatusBadge
-            status={app.isPublished ? 'PUBLISHED' : 'DRAFT'}
-            label={app.isPublished ? 'Live' : 'Draft'}
-            dot
-          />
+          <div className="flex items-center gap-1.5">
+            <StatusBadge
+              status={app.isPublished ? 'PUBLISHED' : 'DRAFT'}
+              label={app.isPublished ? 'Live' : 'Draft'}
+              dot
+            />
+            <AppActions app={app} onDelete={onDelete} />
+          </div>
         </div>
 
         <Link href={`/apps/${app.id}`} className="block rounded-sm">

@@ -2,6 +2,58 @@ import { ExceptionFilter, Catch, ArgumentsHost, HttpException, HttpStatus } from
 import { Prisma } from '@prisma/client';
 import { AppLogger } from '../logger/app-logger.service';
 
+/**
+ * Column names as the user knows them. Anything not listed falls back to a
+ * message that names no column at all — better to be vague than to leak the
+ * schema to whoever can provoke a duplicate.
+ */
+const UNIQUE_FIELD_LABELS: Record<string, string> = {
+  email: 'email address',
+  slug: 'URL',
+  public_slug: 'public link',
+  value: 'option value',
+  key: 'key',
+  external_id: 'external ID',
+  token: 'token',
+  object_key: 'file',
+};
+
+/**
+ * Turn a P2002 `meta.target` into a sentence.
+ *
+ * `target` is the conflicting column list — `['email']`, or for a composite
+ * constraint `['organization_id', 'slug']`. Tenant-scoping columns are dropped
+ * because "organization" is not something the user chose or can change; what
+ * they need to hear is which of THEIR values collided.
+ */
+const SCOPE_COLUMNS = new Set([
+  'organization_id',
+  'form_id',
+  'list_id',
+  'app_id',
+  'session_id',
+  'subject_type_id',
+]);
+
+function uniqueConstraintMessage(target: unknown): string {
+  const columns = Array.isArray(target)
+    ? target.filter((c): c is string => typeof c === 'string')
+    : typeof target === 'string'
+      ? [target]
+      : [];
+
+  const meaningful = columns.filter((c) => !SCOPE_COLUMNS.has(c));
+  const labels = meaningful.map((c) => UNIQUE_FIELD_LABELS[c]).filter(Boolean);
+
+  if (labels.length === 0) {
+    return 'That already exists. Try a different value.';
+  }
+  if (labels.length === 1) {
+    return `That ${labels[0]} is already in use. Try a different one.`;
+  }
+  return `That combination of ${labels.join(' and ')} is already in use.`;
+}
+
 @Catch()
 export class HttpExceptionFilter implements ExceptionFilter {
   constructor(private readonly logger: AppLogger) {
@@ -44,21 +96,44 @@ export class HttpExceptionFilter implements ExceptionFilter {
       }
     }
     // ── Prisma Error Translation ──────────────────────────────────────────────
+    //
+    // Two things were wrong with sending these through verbatim. A P2002 read
+    // "Unique constraint failed on the fields: organization_id, slug" — which
+    // names our columns to anyone who can trigger it, and means nothing to the
+    // person who just typed a duplicate URL. And every other Prisma code became
+    // "Database error: P2010", a 400 that told the user nothing and told us
+    // nothing either, because it was never logged.
     else if (exception instanceof Prisma.PrismaClientKnownRequestError) {
       switch (exception.code) {
         case 'P2002': // Unique constraint failed
           status = HttpStatus.CONFLICT;
-          message = `Unique constraint failed on the fields: ${(exception.meta as any)?.target?.join(', ') ?? 'unknown'}`;
+          message = uniqueConstraintMessage((exception.meta as any)?.target);
           break;
         case 'P2025': // Record to update not found
           status = HttpStatus.NOT_FOUND;
-          message = 'Record not found';
+          message = 'That item no longer exists. It may have been deleted.';
+          break;
+        case 'P2003': // Foreign key constraint failed
+          status = HttpStatus.CONFLICT;
+          message =
+            'That item is still referenced by something else and cannot be changed yet.';
+          break;
+        case 'P2000': // Value too long for column
+          status = HttpStatus.BAD_REQUEST;
+          message = 'One of the values you entered is too long.';
           break;
         default:
+          // The user gets a generic sentence; we get the code and meta in the
+          // logs, which is the half that actually helps diagnose it.
           status = HttpStatus.BAD_REQUEST;
-          message = `Database error: ${exception.code}`;
+          message = 'We could not process that request. Please check your input and try again.';
+          this.logger.warn(`Unmapped Prisma error [${exception.code}]`, {
+            path: req.url,
+            code: exception.code,
+            meta: exception.meta,
+          });
       }
-    } 
+    }
     // ── Generic Errors ────────────────────────────────────────────────────────
     else if (exception instanceof Error) {
       message = exception.message;

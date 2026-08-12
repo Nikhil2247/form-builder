@@ -45,6 +45,7 @@ import { HttpExceptionFilter } from './common/filters/http-exception.filter';
 
 // ── Global response envelope ───────────────────────────────────────────────────
 import { ResponseInterceptor } from './common/interceptors/response.interceptor';
+import { CacheControlInterceptor } from './common/interceptors/cache-control.interceptor';
 
 @Module({
   imports: [
@@ -129,6 +130,15 @@ import { ResponseInterceptor } from './common/interceptors/response.interceptor'
     {
       provide: APP_INTERCEPTOR,
       useClass: HttpLoggingInterceptor,
+    },
+
+    // ── Default Cache-Control ─────────────────────────────────────────────────
+    // `no-store` unless a route opted into caching with @Header. Without this,
+    // authenticated responses carried no directive and a shared cache was free
+    // to reuse one tenant's data for another's request.
+    {
+      provide: APP_INTERCEPTOR,
+      useClass: CacheControlInterceptor,
     },
 
     // ── Global response envelope ──────────────────────────────────────────────

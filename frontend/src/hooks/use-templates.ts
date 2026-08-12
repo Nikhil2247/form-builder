@@ -61,6 +61,7 @@ export function useCreateFromTemplate() {
   const orgId = useOrgId();
 
   return useMutation({
+    meta: { errorFallback: 'Could not create a form from this template' },
     mutationFn: async (templateId: string) => {
       const data = unwrap<any>(
         await fetchApi(`/organizations/${orgId}/forms/from-template/${templateId}`, {

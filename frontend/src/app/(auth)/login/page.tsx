@@ -39,9 +39,6 @@ function LoginForm() {
             router.push(next ?? landingRoute(user?.systemRole, user?.orgRole));
           }
         },
-        onError: (error: any) => {
-          toast.error(error.message || 'Failed to log in. Please check your credentials.');
-        }
       }
     );
   };

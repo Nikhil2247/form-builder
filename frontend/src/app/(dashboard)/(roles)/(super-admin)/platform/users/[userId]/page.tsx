@@ -62,10 +62,14 @@ import {
  * being flattened into "Something went wrong".
  */
 
-/** Every mutation here shares one failure path: show what the API said. */
-function reportError(error: unknown, fallback: string) {
-  toast.error(error instanceof Error ? error.message : fallback);
-}
+/**
+ * Every mutation here shares one failure path: show what the API said. That is
+ * now the global MutationCache handler in query-provider, which prefers the
+ * API's sentence and falls back to each mutation's `meta.errorFallback`. The
+ * `catch` blocks below only stop `mutateAsync` rejecting unhandled and roll
+ * back optimistic local state; they deliberately do not toast, or every
+ * failure would produce two.
+ */
 
 export default function PlatformUserDetailPage() {
   const params = useParams<{ userId: string }>();
@@ -118,8 +122,8 @@ export default function PlatformUserDetailPage() {
       await setSuspended.mutateAsync({ userId: user.id, suspended: next });
       toast.success(next ? `${user.email} suspended` : `${user.email} reinstated`);
       setConfirm(null);
-    } catch (err) {
-      reportError(err, next ? 'Could not suspend this account' : 'Could not reinstate this account');
+    } catch {
+      // Reported globally; the confirm dialog stays open.
     }
   }
 
@@ -129,8 +133,8 @@ export default function PlatformUserDetailPage() {
       const result = await revokeSessions.mutateAsync(user.id);
       toast.success(result.message);
       setConfirm(null);
-    } catch (err) {
-      reportError(err, 'Could not revoke sessions');
+    } catch {
+      // Reported globally.
     }
   }
 
@@ -140,8 +144,8 @@ export default function PlatformUserDetailPage() {
       const result = await resetMfa.mutateAsync(user.id);
       toast.success(result.message);
       setConfirm(null);
-    } catch (err) {
-      reportError(err, 'Could not reset two-factor authentication');
+    } catch {
+      // Reported globally.
     }
   }
 
@@ -345,8 +349,8 @@ function PlatformRoleCard({ user }: { user: AdminUserDetail }) {
           : `${user.email} no longer has platform access`,
       );
       setConfirming(false);
-    } catch (err) {
-      reportError(err, 'Could not change the platform role');
+    } catch {
+      // Reported globally; the confirm state stays so the operator can retry.
     }
   }
 
@@ -541,9 +545,10 @@ function MembershipRoleSelect({
       toast.success(
         `${user.email} is now ${next === 'ADMIN' ? 'an' : 'a'} ${next.toLowerCase()} of ${membership.organization.name}`,
       );
-    } catch (err) {
+    } catch {
+      // Roll the select back to what the server still believes. The toast
+      // itself comes from the global handler.
       setRole(membership.role);
-      reportError(err, 'Could not change this role');
     }
   }
 

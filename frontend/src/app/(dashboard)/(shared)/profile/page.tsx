@@ -35,7 +35,8 @@ import {
   useDisableMfa,
   useChangePassword,
 } from '@/hooks/use-auth';
-import { fetchApi, ApiError } from '@/lib/api';
+import { fetchApi } from '@/lib/api';
+import { toastError } from '@/lib/errors';
 import { useQueryClient } from '@tanstack/react-query';
 
 export default function ProfilePage() {
@@ -152,9 +153,11 @@ function ProfileDetails({
       toast.success('Profile updated');
       onSaved();
     } catch (error) {
-      // The previous version had no catch at all: a failed save flipped the
-      // button to a green "Saved Successfully!" regardless of the outcome.
-      toast.error(error instanceof ApiError ? error.message : 'Could not save your profile');
+      // The catch is what stops a failed save flipping the button to a green
+      // "Saved Successfully!" regardless of outcome. This one still reports for
+      // itself: it calls `fetchApi` directly rather than through a mutation, so
+      // the global MutationCache handler never sees it.
+      toastError(error, 'Could not save your profile');
     } finally {
       setIsSaving(false);
     }
@@ -243,8 +246,8 @@ function PasswordCard() {
       setCurrent('');
       setNext('');
       setConfirm('');
-    } catch (error) {
-      toast.error(error instanceof ApiError ? error.message : 'Could not change your password');
+    } catch {
+      // Reported globally; the typed values stay so the user can correct one.
     }
   }
 
@@ -333,8 +336,8 @@ function MfaCard({ enabled }: { enabled: boolean }) {
       setQrUrl(res.qrCodeUrl ?? null);
       setSecret(res.secret ?? null);
       setStep('enrol');
-    } catch (error) {
-      toast.error(error instanceof ApiError ? error.message : 'Could not start 2FA setup');
+    } catch {
+      // Reported globally; the panel stays on its idle step.
     }
   }
 
@@ -348,8 +351,8 @@ function MfaCard({ enabled }: { enabled: boolean }) {
       // account recovery through support.
       if (res.recoveryCodes?.length) setRecoveryCodes(res.recoveryCodes);
       toast.success('Two-factor authentication is on');
-    } catch (error) {
-      toast.error(error instanceof ApiError ? error.message : 'That code was not accepted');
+    } catch {
+      // Reported globally; the QR step stays up so the code can be retyped.
     }
   }
 
@@ -359,8 +362,8 @@ function MfaCard({ enabled }: { enabled: boolean }) {
       setDisableOpen(false);
       setDisablePassword('');
       toast.success('Two-factor authentication is off');
-    } catch (error) {
-      toast.error(error instanceof ApiError ? error.message : 'Could not disable 2FA');
+    } catch {
+      // Reported globally; the dialog stays open with the password field intact.
     }
   }
 

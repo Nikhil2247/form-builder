@@ -116,6 +116,7 @@ export function useExportSubmissions(formId: string | undefined, formTitle?: str
   const orgId = useOrgId();
 
   return useMutation({
+    meta: { errorFallback: 'Could not export these responses' },
     mutationFn: async (format: 'csv' | 'json') => {
       if (!orgId || !formId) throw new ApiError('No form selected', 400);
 

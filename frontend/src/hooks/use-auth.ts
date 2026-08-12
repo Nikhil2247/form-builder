@@ -133,6 +133,7 @@ export function useSwitchOrganization() {
   const queryClient = useQueryClient();
 
   return useMutation({
+    meta: { errorFallback: 'Could not switch workspace' },
     mutationFn: async (orgId: string) =>
       unwrap<SwitchOrganizationResult>(
         await fetchApi(`/organizations/${orgId}/activate`, { method: 'POST' }),
@@ -195,6 +196,7 @@ export interface LoginPayload {
 export function useLogin() {
   const queryClient = useQueryClient();
   return useMutation({
+    meta: { errorFallback: 'Could not sign you in. Check your email and password.' },
     mutationFn: async (credentials: LoginPayload) => {
       const data = unwrap<any>(
         await fetchApi('/auth/login', {
@@ -220,6 +222,7 @@ export function useLogin() {
 export function useLoginMfa() {
   const queryClient = useQueryClient();
   return useMutation({
+    meta: { errorFallback: 'That code was not accepted' },
     mutationFn: async (payload: { mfaToken: string; code: string }) => {
       const data = unwrap<any>(
         await fetchApi('/auth/login/mfa', {
@@ -239,6 +242,7 @@ export function useLoginMfa() {
 export function useRegister() {
   const queryClient = useQueryClient();
   return useMutation({
+    meta: { errorFallback: 'Could not create your account' },
     mutationFn: async (credentials: {
       email: string;
       password: string;
@@ -264,6 +268,10 @@ export function useRegister() {
 export function useLogout() {
   const queryClient = useQueryClient();
   return useMutation({
+    // Signing out always succeeds from the user's point of view — `onSettled`
+    // clears local state and navigates to /login whether or not the API
+    // answered. A toast here would flash and be destroyed by the navigation.
+    meta: { silent: true },
     mutationFn: async () => {
       // Best-effort: even if the API call fails we must still drop local state,
       // otherwise a network blip leaves the user apparently signed in.
@@ -291,6 +299,7 @@ export function useLogout() {
 
 export function useForgotPassword() {
   return useMutation({
+    meta: { errorFallback: 'Could not send the reset link' },
     mutationFn: (email: string) =>
       fetchApi('/auth/forgot-password', {
         method: 'POST',
@@ -301,6 +310,7 @@ export function useForgotPassword() {
 
 export function useResetPassword() {
   return useMutation({
+    meta: { errorFallback: 'Could not reset your password' },
     mutationFn: (payload: { token: string; newPassword: string }) =>
       fetchApi('/auth/reset-password', {
         method: 'POST',
@@ -311,6 +321,7 @@ export function useResetPassword() {
 
 export function useChangePassword() {
   return useMutation({
+    meta: { errorFallback: 'Could not change your password' },
     mutationFn: (payload: { currentPassword: string; newPassword: string }) =>
       fetchApi('/auth/change-password', {
         method: 'POST',
@@ -325,6 +336,7 @@ export function useChangePassword() {
 
 export function useSetupMfa() {
   return useMutation({
+    meta: { errorFallback: 'Could not start two-factor setup' },
     mutationFn: async () =>
       unwrap<{ secret: string; qrCodeUrl: string; otpauthUrl?: string }>(
         await fetchApi('/auth/mfa/setup', { method: 'POST' }),
@@ -335,6 +347,7 @@ export function useSetupMfa() {
 export function useVerifyMfa() {
   const queryClient = useQueryClient();
   return useMutation({
+    meta: { errorFallback: 'That code was not accepted' },
     mutationFn: async (code: string) =>
       unwrap<{ recoveryCodes?: string[] }>(
         await fetchApi('/auth/mfa/verify', {
@@ -357,6 +370,7 @@ export function useVerifyMfa() {
 export function useDisableMfa() {
   const queryClient = useQueryClient();
   return useMutation({
+    meta: { errorFallback: 'Could not disable two-factor authentication' },
     mutationFn: (payload: { currentPassword: string }) =>
       fetchApi('/auth/mfa/disable', {
         method: 'POST',
@@ -370,6 +384,7 @@ export function useDisableMfa() {
 
 export function useRegenerateRecoveryCodes() {
   return useMutation({
+    meta: { errorFallback: 'Could not regenerate your recovery codes' },
     mutationFn: async (payload: { currentPassword: string }) =>
       unwrap<{ recoveryCodes: string[] }>(
         await fetchApi('/auth/mfa/recovery-codes', {

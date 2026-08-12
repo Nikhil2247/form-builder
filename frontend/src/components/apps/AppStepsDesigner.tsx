@@ -108,8 +108,8 @@ export function AppStepsDesigner({
 
     try {
       await reorder.mutateAsync({ appId, stepIds: ids });
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Could not reorder the steps');
+    } catch {
+      // Reported globally; the query invalidation restores the real order.
     }
   };
 
@@ -130,8 +130,8 @@ export function AppStepsDesigner({
       });
       setPickerFormId('');
       setOpenStepId(created.id);
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Could not add that step');
+    } catch {
+      // Reported globally; the picker keeps its selection for a retry.
     }
   };
 
@@ -239,8 +239,8 @@ function StepCard({
   const patch = async (dto: StepShapeDto) => {
     try {
       await updateStep.mutateAsync({ appId, stepId: step.id, ...dto });
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Could not save that change');
+    } catch {
+      // Reported globally.
     }
   };
 
@@ -248,10 +248,9 @@ function StepCard({
     try {
       await deleteStep.mutateAsync({ appId, stepId: step.id });
       toast.success(`Removed "${step.title}"`);
-    } catch (error) {
-      // The server refuses when another step's condition reads this one; its
-      // message names that step, so surface it verbatim.
-      toast.error(error instanceof Error ? error.message : 'Could not remove that step');
+    } catch {
+      // The server refuses when another step's condition reads this one, and
+      // its message names that step; the global handler surfaces it verbatim.
     }
   };
 

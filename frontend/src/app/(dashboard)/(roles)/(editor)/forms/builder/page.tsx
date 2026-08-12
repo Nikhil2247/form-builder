@@ -66,6 +66,7 @@ import { LogicBuilder } from '@/components/builder/LogicBuilder';
 import { RulesBuilder } from '@/components/builder/RulesBuilder';
 import { FormSettingsPanel } from '@/components/builder/FormSettingsPanel';
 import { fetchApi, unwrap } from '@/lib/api';
+import { toastError } from '@/lib/errors';
 import { useOrgId } from '@/hooks/use-auth';
 import { useFormAutosave } from '@/hooks/use-form-autosave';
 import {
@@ -136,10 +137,14 @@ interface LoadedFormResponse {
   form?: LoadedFormResponse;
 }
 
-/** Message from an unknown throw, without widening the catch binding to `any`. */
-function errorMessage(error: unknown, fallback: string): string {
-  return error instanceof Error && error.message ? error.message : fallback;
-}
+/**
+ * The load and publish paths below call `fetchApi` directly rather than through
+ * a mutation, so the global MutationCache handler never sees their failures —
+ * they report for themselves via `toastError`. Publish especially: the API
+ * answers a rule-compilation failure with a field-level `issues` array naming
+ * each broken rule, and `toastError` is what renders it instead of collapsing
+ * the whole thing to "Could not publish this form".
+ */
 
 function FormBuilderInner() {
   const router = useRouter();
@@ -261,7 +266,7 @@ function FormBuilderInner() {
       } catch (error) {
         if (cancelled) return;
         setLoading(false);
-        toast.error(errorMessage(error, 'Could not load this form'));
+        toastError(error, 'Could not load this form');
       }
     }
 
@@ -338,7 +343,7 @@ function FormBuilderInner() {
       markPublished();
       toast.success(wasPublished ? 'New version published' : 'Your form is live');
     } catch (error) {
-      toast.error(errorMessage(error, 'Could not publish this form'));
+      toastError(error, 'Could not publish this form');
     } finally {
       setIsPublishing(false);
     }

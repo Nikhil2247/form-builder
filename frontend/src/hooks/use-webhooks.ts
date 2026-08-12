@@ -79,6 +79,7 @@ export function useCreateWebhook(formId?: string) {
   const orgId = useOrgId();
 
   return useMutation({
+    meta: { errorFallback: 'Could not create this webhook' },
     mutationFn: async (dto: { url: string; name?: string }) =>
       unwrap<Webhook>(
         await fetchApi(`/organizations/${orgId}/forms/${formId}/webhooks`, {
@@ -95,6 +96,7 @@ export function useDeleteWebhook(formId?: string) {
   const orgId = useOrgId();
 
   return useMutation({
+    meta: { errorFallback: 'Could not delete this webhook' },
     mutationFn: (webhookId: string) =>
       fetchApi(`/organizations/${orgId}/forms/${formId}/webhooks/${webhookId}`, {
         method: 'DELETE',
@@ -109,6 +111,7 @@ export function useRotateWebhookSecret(formId?: string) {
   const orgId = useOrgId();
 
   return useMutation({
+    meta: { errorFallback: 'Could not rotate the secret' },
     mutationFn: async (webhookId: string) =>
       unwrap<{ secret: string }>(
         await fetchApi(

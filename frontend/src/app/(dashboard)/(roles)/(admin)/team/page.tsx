@@ -96,8 +96,8 @@ export default function TeamPage() {
     try {
       await updateRole.mutateAsync({ memberId: member.id, role });
       toast.success(`${member.user.email} is now ${ORG_ROLE_LABELS[role]}`);
-    } catch (err: any) {
-      toast.error(err?.message ?? 'Could not change this role');
+    } catch {
+      // Reported globally.
     }
   }
 
@@ -352,8 +352,8 @@ export default function TeamPage() {
             await inviteMember.mutateAsync(values);
             toast.success(`Invitation sent to ${values.email}`);
             setIsInviteOpen(false);
-          } catch (err: any) {
-            toast.error(err?.message ?? 'Could not send this invitation');
+          } catch {
+            // Reported globally; the dialog stays open with the address typed.
           }
         }}
       />
@@ -376,8 +376,8 @@ export default function TeamPage() {
             await removeMember.mutateAsync(removeTarget.id);
             toast.success('Member removed');
             setRemoveTarget(null);
-          } catch (err: any) {
-            toast.error(err?.message ?? 'Could not remove this member');
+          } catch {
+            // Reported globally.
           }
         }}
       />
@@ -395,8 +395,8 @@ export default function TeamPage() {
             await revokeInvite.mutateAsync(revokeTarget.id);
             toast.success('Invitation revoked');
             setRevokeTarget(null);
-          } catch (err: any) {
-            toast.error(err?.message ?? 'Could not revoke this invitation');
+          } catch {
+            // Reported globally.
           }
         }}
       />

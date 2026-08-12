@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { generateAndDownloadExcel } from '@/lib/excelExport';
+import { toastError } from '@/lib/errors';
 import {
   FileSpreadsheet,
   Search,
@@ -15,6 +16,7 @@ import {
   Eye,
   X,
   Sparkles,
+  Loader2,
   BarChart2
 } from 'lucide-react';
 
@@ -26,6 +28,20 @@ interface SubmissionsViewProps {
 export function SubmissionsView({ form, submissions }: SubmissionsViewProps) {
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedSubmission, setSelectedSubmission] = useState<FormSubmission | null>(null);
+  const [isExporting, setIsExporting] = useState(false);
+
+  // The exporter fetches `xlsx` on first use, so the click is no longer
+  // instantaneous — and a failed chunk fetch would otherwise be silent.
+  async function exportExcel() {
+    setIsExporting(true);
+    try {
+      await generateAndDownloadExcel(form, submissions);
+    } catch (err) {
+      toastError(err, 'Could not build the Excel export');
+    } finally {
+      setIsExporting(false);
+    }
+  }
 
   const filteredSubmissions = submissions.filter((sub) => {
     const jsonStr = JSON.stringify(sub).toLowerCase();
@@ -61,11 +77,17 @@ export function SubmissionsView({ form, submissions }: SubmissionsViewProps) {
             </div>
 
             <Button
-              onClick={() => generateAndDownloadExcel(form, submissions)}
+              onClick={exportExcel}
+              disabled={isExporting}
               variant="default"
               className="gap-2 shadow-md shadow-emerald-500/10 font-bold bg-emerald-600 hover:bg-emerald-700 text-white"
             >
-              <FileSpreadsheet className="h-5 w-5" /> Export Excel (.xlsx)
+              {isExporting ? (
+                <Loader2 className="h-5 w-5 animate-spin" />
+              ) : (
+                <FileSpreadsheet className="h-5 w-5" />
+              )}
+              {isExporting ? 'Preparing…' : 'Export Excel (.xlsx)'}
             </Button>
           </div>
 

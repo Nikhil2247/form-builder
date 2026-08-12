@@ -201,10 +201,8 @@ export default function PlatformOrganizationsPage() {
               await suspendOrg.mutateAsync({ orgId: suspendTarget.id, reason });
               toast.success(`${suspendTarget.name} suspended`);
               setSuspendTarget(null);
-            } catch (err) {
-              toast.error(
-                err instanceof Error ? err.message : 'Could not suspend this organization',
-              );
+            } catch {
+              // Reported globally; the modal stays open with the reason typed.
             }
           }}
         />
@@ -229,10 +227,8 @@ export default function PlatformOrganizationsPage() {
             await activateOrg.mutateAsync(activateTarget.id);
             toast.success(`${activateTarget.name} reactivated`);
             setActivateTarget(null);
-          } catch (err) {
-            toast.error(
-              err instanceof Error ? err.message : 'Could not reactivate this organization',
-            );
+          } catch {
+            // Reported globally.
           }
         }}
       />

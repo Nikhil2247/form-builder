@@ -120,8 +120,8 @@ export default function FormSubmissionsPage() {
     try {
       const result = await exportSubmissions.mutateAsync(format);
       toast.success(`Downloaded ${result.filename}`);
-    } catch (err: any) {
-      toast.error(err?.message ?? 'Export failed');
+    } catch {
+      // Reported globally.
     }
   }
 

@@ -4,6 +4,7 @@ import React from 'react';
 import { AlertTriangle, RefreshCw, ShieldAlert } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
+import { describeError, ErrorDetail } from '@/lib/errors';
 
 /**
  * Empty, error, and forbidden states.
@@ -71,12 +72,10 @@ export function ErrorState({
   variant = 'panel',
   className,
 }: ErrorStateProps) {
-  const message =
-    error instanceof Error
-      ? error.message
-      : typeof error === 'string'
-        ? error
-        : 'An unexpected error occurred.';
+  // Same humanising as the toasts, so an offline failure reads "check your
+  // connection" here too rather than the raw "Failed to fetch", and so any
+  // field-level issues the API sent are shown rather than dropped.
+  const described = describeError(error, 'An unexpected error occurred.');
 
   return (
     <div
@@ -93,7 +92,10 @@ export function ErrorState({
         <AlertTriangle className="size-5" strokeWidth={1.5} />
       </div>
       <h3 className="text-sm font-semibold text-foreground">{title}</h3>
-      <p className="mt-1.5 max-w-md text-sm text-muted-foreground">{message}</p>
+      <p className="mt-1.5 max-w-md text-sm text-muted-foreground">{described.title}</p>
+      <div className="mt-1.5 max-w-md text-left text-sm text-muted-foreground">
+        <ErrorDetail description={described.description} issues={described.issues} />
+      </div>
       {onRetry && (
         <Button variant="outline" size="sm" className="mt-5 gap-2" onClick={onRetry}>
           <RefreshCw className="size-3.5" />

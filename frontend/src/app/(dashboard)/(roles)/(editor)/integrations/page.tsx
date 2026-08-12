@@ -244,8 +244,8 @@ function IntegrationsContent() {
             // gone — reads never include it.
             if (created?.secret) setRevealedSecret(created.secret);
             toast.success('Webhook created');
-          } catch (err: any) {
-            toast.error(err?.message ?? 'Could not create this webhook');
+          } catch {
+            // Reported globally; the dialog stays open with the URL typed.
           }
         }}
       />
@@ -283,8 +283,8 @@ function IntegrationsContent() {
             const result = await rotateSecret.mutateAsync(secretTarget.id);
             setSecretTarget(null);
             if (result?.secret) setRevealedSecret(result.secret);
-          } catch (err: any) {
-            toast.error(err?.message ?? 'Could not rotate the secret');
+          } catch {
+            // Reported globally; the confirm dialog stays open.
           }
         }}
       />
@@ -302,8 +302,8 @@ function IntegrationsContent() {
             await deleteWebhook.mutateAsync(deleteTarget.id);
             toast.success('Webhook deleted');
             setDeleteTarget(null);
-          } catch (err: any) {
-            toast.error(err?.message ?? 'Could not delete this webhook');
+          } catch {
+            // Reported globally.
           }
         }}
       />

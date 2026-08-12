@@ -144,8 +144,8 @@ export default function TrashPage() {
             await restoreForm.mutateAsync(restoreTarget.id);
             toast.success(`Restored "${restoreTarget.title}"`);
             setRestoreTarget(null);
-          } catch (err: any) {
-            toast.error(err?.message ?? 'Could not restore this form');
+          } catch {
+            // Reported globally.
           }
         }}
       />

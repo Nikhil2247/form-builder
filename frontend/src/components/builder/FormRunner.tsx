@@ -8,7 +8,6 @@ import React, {
   useRef,
   useState,
 } from 'react';
-import confetti from 'canvas-confetti';
 import { AlertCircle, ArrowLeft, ArrowRight, Award, Check, CheckCircle2, Loader2 } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
@@ -603,7 +602,14 @@ export function FormRunner({
         const reduced =
           typeof window !== 'undefined' &&
           window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
-        if (!reduced) confetti({ particleCount: 100, spread: 70, origin: { y: 0.6 } });
+        if (!reduced) {
+          // Fetched here rather than imported: this can only ever run after a
+          // successful submit, so shipping it up front made every respondent
+          // download a physics library for an effect most never reach — and
+          // anyone on reduced-motion never reaches at all.
+          const { default: confetti } = await import('canvas-confetti');
+          confetti({ particleCount: 100, spread: 70, origin: { y: 0.6 } });
+        }
       } catch {
         /* confetti is decorative; never let it break a successful submit */
       }

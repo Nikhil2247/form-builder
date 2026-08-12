@@ -112,8 +112,8 @@ export default function RecordDetailPage() {
       toast.success('Record deleted');
       setConfirmDelete(false);
       router.push('/records');
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Could not delete this record');
+    } catch {
+      // Reported globally; the confirm dialog stays open.
     }
   }
 

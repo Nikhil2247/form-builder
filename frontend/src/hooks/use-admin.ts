@@ -321,6 +321,7 @@ function useInvalidateUser() {
 export function useSetSystemRole() {
   const invalidate = useInvalidateUser();
   return useMutation({
+    meta: { errorFallback: 'Could not change this system role' },
     mutationFn: ({ userId, systemRole }: { userId: string; systemRole: SystemRole }) =>
       fetchApi(`/admin/users/${userId}/system-role`, {
         method: 'PATCH',
@@ -334,6 +335,7 @@ export function useSetUserOrgRole() {
   const qc = useQueryClient();
   const invalidate = useInvalidateUser();
   return useMutation({
+    meta: { errorFallback: 'Could not change this workspace role' },
     mutationFn: ({
       userId,
       orgId,
@@ -362,6 +364,7 @@ export interface RevokeSessionsResult {
 export function useRevokeUserSessions() {
   const invalidate = useInvalidateUser();
   return useMutation({
+    meta: { errorFallback: 'Could not revoke this user’s sessions' },
     mutationFn: async (userId: string) =>
       unwrap<RevokeSessionsResult>(
         await fetchApi(`/admin/users/${userId}/revoke-sessions`, { method: 'POST' }),
@@ -373,6 +376,7 @@ export function useRevokeUserSessions() {
 export function useSetUserSuspended() {
   const invalidate = useInvalidateUser();
   return useMutation({
+    meta: { errorFallback: 'Could not change this user’s status' },
     mutationFn: ({ userId, suspended }: { userId: string; suspended: boolean }) =>
       fetchApi(`/admin/users/${userId}/suspended`, {
         method: 'PATCH',
@@ -385,6 +389,7 @@ export function useSetUserSuspended() {
 export function useResetUserMfa() {
   const invalidate = useInvalidateUser();
   return useMutation({
+    meta: { errorFallback: 'Could not reset two-factor for this user' },
     mutationFn: async (userId: string) =>
       unwrap<{ message: string }>(
         await fetchApi(`/admin/users/${userId}/reset-mfa`, { method: 'POST' }),
@@ -461,6 +466,7 @@ export interface OrgQuotaUpdate {
 export function useUpdateOrgQuotas() {
   const qc = useQueryClient();
   return useMutation({
+    meta: { errorFallback: 'Could not save these quotas' },
     mutationFn: ({ orgId, quotas }: { orgId: string; quotas: OrgQuotaUpdate }) =>
       fetchApi(`/admin/organizations/${orgId}/quotas`, {
         method: 'PATCH',
@@ -480,6 +486,7 @@ export function useUpdateOrgQuotas() {
 export function useSuspendOrganization() {
   const qc = useQueryClient();
   return useMutation({
+    meta: { errorFallback: 'Could not suspend this organization' },
     mutationFn: ({ orgId, reason }: { orgId: string; reason: string }) =>
       fetchApi(`/admin/organizations/${orgId}/suspend`, {
         method: 'POST',
@@ -496,6 +503,7 @@ export function useSuspendOrganization() {
 export function useActivateOrganization() {
   const qc = useQueryClient();
   return useMutation({
+    meta: { errorFallback: 'Could not reactivate this organization' },
     mutationFn: (orgId: string) =>
       fetchApi(`/admin/organizations/${orgId}/activate`, { method: 'POST' }),
     onSuccess: (_data, orgId) => {

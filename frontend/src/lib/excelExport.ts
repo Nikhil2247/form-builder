@@ -1,7 +1,15 @@
-import * as XLSX from 'xlsx';
 import { FormConfig, FormSubmission } from '@/types/form';
 
-export function generateAndDownloadExcel(form: FormConfig, submissions: FormSubmission[]) {
+/**
+ * Build and download a multi-sheet .xlsx of a form's responses.
+ *
+ * `xlsx` is roughly a megabyte of parser/writer that this one button uses, so
+ * it is loaded on demand rather than bundled into the submissions route. That
+ * makes this async: callers must await it, and should show progress, because
+ * the first click now waits on a network fetch.
+ */
+export async function generateAndDownloadExcel(form: FormConfig, submissions: FormSubmission[]) {
+  const XLSX = await import('xlsx');
   const workbook = XLSX.utils.book_new();
 
   // 1. Build Submissions Sheet Data

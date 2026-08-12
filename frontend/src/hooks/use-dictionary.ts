@@ -183,6 +183,7 @@ export function useCreateList(scope: DictionaryScope) {
   const invalidate = useInvalidateScope(scope);
 
   return useMutation({
+    meta: { errorFallback: 'Could not create this list' },
     mutationFn: async (draft: ListDraft) =>
       unwrap<ChoiceListSummary>(
         await fetchApi(base!, { method: 'POST', body: JSON.stringify(draft) }),
@@ -196,6 +197,7 @@ export function useUpdateList(scope: DictionaryScope) {
   const invalidate = useInvalidateScope(scope);
 
   return useMutation({
+    meta: { errorFallback: 'Could not save this list' },
     mutationFn: async ({ slug, ...patch }: ListDraft & { slug: string }) =>
       unwrap<ChoiceListSummary>(
         await fetchApi(`${base}/${encodeURIComponent(slug)}`, {
@@ -212,6 +214,7 @@ export function useDeleteList(scope: DictionaryScope) {
   const invalidate = useInvalidateScope(scope);
 
   return useMutation({
+    meta: { errorFallback: 'Could not delete this list' },
     mutationFn: async (slug: string) =>
       unwrap(await fetchApi(`${base}/${encodeURIComponent(slug)}`, { method: 'DELETE' })),
     onSuccess: invalidate,
@@ -234,6 +237,7 @@ export function usePreviewCsv(scope: DictionaryScope) {
   const base = useBasePath(scope);
 
   return useMutation({
+    meta: { errorFallback: 'Could not read that CSV' },
     mutationFn: async (csv: string) =>
       unwrap<CsvPreview>(
         await fetchApi(`${base}/import/preview`, {
@@ -250,6 +254,7 @@ export function useImportCsv(scope: DictionaryScope) {
   const invalidate = useInvalidateScope(scope);
 
   return useMutation({
+    meta: { errorFallback: 'Could not import that CSV' },
     mutationFn: async ({
       slug,
       csv,
@@ -283,6 +288,7 @@ function useCsvDownload(scope: DictionaryScope, endpoint: 'export' | 'template')
   const base = useBasePath(scope);
 
   return useMutation({
+    meta: { errorFallback: 'Could not download that file' },
     mutationFn: async ({ slug, name }: { slug: string; name?: string }) => {
       const token = getAccessToken();
       const response = await fetch(

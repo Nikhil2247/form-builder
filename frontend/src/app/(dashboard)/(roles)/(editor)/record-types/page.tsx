@@ -110,8 +110,8 @@ export default function RecordTypesPage() {
       await createType.mutateAsync(values);
       toast.success(`Created "${values.name}"`);
       setCreateOpen(false);
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Could not create this record type');
+    } catch {
+      // Reported globally; the dialog stays open with the name typed.
     }
   }
 
@@ -121,9 +121,9 @@ export default function RecordTypesPage() {
       await deleteType.mutateAsync(deleteTarget.id);
       toast.success('Record type deleted');
       setDeleteTarget(null);
-    } catch (err) {
-      // The API refuses while records still exist, and says how many.
-      toast.error(err instanceof Error ? err.message : 'Could not delete this record type');
+    } catch {
+      // The API refuses while records still exist, and says how many — that
+      // sentence is what the global handler shows.
     }
   }
 
@@ -450,8 +450,8 @@ function IdentitySettingsModal({
       });
       toast.success('Identity settings saved');
       onOpenChange(false);
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Could not save these settings');
+    } catch {
+      // Reported globally; the dialog stays open with the mapping intact.
     }
   }
 

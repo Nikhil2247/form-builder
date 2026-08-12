@@ -151,6 +151,7 @@ export function useUpdateOrganization(orgId?: string) {
   const id = orgId ?? activeOrgId;
 
   return useMutation({
+    meta: { errorFallback: 'Could not save these changes' },
     mutationFn: (data: Record<string, unknown>) =>
       fetchApi(`/organizations/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
     onSuccess: () => {
@@ -167,6 +168,7 @@ export function useInviteMember(orgId?: string) {
   const id = orgId ?? activeOrgId;
 
   return useMutation({
+    meta: { errorFallback: 'Could not send this invitation' },
     mutationFn: (data: { email: string; role: OrgRole }) =>
       fetchApi(`/organizations/${id}/invitations`, {
         method: 'POST',
@@ -182,6 +184,7 @@ export function useRevokeInvite(orgId?: string) {
   const id = orgId ?? activeOrgId;
 
   return useMutation({
+    meta: { errorFallback: 'Could not revoke this invitation' },
     mutationFn: (invitationId: string) =>
       fetchApi(`/organizations/${id}/invitations/${invitationId}`, { method: 'DELETE' }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['organization', id, 'invitations'] }),
@@ -195,6 +198,7 @@ export function useUpdateMemberRole(orgId?: string) {
   const id = orgId ?? activeOrgId;
 
   return useMutation({
+    meta: { errorFallback: 'Could not change this role' },
     mutationFn: ({ memberId, role }: { memberId: string; role: OrgRole }) =>
       fetchApi(`/organizations/${id}/members/${memberId}`, {
         method: 'PATCH',
@@ -210,6 +214,7 @@ export function useRemoveMember(orgId?: string) {
   const id = orgId ?? activeOrgId;
 
   return useMutation({
+    meta: { errorFallback: 'Could not remove this member' },
     mutationFn: (memberId: string) =>
       fetchApi(`/organizations/${id}/members/${memberId}`, { method: 'DELETE' }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['organization', id, 'members'] }),

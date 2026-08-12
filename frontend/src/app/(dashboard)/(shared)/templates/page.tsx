@@ -4,7 +4,7 @@ import React, { useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { BookTemplate, Layers, Loader2, TrendingUp } from 'lucide-react';
-import { toast } from 'sonner';
+import { toastError } from '@/lib/errors';
 
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -52,10 +52,13 @@ export default function TemplatesPage() {
       const formId = (form as any)?.id ?? (form as any)?.form?.id;
       if (!formId) throw new Error('The API did not return the new form');
       router.push(`/forms/builder?id=${formId}`);
-    } catch (err: any) {
-      // Previously wrapped in try/finally with no catch, so a failure just
-      // stopped the spinner and left the user staring at an unchanged page.
-      toast.error(err?.message ?? 'Could not create a form from this template');
+    } catch (err) {
+      // Reported here rather than left to the global handler, because the
+      // `throw` above fires AFTER the mutation resolved — a 2xx that carried no
+      // form id is not a mutation error and the MutationCache never sees it.
+      // The fallback matches the mutation's own `meta.errorFallback`, so on the
+      // paths where both fire they collapse into one toast.
+      toastError(err, 'Could not create a form from this template');
     } finally {
       setUsingId(null);
     }

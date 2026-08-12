@@ -217,6 +217,24 @@ export interface FormTheme {
   cardVariant: 'card' | 'elevated' | 'glass' | 'minimal';
   coverImageUrl?: string;
   logoUrl?: string;
+
+  /**
+   * ── App appearance ────────────────────────────────────────────────────────
+   * How a public APP is laid out, as opposed to how it is coloured. Ignored by
+   * single forms, which have their own `layoutMode`.
+   *
+   * Typed loosely as `string` on purpose. These arrive from a free-form JSONB
+   * column that no schema validates, so the union lives in
+   * `components/apps/appearance.ts` and is enforced when the value is READ —
+   * declaring the union here would be a promise this type cannot keep, and
+   * would make an unrecognised stored value a type error at the wrong end.
+   */
+  appShell?: string;
+  appMasthead?: string;
+  appStepStyle?: string;
+  appDensity?: string;
+  appTexture?: string;
+  appWidth?: string;
 }
 
 export interface FormPage {

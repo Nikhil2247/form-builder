@@ -15,13 +15,15 @@ export default function ForgotPasswordPage() {
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    // No onError: the global handler in query-provider reports it, using the
+    // API's own message where there is one. This handler used to replace that
+    // with a flat "Failed to send reset link.", which hid the rate-limit
+    // message the endpoint returns after five attempts — so a user who tripped
+    // it was told the send had failed and kept retrying.
     forgotPasswordMutation.mutate(email, {
       onSuccess: () => {
         toast.success('If an account exists, a reset link was sent.');
       },
-      onError: () => {
-        toast.error('Failed to send reset link.');
-      }
     });
   };
 

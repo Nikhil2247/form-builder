@@ -1,6 +1,6 @@
 import {
   Controller, Get, Post, Put, Delete, Body, Param,
-  UseGuards, Req, Query, Res
+  UseGuards, Req, Query, Res, Logger
 } from '@nestjs/common';
 import { FormsService } from './forms.service';
 import { CreateFormDto } from './dto/create-form.dto';
@@ -27,6 +27,8 @@ import { parsePagination } from '../../common/pagination/pagination';
 @Controller('organizations/:orgId/forms')
 @UseGuards(JwtAuthGuard, OrgMemberGuard, RoleGuard)
 export class FormsController {
+  private readonly logger = new Logger(FormsController.name);
+
   constructor(private readonly formsService: FormsService) {}
 
   @Post()
@@ -160,6 +162,10 @@ export class FormsController {
 
   /**
    * GET /organizations/:orgId/forms/:formId/export — Export submissions.
+   *
+   * Streamed. `exportSubmissions` validates and throws before handing back the
+   * generator, so a missing form or an over-cap request still becomes a normal
+   * JSON error — nothing is written until the first chunk is pulled below.
    */
   @Get(':formId/export')
   @RequiredRole('VIEWER')
@@ -170,16 +176,39 @@ export class FormsController {
     @Res() res: Response,
   ) {
     const formatType = format === 'json' ? 'json' : 'csv';
-    const data = await this.formsService.exportSubmissions(orgId, formId, formatType);
-    
-    if (formatType === 'json') {
-      res.setHeader('Content-Type', 'application/json');
-      res.setHeader('Content-Disposition', `attachment; filename="export-${formId}.json"`);
-      return res.send(data);
-    } else {
-      res.setHeader('Content-Type', 'text/csv');
-      res.setHeader('Content-Disposition', `attachment; filename="export-${formId}.csv"`);
-      return res.send(data);
+    const chunks = await this.formsService.exportSubmissions(orgId, formId, formatType);
+
+    res.setHeader(
+      'Content-Type',
+      formatType === 'json' ? 'application/json; charset=utf-8' : 'text/csv; charset=utf-8',
+    );
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="export-${formId}.${formatType}"`,
+    );
+    // An export is per-org data behind auth and is never revalidated.
+    res.setHeader('Cache-Control', 'no-store');
+
+    try {
+      for await (const chunk of chunks) {
+        // Respect backpressure: without this a fast reader query on a slow
+        // connection buffers the entire export in the socket's write queue,
+        // which is the memory problem this change exists to remove.
+        if (!res.write(chunk)) {
+          await new Promise<void>((resolve) => res.once('drain', resolve));
+        }
+      }
+      res.end();
+    } catch (err) {
+      // The status line and headers are already on the wire, so there is no way
+      // to turn this into a 500 the client can read. Destroying the socket is
+      // what makes the download fail loudly instead of arriving truncated and
+      // looking complete.
+      this.logger.error(
+        `Export stream failed for form ${formId}`,
+        err instanceof Error ? err.stack : String(err),
+      );
+      res.destroy();
     }
   }
 

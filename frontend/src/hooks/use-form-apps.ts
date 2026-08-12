@@ -110,6 +110,14 @@ export interface FormApp {
   subjectTypeId: string;
   config?: Partial<FormAppConfig> | null;
   subjectType: SubjectTypeRef;
+  /**
+   * Null until an author deliberately publishes a link.
+   *
+   * Declared here rather than only on the detail type because the list endpoint
+   * returns it too — it selects the whole row — so the list card can offer the
+   * public link without a second fetch.
+   */
+  publicSlug: string | null;
 }
 
 /** `GET /apps/:appId` carries the full subject type, steps, periods and settings. */
@@ -118,8 +126,6 @@ export interface FormAppDetail extends Omit<FormApp, 'subjectType'> {
   forms: AppForm[];
   steps: FormAppStep[];
   periods: FormAppPeriod[];
-  /** Null until an author deliberately publishes a link. */
-  publicSlug: string | null;
   themeConfig: FormTheme | null;
   branding: AppBranding | null;
   requireAuth: boolean;
@@ -231,6 +237,7 @@ export function useCreateFormApp() {
   const orgId = useOrgId();
 
   return useMutation({
+    meta: { errorFallback: 'Could not create this app' },
     mutationFn: async (dto: CreateFormAppDto) => {
       if (!orgId) throw new Error('No active organization');
       return unwrap<FormApp>(
@@ -251,6 +258,7 @@ export function useUpdateFormApp() {
   const orgId = useOrgId();
 
   return useMutation({
+    meta: { errorFallback: 'Could not save this app' },
     mutationFn: async ({ appId, ...dto }: UpdateFormAppDto & { appId: string }) => {
       if (!orgId) throw new Error('No active organization');
       return unwrap<FormApp>(
@@ -274,6 +282,7 @@ export function useDeleteFormApp() {
   const orgId = useOrgId();
 
   return useMutation({
+    meta: { errorFallback: 'Could not delete this app' },
     mutationFn: async (appId: string) => {
       if (!orgId) throw new Error('No active organization');
       await fetchApi(`/organizations/${orgId}/apps/${appId}`, { method: 'DELETE' });
@@ -294,19 +303,105 @@ export function useDeleteFormApp() {
 // is what a config-blob save would do.
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** Every step/period/settings write restates the same app; refetch it once. */
+/** The subset of a detail the apps list renders, so the two never disagree. */
+function listFieldsOf(detail: FormAppDetail): Partial<FormApp> {
+  return {
+    name: detail.name,
+    description: detail.description,
+    icon: detail.icon,
+    isPublished: detail.isPublished,
+    publicSlug: detail.publicSlug,
+    config: detail.config,
+  };
+}
+
+/**
+ * A write against one app's configuration.
+ *
+ * ── Why these are optimistic ───────────────────────────────────────────────
+ * Every control in the settings panel is bound to server state — a switch reads
+ * `checked={app.requireAuth}`. Without an optimistic write, clicking one starts
+ * a PATCH, waits for it, invalidates, and only moves once a SECOND request has
+ * refetched the whole app detail: its subject type, forms, steps and periods.
+ * Two sequential round trips, the heavier one last, and the switch sits under
+ * the cursor in its old position for the duration. On anything but a local
+ * database that reads as a frozen dialog.
+ *
+ * So the cache is patched synchronously on click and the server reconciles
+ * afterwards. The control moves immediately because the state it renders from
+ * has already changed.
+ *
+ * `optimistic` is deliberately not defaulted: a create cannot be applied ahead
+ * of the server, because the row it returns has an id nothing else can invent.
+ */
 function useAppConfigMutation<TVars, TResult>(
   run: (orgId: string, vars: TVars & { appId: string }) => Promise<TResult>,
+  errorFallback: string,
+  optimistic?: (app: FormAppDetail, vars: TVars & { appId: string }) => FormAppDetail,
 ) {
   const qc = useQueryClient();
   const orgId = useOrgId();
 
   return useMutation({
+    // Named so the reconciliation below can count only its own siblings.
+    mutationKey: ['form-app-config'],
+    meta: { errorFallback },
     mutationFn: async (vars: TVars & { appId: string }) => {
       if (!orgId) throw new Error('No active organization');
       return run(orgId, vars);
     },
-    onSuccess: (_result, vars) => {
+
+    onMutate: async (vars) => {
+      if (!optimistic) return undefined;
+
+      const detailKey = ['form-app', orgId, vars.appId];
+      const listKey = ['form-apps', orgId];
+
+      // A GET already in flight would resolve after this write and restore the
+      // value the user just changed, so it is cancelled before the cache is
+      // touched. This is the difference between a switch that moves and one
+      // that moves, snaps back, then moves again.
+      await qc.cancelQueries({ queryKey: detailKey });
+
+      const previousDetail = qc.getQueryData<FormAppDetail>(detailKey);
+      const previousList = qc.getQueryData<FormApp[]>(listKey);
+      if (!previousDetail) return { previousDetail, previousList };
+
+      const nextDetail = optimistic(previousDetail, vars);
+      qc.setQueryData<FormAppDetail>(detailKey, nextDetail);
+
+      // The card behind the dialog carries the Live badge. Left alone it would
+      // contradict the switch in front of it until the refetch landed.
+      if (previousList) {
+        qc.setQueryData<FormApp[]>(
+          listKey,
+          previousList.map((app) =>
+            app.id === vars.appId ? { ...app, ...listFieldsOf(nextDetail) } : app,
+          ),
+        );
+      }
+
+      return { previousDetail, previousList };
+    },
+
+    onError: (_error, vars, context) => {
+      // Put back exactly what was there. The global handler has already shown
+      // the message, so the only job here is to stop the control from claiming
+      // a change that did not happen.
+      if (!context) return;
+      if (context.previousDetail) {
+        qc.setQueryData(['form-app', orgId, vars.appId], context.previousDetail);
+      }
+      if (context.previousList) {
+        qc.setQueryData(['form-apps', orgId], context.previousList);
+      }
+    },
+
+    onSettled: (_result, _error, vars) => {
+      // Toggling three switches in a row must not queue three refetches of the
+      // full detail — and a refetch landing between two of them would drag the
+      // later switches back. Only the last mutation still settling reconciles.
+      if (qc.isMutating({ mutationKey: ['form-app-config'] }) > 1) return;
       qc.invalidateQueries({ queryKey: ['form-app', orgId, vars.appId] });
       qc.invalidateQueries({ queryKey: ['form-apps', orgId] });
     },
@@ -332,6 +427,7 @@ export function useCreateAppStep() {
         method: 'POST',
         body: JSON.stringify(dto),
       }).then((r) => unwrap<FormAppStep>(r)),
+    'Could not add that step',
   );
 }
 
@@ -342,24 +438,52 @@ export function useUpdateAppStep() {
         method: 'PATCH',
         body: JSON.stringify(dto),
       }).then((r) => unwrap<FormAppStep>(r)),
+    'Could not save that change',
+    (app, { appId: _appId, stepId, ...dto }) => ({
+      ...app,
+      steps: app.steps.map((step) => (step.id === stepId ? { ...step, ...dto } : step)),
+    }),
   );
 }
 
 export function useDeleteAppStep() {
-  return useAppConfigMutation<{ stepId: string }, void>((orgId, { appId, stepId }) =>
-    fetchApi(`/organizations/${orgId}/apps/${appId}/steps/${stepId}`, { method: 'DELETE' }).then(
-      () => undefined,
-    ),
+  return useAppConfigMutation<{ stepId: string }, void>(
+    (orgId, { appId, stepId }) =>
+      fetchApi(`/organizations/${orgId}/apps/${appId}/steps/${stepId}`, { method: 'DELETE' }).then(
+        () => undefined,
+      ),
+    'Could not remove that step',
+    (app, { stepId }) => ({
+      ...app,
+      steps: app.steps.filter((step) => step.id !== stepId),
+    }),
   );
 }
 
 /** The server requires every step id exactly once — a partial list is rejected. */
 export function useReorderAppSteps() {
-  return useAppConfigMutation<{ stepIds: string[] }, void>((orgId, { appId, stepIds }) =>
-    fetchApi(`/organizations/${orgId}/apps/${appId}/steps/reorder`, {
-      method: 'POST',
-      body: JSON.stringify({ stepIds }),
-    }).then(() => undefined),
+  return useAppConfigMutation<{ stepIds: string[] }, void>(
+    (orgId, { appId, stepIds }) =>
+      fetchApi(`/organizations/${orgId}/apps/${appId}/steps/reorder`, {
+        method: 'POST',
+        body: JSON.stringify({ stepIds }),
+      }).then(() => undefined),
+    'Could not reorder the steps',
+    // Reordering is the one write where waiting is most visible: a dragged row
+    // that springs back to its old position before settling looks like the drag
+    // failed. `order` is restated to match, since it is what the list sorts on.
+    (app, { stepIds }) => {
+      const byId = new Map(app.steps.map((step) => [step.id, step]));
+      const reordered = stepIds
+        .map((id, index) => {
+          const step = byId.get(id);
+          return step ? { ...step, order: index } : null;
+        })
+        .filter((step): step is FormAppStep => step !== null);
+      // A server that rejects a partial list would reject this too, but the
+      // cache must not silently drop a step the caller forgot to name.
+      return reordered.length === app.steps.length ? { ...app, steps: reordered } : app;
+    },
   );
 }
 
@@ -374,11 +498,13 @@ export function useCreateAppPeriod() {
   return useAppConfigMutation<
     { label: string; startsAt: string; endsAt: string; isActive?: boolean },
     FormAppPeriod
-  >((orgId, { appId, ...dto }) =>
-    fetchApi(`/organizations/${orgId}/apps/${appId}/periods`, {
-      method: 'POST',
-      body: JSON.stringify(dto),
-    }).then((r) => unwrap<FormAppPeriod>(r)),
+  >(
+    (orgId, { appId, ...dto }) =>
+      fetchApi(`/organizations/${orgId}/apps/${appId}/periods`, {
+        method: 'POST',
+        body: JSON.stringify(dto),
+      }).then((r) => unwrap<FormAppPeriod>(r)),
+    'Could not add that period',
   );
 }
 
@@ -389,14 +515,27 @@ export function useUpdateAppPeriod() {
         method: 'PATCH',
         body: JSON.stringify(dto),
       }).then((r) => unwrap<FormAppPeriod>(r)),
+    'Could not save that period',
+    (app, { appId: _appId, periodId, ...dto }) => ({
+      ...app,
+      periods: app.periods.map((period) =>
+        period.id === periodId ? { ...period, ...dto } : period,
+      ),
+    }),
   );
 }
 
 export function useDeleteAppPeriod() {
-  return useAppConfigMutation<{ periodId: string }, void>((orgId, { appId, periodId }) =>
-    fetchApi(`/organizations/${orgId}/apps/${appId}/periods/${periodId}`, {
-      method: 'DELETE',
-    }).then(() => undefined),
+  return useAppConfigMutation<{ periodId: string }, void>(
+    (orgId, { appId, periodId }) =>
+      fetchApi(`/organizations/${orgId}/apps/${appId}/periods/${periodId}`, {
+        method: 'DELETE',
+      }).then(() => undefined),
+    'Could not remove that period',
+    (app, { periodId }) => ({
+      ...app,
+      periods: app.periods.filter((period) => period.id !== periodId),
+    }),
   );
 }
 
@@ -413,10 +552,36 @@ export interface AppSettingsDto {
 }
 
 export function useUpdateAppSettings() {
-  return useAppConfigMutation<AppSettingsDto, FormApp>((orgId, { appId, ...dto }) =>
-    fetchApi(`/organizations/${orgId}/apps/${appId}/settings`, {
-      method: 'PATCH',
-      body: JSON.stringify(dto),
-    }).then((r) => unwrap<FormApp>(r)),
+  return useAppConfigMutation<AppSettingsDto, FormApp>(
+    (orgId, { appId, ...dto }) =>
+      fetchApi(`/organizations/${orgId}/apps/${appId}/settings`, {
+        method: 'PATCH',
+        body: JSON.stringify(dto),
+      }).then((r) => unwrap<FormApp>(r)),
+    'Could not save that setting',
+    // Field by field rather than a blind spread, because the DTO is a patch:
+    // spreading it would write `undefined` over every setting the user did not
+    // touch, and blank the panel until the refetch landed.
+    (app, dto) => ({
+      ...app,
+      ...(dto.requireAuth !== undefined && { requireAuth: dto.requireAuth }),
+      ...(dto.allowDrafts !== undefined && { allowDrafts: dto.allowDrafts }),
+      ...(dto.isPublished !== undefined && { isPublished: dto.isPublished }),
+      ...(dto.themeConfig !== undefined && { themeConfig: dto.themeConfig }),
+      ...(dto.branding !== undefined && { branding: dto.branding }),
+      // The server normalises this (lowercases, and treats blank as "retire the
+      // link"); the empty-to-null step is mirrored so the hint under the field
+      // does not read "no public address" and then flip back.
+      ...(dto.publicSlug !== undefined && {
+        publicSlug: dto.publicSlug === '' ? null : dto.publicSlug,
+      }),
+      // `layoutMode` lives INSIDE config server-side, alongside the dashboard
+      // cards. Writing it at the top level would move the highlight in the
+      // layout picker not at all, and writing `config: { layoutMode }` would
+      // drop the cards from the cache until the refetch restored them.
+      ...(dto.layoutMode !== undefined && {
+        config: { ...(app.config ?? {}), layoutMode: dto.layoutMode },
+      }),
+    }),
   );
 }

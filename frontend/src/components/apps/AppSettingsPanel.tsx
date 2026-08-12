@@ -25,6 +25,16 @@ import { PanelBlock, PanelRow, PanelSection } from '@/components/builder/panel-p
 import { EmptyState } from '@/components/shared';
 import { cn } from '@/lib/utils';
 import type { AppLayoutMode } from '@/components/apps/AppRunner';
+import {
+  APPEARANCE_LABELS,
+  APP_DENSITIES,
+  APP_MASTHEADS,
+  APP_SHELLS_AVAILABLE,
+  APP_STEP_STYLES,
+  APP_TEXTURES,
+  APP_WIDTHS,
+  readAppearance,
+} from '@/components/apps/appearance';
 import type { FormConfig, FormTheme } from '@/types/form';
 import {
   useCreateAppPeriod,
@@ -87,10 +97,9 @@ export function AppSettingsPanel({
     async (dto: AppSettingsDto) => {
       try {
         await save.mutateAsync({ appId: app.id, ...dto });
-      } catch (error) {
+      } catch {
         // The slug collision message is the useful one and the server writes it
-        // for a human, so it is shown verbatim rather than replaced.
-        toast.error(error instanceof Error ? error.message : 'Could not save that setting');
+        // for a human; the global handler shows it verbatim.
       }
     },
     [app.id, save],
@@ -118,6 +127,7 @@ export function AppSettingsPanel({
       </TabsList>
 
       <TabsContent value="design" className="space-y-4">
+        <AppearanceSection app={app} onPatch={patch} />
         <LayoutSection app={app} onPatch={patch} />
         <BrandingSection app={app} onPatch={patch} />
         <AppThemeEditor app={app} onPatch={patch} />
@@ -131,6 +141,175 @@ export function AppSettingsPanel({
         <PeriodsSection app={app} />
       </TabsContent>
     </Tabs>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** A wrapping row of mutually exclusive choices. */
+function Segmented<T extends string>({
+  value,
+  options,
+  labels,
+  onChange,
+  name,
+}: {
+  value: T;
+  options: readonly T[];
+  labels: Record<T, string>;
+  onChange: (next: T) => void;
+  name: string;
+}) {
+  return (
+    <div role="radiogroup" aria-label={name} className="flex flex-wrap gap-1.5">
+      {options.map((option) => {
+        const isActive = option === value;
+        return (
+          <button
+            key={option}
+            type="button"
+            role="radio"
+            aria-checked={isActive}
+            onClick={() => !isActive && onChange(option)}
+            className={cn(
+              'rounded-full border px-3 py-1.5 text-xs font-medium transition-colors',
+              isActive
+                ? 'border-primary bg-primary/10 text-foreground'
+                : 'border-border text-muted-foreground hover:border-border-strong hover:bg-muted/50',
+            )}
+          >
+            {labels[option]}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+/**
+ * Appearance — the shape of the public page, as opposed to its palette.
+ *
+ * These live inside `themeConfig` rather than in their own columns, so the
+ * whole group is written by re-sending the theme with one key changed. That is
+ * also why every control here spreads the current theme: the settings endpoint
+ * replaces `themeConfig` wholesale, so a patch that sent only the changed key
+ * would wipe the colours.
+ */
+function AppearanceSection({
+  app,
+  onPatch,
+}: {
+  app: FormAppDetail;
+  onPatch: (dto: AppSettingsDto) => void | Promise<void>;
+}) {
+  const theme = React.useMemo<FormTheme>(() => (app.themeConfig ?? {}) as FormTheme, [app.themeConfig]);
+  const appearance = readAppearance(theme);
+
+  const set = (key: keyof FormTheme, value: string) =>
+    onPatch({ themeConfig: { ...theme, [key]: value } });
+
+  // Glass cards are translucent with a heavy blur; a pattern behind them shows
+  // through and the text on the card stops being readable. The value is kept
+  // rather than reset, so it returns if the author picks solid cards — but
+  // saying nothing would leave a control that visibly does nothing.
+  const textureSuppressed = theme.cardVariant === 'glass' && appearance.texture !== 'none';
+
+  return (
+    <PanelSection
+      title="Appearance"
+      description="How the public page is laid out. Separate from the palette below, so an app can be recoloured without being rearranged."
+    >
+      <PanelBlock
+        label="How steps are shown"
+        hint={
+          appearance.shell === 'wizard'
+            ? 'One step per page, with Back and Next. Nothing is submitted until the last step, and a rejected answer sends the respondent back to the step holding it.'
+            : 'Every step on one page, filled top to bottom.'
+        }
+      >
+        <Segmented
+          name="How steps are shown"
+          value={appearance.shell}
+          options={APP_SHELLS_AVAILABLE}
+          labels={APPEARANCE_LABELS.shell}
+          onChange={(next) => set('appShell', next)}
+        />
+      </PanelBlock>
+
+      <PanelBlock
+        label="Page width"
+        hint="How much of a large screen the app fills. Narrow reads like a document; wider suits several steps and repeatable entries. Phones are unaffected."
+      >
+        <Segmented
+          name="Page width"
+          value={appearance.width}
+          options={APP_WIDTHS}
+          labels={APPEARANCE_LABELS.width}
+          onChange={(next) => set('appWidth', next)}
+        />
+      </PanelBlock>
+
+      <PanelBlock
+        label="Header"
+        hint={
+          appearance.masthead === 'hero' && !app.branding?.coverImageUrl
+            ? 'A cover image is needed for this one — until you add one below, the colour wash is shown instead.'
+            : 'The first thing a respondent sees, above the fold.'
+        }
+        hintTone={
+          appearance.masthead === 'hero' && !app.branding?.coverImageUrl ? 'warning' : 'muted'
+        }
+      >
+        <Segmented
+          name="Header style"
+          value={appearance.masthead}
+          options={APP_MASTHEADS}
+          labels={APPEARANCE_LABELS.masthead}
+          onChange={(next) => set('appMasthead', next)}
+        />
+      </PanelBlock>
+
+      <PanelBlock label="Step headings" hint="How each step is announced as the respondent scrolls.">
+        <Segmented
+          name="Step headings"
+          value={appearance.stepStyle}
+          options={APP_STEP_STYLES}
+          labels={APPEARANCE_LABELS.stepStyle}
+          onChange={(next) => set('appStepStyle', next)}
+        />
+      </PanelBlock>
+
+      <PanelBlock
+        label="Spacing"
+        hint="Padding and the gaps between steps. The spacing between individual fields is fixed, so this is a change of pace rather than of scale."
+      >
+        <Segmented
+          name="Spacing"
+          value={appearance.density}
+          options={APP_DENSITIES}
+          labels={APPEARANCE_LABELS.density}
+          onChange={(next) => set('appDensity', next)}
+        />
+      </PanelBlock>
+
+      <PanelBlock
+        label="Background"
+        hint={
+          textureSuppressed
+            ? 'Not shown while cards are glass — a pattern behind a translucent card makes the text on it hard to read. Switch to solid cards below and it returns.'
+            : 'Drawn from your own colours, so it costs no image and cannot clash.'
+        }
+        hintTone={textureSuppressed ? 'warning' : 'muted'}
+      >
+        <Segmented
+          name="Background"
+          value={appearance.texture}
+          options={APP_TEXTURES}
+          labels={APPEARANCE_LABELS.texture}
+          onChange={(next) => set('appTexture', next)}
+        />
+      </PanelBlock>
+    </PanelSection>
   );
 }
 
@@ -500,8 +679,8 @@ function PeriodsSection({ app }: { app: FormAppDetail }) {
         endsAt: end.toISOString(),
         isActive: true,
       });
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Could not add that period');
+    } catch {
+      // Reported globally.
     } finally {
       setAdding(false);
     }
@@ -558,8 +737,8 @@ function PeriodRow({
   const patch = async (dto: { label?: string; startsAt?: string; endsAt?: string; isActive?: boolean }) => {
     try {
       await updatePeriod.mutateAsync({ appId, periodId: period.id, ...dto });
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Could not save that period');
+    } catch {
+      // Reported globally.
     }
   };
 

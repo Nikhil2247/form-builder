@@ -4,6 +4,8 @@ import React from 'react';
 import { CalendarDays, LogIn } from 'lucide-react';
 
 import { AppRunner, type AppSummary } from '@/components/apps/AppRunner';
+import { AppMasthead } from '@/components/apps/AppMasthead';
+import { DENSITY, WIDTH_CLASS, readAppearance, textureStyle } from '@/components/apps/appearance';
 import { FormThemeScope, cardVariantClass } from '@/components/builder/FormThemeScope';
 import { cn } from '@/lib/utils';
 import type { FormTheme } from '@/types/form';
@@ -12,82 +14,49 @@ import { formFontVariables } from '../../f/[id]/fonts';
 /**
  * The themed shell around a public app.
  *
- * Mirrors the public form page deliberately — same theme scope, same measure,
- * same header/footer rhythm — so an organization running both does not present
- * respondents with two different products.
+ * Where a single form is one document, an app is a programme with its own
+ * identity — so the masthead treatment, the spacing and the page decoration are
+ * all author-chosen here rather than fixed. See `components/apps/appearance.ts`
+ * for what the choices are and why they live in `themeConfig`.
+ *
+ * The form CONTROLS are deliberately untouched by any of it: fields render
+ * through `FormRunner`, shared with public single forms, so an input looks the
+ * same everywhere and there is no second implementation to drift.
  */
 export function AppRunnerClient({ slug, app }: { slug: string; app: AppSummary & { theme?: FormTheme } }) {
   const theme: FormTheme = (app.theme ?? {}) as FormTheme;
   const branding = app.branding ?? {};
-  const logoUrl = branding.logoUrl || app.organization?.logoUrl || null;
 
-  const period = app.period
-    ? `${new Date(app.period.startsAt).toLocaleDateString(undefined, { month: 'short', year: 'numeric' })} – ${new Date(app.period.endsAt).toLocaleDateString(undefined, { month: 'short', year: 'numeric' })}`
-    : null;
+  const appearance = readAppearance(theme);
+  const density = DENSITY[appearance.density];
+
+  // Passed to the theme scope, which merges caller styles last — so the texture
+  // sits on top of the background colour the scope paints rather than fighting
+  // it for the same declaration.
+  const texture = textureStyle(appearance.texture, theme.cardVariant);
 
   return (
-    <FormThemeScope theme={theme} className={cn('min-h-screen', formFontVariables)}>
-      {/* Widened for GRID, same reasoning as the public form page: two columns
-          inside 42rem give each field less room than the controls already use,
-          so the layout costs a column and buys nothing. Both widths still
-          collapse to one column below `md`, so a phone is unaffected. */}
-      <div
-        className={cn(
-          'mx-auto w-full px-4 py-8 sm:px-6 sm:py-12',
-          app.config?.layoutMode === 'GRID' ? 'max-w-5xl' : 'max-w-2xl',
-        )}
-      >
-        {/* ── Masthead ─────────────────────────────────────────────────── */}
-        <div
-          className={cn(
-            'mb-6 overflow-hidden rounded-[var(--radius)] bg-card',
-            cardVariantClass(theme.cardVariant),
-          )}
-        >
-          {branding.coverImageUrl && (
-            // A plain <img>: the URL is author-supplied and can point at any
-            // host, which the image optimiser refuses without an allowlist entry.
-            // eslint-disable-next-line @next/next/no-img-element
-            <img
-              src={branding.coverImageUrl}
-              alt=""
-              className="h-36 w-full object-cover sm:h-44"
-              loading="eager"
-            />
-          )}
-
-          <div className={cn('space-y-3 p-6 sm:p-7', logoUrl && branding.coverImageUrl && 'pt-0')}>
-            {logoUrl && (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img
-                src={logoUrl}
-                alt=""
-                className={cn(
-                  'h-11 w-auto object-contain',
-                  branding.coverImageUrl ? '-mt-9 rounded-lg bg-card p-1.5 shadow-sm' : '',
-                )}
-              />
-            )}
-
-            <div className="flex flex-wrap items-start justify-between gap-3">
-              <h1 className="text-2xl font-bold leading-tight tracking-tight text-foreground sm:text-[1.75rem]">
-                {branding.headerTitle || app.name}
-              </h1>
-              {period && (
-                <span className="flex items-center gap-1.5 rounded-full border border-border bg-muted px-2.5 py-1 text-xs font-medium text-muted-foreground">
-                  <CalendarDays className="size-3.5" aria-hidden />
-                  {app.period?.label ?? period}
-                </span>
-              )}
-            </div>
-
-            {app.description && (
-              <p className="whitespace-pre-line text-sm leading-relaxed text-muted-foreground">
-                {app.description}
-              </p>
-            )}
-          </div>
-        </div>
+    <FormThemeScope
+      theme={theme}
+      className={cn('min-h-screen', formFontVariables)}
+      style={texture}
+    >
+      {/* The width is the author's choice now, not a consequence of the layout
+          mode. It used to be derived — 42rem stacked, 64rem for GRID — which
+          meant the only way to widen a page was to switch it to two columns,
+          coupling two decisions that have nothing to do with each other. Every
+          value is a `max-w-*`, so a phone is unaffected either way. */}
+      <div className={cn('mx-auto w-full', density.page, WIDTH_CLASS[appearance.width])}>
+        <AppMasthead
+          variant={appearance.masthead}
+          theme={theme}
+          title={branding.headerTitle || app.name}
+          description={app.description}
+          branding={branding}
+          organizationLogoUrl={app.organization?.logoUrl ?? null}
+          period={app.period}
+          className={density.masthead}
+        />
 
         {/* Stated up front rather than discovered at submit: the session
             endpoint enforces it, and filling a whole report before being told
@@ -95,7 +64,10 @@ export function AppRunnerClient({ slug, app }: { slug: string; app: AppSummary &
         {app.requireAuth && (
           <div
             role="status"
-            className="mb-6 flex flex-wrap items-center gap-3 rounded-[var(--radius)] border border-border bg-card p-4 text-sm"
+            className={cn(
+              'flex flex-wrap items-center gap-3 rounded-[var(--radius)] border border-border bg-card p-4 text-sm',
+              density.masthead,
+            )}
           >
             <LogIn className="size-4 shrink-0 text-muted-foreground" aria-hidden />
             <span className="flex-1 text-muted-foreground">
@@ -124,7 +96,7 @@ export function AppRunnerClient({ slug, app }: { slug: string; app: AppSummary &
             </p>
           </div>
         ) : (
-          <AppRunner publicSlug={slug} app={app} />
+          <AppRunner publicSlug={slug} app={app} appearance={appearance} />
         )}
 
         <footer className="mt-10 border-t border-border pt-5 text-center">

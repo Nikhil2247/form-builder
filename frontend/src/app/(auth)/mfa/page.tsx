@@ -37,8 +37,9 @@ function MFAForm() {
           router.push('/dashboard');
         }
       },
-      onError: (error: any) => {
-        toast.error(error.message || 'Invalid MFA code');
+      // The toast comes from the global handler; this only clears the boxes so
+      // the user can retype without selecting the old code first.
+      onError: () => {
         setValue("");
       }
     });

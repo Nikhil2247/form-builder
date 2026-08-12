@@ -92,8 +92,8 @@ export default function FormsListPage() {
       const clone = await cloneForm.mutateAsync(form.id);
       toast.success(`Copied "${form.title}"`);
       if (clone?.id) router.push(`/forms/builder?id=${clone.id}`);
-    } catch (err: any) {
-      toast.error(err?.message ?? 'Could not duplicate this form');
+    } catch {
+      // Reported globally.
     }
   }
 
@@ -103,8 +103,8 @@ export default function FormsListPage() {
       await deleteForm.mutateAsync(deleteTarget.id);
       toast.success('Moved to trash');
       setDeleteTarget(null);
-    } catch (err: any) {
-      toast.error(err?.message ?? 'Could not delete this form');
+    } catch {
+      // Reported globally; the confirm dialog stays open.
     }
   }
 
@@ -330,8 +330,8 @@ export default function FormsListPage() {
             const created = await createForm.mutateAsync(values);
             setIsCreateOpen(false);
             router.push(`/forms/builder?id=${created.id}`);
-          } catch (err: any) {
-            toast.error(err?.message ?? 'Could not create this form');
+          } catch {
+            // Reported globally; the dialog stays open with the title typed.
           }
         }}
       />

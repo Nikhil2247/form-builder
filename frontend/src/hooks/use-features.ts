@@ -67,6 +67,7 @@ export function useSetGlobalFeature() {
   const queryClient = useQueryClient();
 
   return useMutation({
+    meta: { errorFallback: 'Could not change this feature' },
     mutationFn: async ({ key, isEnabledGlobally }: { key: string; isEnabledGlobally: boolean }) =>
       unwrap(
         await fetchApi(`/admin/features/${key}`, {
@@ -86,6 +87,7 @@ export function useSetOrganizationFeature() {
   const queryClient = useQueryClient();
 
   return useMutation({
+    meta: { errorFallback: 'Could not change this feature for the organization' },
     mutationFn: async ({
       key,
       orgId,

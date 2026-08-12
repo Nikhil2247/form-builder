@@ -6,6 +6,8 @@ import {
   Check,
   CheckCircle2,
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
   Loader2,
   Plus,
   RotateCcw,
@@ -22,6 +24,12 @@ import {
 } from '@/hooks/use-app-session';
 import { cn } from '@/lib/utils';
 import type { FormConfig } from '@/types/form';
+import {
+  APP_APPEARANCE_DEFAULTS,
+  DENSITY,
+  type AppAppearance,
+  type DensityTokens,
+} from './appearance';
 
 /**
  * A form app, as a respondent fills it.
@@ -64,20 +72,54 @@ export interface AppSummary {
  */
 export type AppLayoutMode = 'DOCUMENT' | 'GRID';
 
-export function AppRunner({ publicSlug, app }: { publicSlug: string; app: AppSummary }) {
+export function AppRunner({
+  publicSlug,
+  app,
+  appearance = APP_APPEARANCE_DEFAULTS,
+}: {
+  publicSlug: string;
+  app: AppSummary;
+  /** Defaulted so the builder preview can mount this without styling decisions. */
+  appearance?: AppAppearance;
+}) {
   // Anything unrecognised falls back to the stacked layout rather than
   // rendering nothing, matching how the public form page treats PORTAL.
   const layoutMode: AppLayoutMode = app.config?.layoutMode === 'GRID' ? 'GRID' : 'DOCUMENT';
+  const density = DENSITY[appearance.density];
   const session = useAppSession(publicSlug);
   const [issues, setIssues] = React.useState<SessionIssue[]>([]);
   const [submitError, setSubmitError] = React.useState('');
   const [isSubmitting, setIsSubmitting] = React.useState(false);
   const [done, setDone] = React.useState<{ submissionCount: number } | null>(null);
   const [collapsed, setCollapsed] = React.useState<Set<string>>(() => new Set());
+  // Step-level folding, separate from the per-entry folding above it. Only the
+  // `accordion` style uses it, and a step is closed only once the respondent
+  // closes it — defaulting every step shut would hide the whole report behind
+  // four clicks and make a short app look empty.
+  const [foldedSteps, setFoldedSteps] = React.useState<Set<string>>(() => new Set());
   const summaryRef = React.useRef<HTMLDivElement | null>(null);
+  const topRef = React.useRef<HTMLDivElement | null>(null);
+
+  const isWizard = appearance.shell === 'wizard';
+  const [activeIndex, setActiveIndex] = React.useState(0);
+
+  // Read before the early returns so `handleSubmit` can route a rejection to
+  // the step that caused it. A step can disappear mid-session when a `showWhen`
+  // stops matching, so the index is clamped on every render rather than
+  // corrected in an effect — there is no moment where it points past the end.
+  const steps = session.session?.steps ?? [];
+  const stepIndex = Math.min(activeIndex, Math.max(0, steps.length - 1));
 
   const toggle = (key: string) =>
     setCollapsed((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+
+  const toggleStep = (key: string) =>
+    setFoldedSteps((prev) => {
       const next = new Set(prev);
       if (next.has(key)) next.delete(key);
       else next.add(key);
@@ -103,6 +145,24 @@ export function AppRunner({ publicSlug, app }: { publicSlug: string; app: AppSum
           for (const issue of failure.issues!) next.delete(`${issue.stepKey}#${issue.index}`);
           return next;
         });
+        // Same reasoning one level up: under the `accordion` style the whole
+        // step can be folded away, and a rejected report whose problems are
+        // inside a folded step reads as an error about nothing.
+        setFoldedSteps((prev) => {
+          const next = new Set(prev);
+          for (const issue of failure.issues!) next.delete(issue.stepKey);
+          return next;
+        });
+        // In a wizard the offending step is usually not the one on screen —
+        // submit lives on the LAST page and the problem is often on the first.
+        // Listing errors without moving there would be a report that cannot be
+        // submitted and no visible reason why.
+        if (isWizard) {
+          const firstBad = steps.findIndex((step) =>
+            failure.issues!.some((issue) => issue.stepKey === step.key),
+          );
+          if (firstBad >= 0) setActiveIndex(firstBad);
+        }
         requestAnimationFrame(() => summaryRef.current?.focus());
       } else {
         setSubmitError(failure.message || 'Could not submit this report.');
@@ -152,15 +212,40 @@ export function AppRunner({ publicSlug, app }: { publicSlug: string; app: AppSum
     );
   }
 
-  const steps = session.session?.steps ?? [];
   const issuesByStep = new Map<string, SessionIssue[]>();
   for (const issue of issues) {
     const key = `${issue.stepKey}#${issue.index}`;
     issuesByStep.set(key, [...(issuesByStep.get(key) ?? []), issue]);
   }
 
+  /** Which steps still hold a rejected answer, for the progress markers. */
+  const stepsWithIssues = new Set(issues.map((issue) => issue.stepKey));
+
+  const isLastStep = stepIndex >= steps.length - 1;
+
+  const goTo = (index: number) => {
+    setActiveIndex(Math.min(Math.max(index, 0), Math.max(0, steps.length - 1)));
+    // The next step starts at the top of its own content. Without this a
+    // respondent who scrolled to the bottom to press Next lands halfway down
+    // the following step, having apparently skipped its first questions.
+    requestAnimationFrame(() =>
+      topRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }),
+    );
+  };
+
   return (
-    <div className="space-y-6">
+    <div className={density.stack}>
+      <div ref={topRef} aria-hidden className="scroll-mt-4" />
+
+      {isWizard && steps.length > 0 && (
+        <WizardProgress
+          steps={steps}
+          activeIndex={stepIndex}
+          stepsWithIssues={stepsWithIssues}
+          onGoTo={goTo}
+        />
+      )}
+
       {issues.length > 0 && (
         <div
           ref={summaryRef}
@@ -174,11 +259,29 @@ export function AppRunner({ publicSlug, app }: { publicSlug: string; app: AppSum
           </p>
           <ul className="space-y-1 pl-6">
             {issues.map((issue, index) => {
-              const step = steps.find((s) => s.key === issue.stepKey);
+              const at = steps.findIndex((s) => s.key === issue.stepKey);
+              const step = at >= 0 ? steps[at] : undefined;
+              const label = `${step?.title ?? issue.stepKey}${
+                step?.mode === 'REPEATABLE' ? ` #${issue.index + 1}` : ''
+              }: ${issue.message}`;
+
+              // In a wizard the step is on another page, so the summary is the
+              // only route to it and each line has to be that route. In the
+              // stacked layout everything is already on screen and a button
+              // that scrolls a little would be noise.
               return (
                 <li key={index} className="text-xs text-destructive">
-                  {step?.title ?? issue.stepKey}
-                  {step?.mode === 'REPEATABLE' ? ` #${issue.index + 1}` : ''}: {issue.message}
+                  {isWizard && at >= 0 ? (
+                    <button
+                      type="button"
+                      onClick={() => goTo(at)}
+                      className="text-left underline underline-offset-2 hover:no-underline"
+                    >
+                      {label}
+                    </button>
+                  ) : (
+                    label
+                  )}
                 </li>
               );
             })}
@@ -186,19 +289,33 @@ export function AppRunner({ publicSlug, app }: { publicSlug: string; app: AppSum
         </div>
       )}
 
-      {steps.map((step) => (
-        <StepSection
-          key={step.key}
-          step={step}
-          layoutMode={layoutMode}
-          drafts={session.drafts}
-          issuesByStep={issuesByStep}
-          collapsed={collapsed}
-          onToggle={toggle}
-          onChange={session.setEntryAnswers}
-          onAdd={() => session.addEntry(step.key)}
-          onRemove={(index) => session.removeEntry(step.key, index)}
-        />
+      {/* Every step stays MOUNTED and inactive ones are hidden with CSS.
+          Rendering only the active step would unmount the others, and each
+          `FormRunner` holds its own answer state — so paging away from a step
+          and back would hand the respondent an empty form and lose whatever
+          they had typed since the last save. `display: none` also takes the
+          hidden fields out of the tab order and the accessibility tree, so
+          they cannot be reached by keyboard from the visible page. */}
+      {steps.map((step, position) => (
+        <div key={step.key} className={cn(isWizard && position !== stepIndex && 'hidden')}>
+          <StepSection
+            step={step}
+            position={position}
+            isLast={position === steps.length - 1}
+            appearance={appearance}
+            density={density}
+            layoutMode={layoutMode}
+            drafts={session.drafts}
+            issuesByStep={issuesByStep}
+            collapsed={collapsed}
+            isFolded={foldedSteps.has(step.key)}
+            onToggleStep={() => toggleStep(step.key)}
+            onToggle={toggle}
+            onChange={session.setEntryAnswers}
+            onAdd={() => session.addEntry(step.key)}
+            onRemove={(index) => session.removeEntry(step.key, index)}
+          />
+        </div>
       ))}
 
       {steps.length === 0 && (
@@ -208,7 +325,7 @@ export function AppRunner({ publicSlug, app }: { publicSlug: string; app: AppSum
       )}
 
       {/* ── Submit bar ──────────────────────────────────────────────────── */}
-      <Card className="space-y-4 p-5 sm:p-6">
+      <Card className={cn('space-y-4 p-5 sm:p-6', density.card)}>
         {submitError && (
           <p
             role="alert"
@@ -220,20 +337,47 @@ export function AppRunner({ publicSlug, app }: { publicSlug: string; app: AppSum
         )}
 
         <div className="flex flex-col-reverse gap-2 sm:flex-row sm:items-center sm:justify-between">
-          <Button
-            type="button"
-            variant="outline"
-            onClick={() => {
-              if (window.confirm('Clear every answer in this report? This cannot be undone.')) {
-                void session.reset();
-              }
-            }}
-            disabled={isSubmitting}
-            className="gap-2"
-          >
-            <RotateCcw size={15} aria-hidden /> Reset
-          </Button>
+          {/* Back replaces Reset everywhere except the last page: on a wizard
+              the bottom-left button is where a respondent reaches for "go
+              back", and putting an irreversible Clear-everything there is an
+              expensive place to be wrong. Reset returns on the final page,
+              next to Submit, where the whole report is in view. */}
+          {isWizard && !isLastStep ? (
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => goTo(stepIndex - 1)}
+              disabled={stepIndex === 0}
+              className="gap-2"
+            >
+              <ChevronLeft size={15} aria-hidden /> Back
+            </Button>
+          ) : (
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => {
+                if (window.confirm('Clear every answer in this report? This cannot be undone.')) {
+                  void session.reset();
+                }
+              }}
+              disabled={isSubmitting}
+              className="gap-2"
+            >
+              <RotateCcw size={15} aria-hidden /> Reset
+            </Button>
+          )}
 
+          {isWizard && !isLastStep ? (
+            <Button
+              type="button"
+              size="lg"
+              onClick={() => goTo(stepIndex + 1)}
+              className="w-full gap-2 font-semibold sm:w-auto sm:px-8"
+            >
+              Next <ChevronRight size={16} aria-hidden />
+            </Button>
+          ) : (
           <Button
             type="button"
             size="lg"
@@ -251,11 +395,14 @@ export function AppRunner({ publicSlug, app }: { publicSlug: string; app: AppSum
               </>
             )}
           </Button>
+          )}
         </div>
 
         <p className="text-center text-xs text-muted-foreground sm:text-right" role="status">
           {session.isSaving ? 'Saving…' : 'Your answers are saved as you type.'}
-          {' Everything is submitted together.'}
+          {isWizard && !isLastStep
+            ? ' Nothing is submitted until the last step.'
+            : ' Everything is submitted together.'}
         </p>
       </Card>
     </div>
@@ -264,22 +411,123 @@ export function AppRunner({ publicSlug, app }: { publicSlug: string; app: AppSum
 
 // ─────────────────────────────────────────────────────────────────────────────
 
+/**
+ * Where the respondent is, and how much is left.
+ *
+ * The chips are navigable rather than decorative. Nothing is validated per
+ * step — the whole report is checked once, at submit — so there is no state a
+ * forward jump could corrupt, and forbidding one would only trap someone who
+ * wants to correct an answer three steps back.
+ */
+function WizardProgress({
+  steps,
+  activeIndex,
+  stepsWithIssues,
+  onGoTo,
+}: {
+  steps: AppSessionStep[];
+  activeIndex: number;
+  stepsWithIssues: Set<string>;
+  onGoTo: (index: number) => void;
+}) {
+  const current = steps[activeIndex];
+  const percent = steps.length <= 1 ? 100 : ((activeIndex + 1) / steps.length) * 100;
+
+  return (
+    <Card className="space-y-3 p-4 sm:p-5">
+      <div className="flex items-baseline justify-between gap-3">
+        <p className="text-sm font-semibold text-foreground">
+          <span className="tabular text-muted-foreground">
+            Step {activeIndex + 1} of {steps.length}
+          </span>
+          {current && <span className="ml-2">{current.title}</span>}
+        </p>
+      </div>
+
+      <div
+        className="h-1.5 w-full overflow-hidden rounded-full bg-muted"
+        role="progressbar"
+        aria-valuenow={activeIndex + 1}
+        aria-valuemin={1}
+        aria-valuemax={steps.length}
+        aria-label="Progress through this report"
+      >
+        <div
+          className="h-full rounded-full bg-primary transition-[width] duration-300"
+          style={{ width: `${percent}%` }}
+        />
+      </div>
+
+      {/* Scrolls rather than wraps: a programme with eight steps would
+          otherwise reflow the whole header every time the titles change
+          length, and the row would push the form itself off the screen. */}
+      <div className="-mx-1 flex gap-1.5 overflow-x-auto px-1 pb-1">
+        {steps.map((step, index) => {
+          const isActive = index === activeIndex;
+          const hasIssue = stepsWithIssues.has(step.key);
+          return (
+            <button
+              key={step.key}
+              type="button"
+              onClick={() => onGoTo(index)}
+              aria-current={isActive ? 'step' : undefined}
+              className={cn(
+                'flex shrink-0 items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium transition-colors',
+                isActive
+                  ? 'border-primary bg-primary/10 text-foreground'
+                  : 'border-border text-muted-foreground hover:border-border-strong hover:bg-muted/50',
+                hasIssue && 'border-destructive/60 text-destructive',
+              )}
+            >
+              <span
+                className={cn(
+                  'tabular flex size-4 items-center justify-center rounded-full text-[10px] font-semibold',
+                  isActive ? 'bg-primary text-[var(--primary-foreground)]' : 'bg-muted',
+                  hasIssue && 'bg-destructive text-white',
+                )}
+              >
+                {hasIssue ? '!' : index + 1}
+              </span>
+              <span className="max-w-32 truncate">{step.title}</span>
+            </button>
+          );
+        })}
+      </div>
+    </Card>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
 function StepSection({
   step,
+  position,
+  isLast,
+  appearance,
+  density,
   layoutMode,
   drafts,
   issuesByStep,
   collapsed,
+  isFolded,
+  onToggleStep,
   onToggle,
   onChange,
   onAdd,
   onRemove,
 }: {
   step: AppSessionStep;
+  /** Zero-based position among visible steps. The number on a timeline disc. */
+  position: number;
+  isLast: boolean;
+  appearance: AppAppearance;
+  density: DensityTokens;
   layoutMode: AppLayoutMode;
   drafts: Record<string, Record<string, unknown>>;
   issuesByStep: Map<string, SessionIssue[]>;
   collapsed: Set<string>;
+  isFolded: boolean;
+  onToggleStep: () => void;
   onToggle: (key: string) => void;
   onChange: (stepKey: string, index: number, answers: Record<string, unknown>) => void;
   onAdd: () => void;
@@ -300,32 +548,85 @@ function StepSection({
 
   const atMax = step.maxEntries !== null && indexes.length >= step.maxEntries;
 
+  const style = appearance.stepStyle;
+  const isAccordion = style === 'accordion';
+  const isTimeline = style === 'timeline';
+  const hidden = isAccordion && isFolded;
+
+  const entryCount =
+    step.mode === 'REPEATABLE' ? (
+      <span className="tabular shrink-0 text-xs text-muted-foreground">
+        {indexes.length}
+        {step.maxEntries !== null ? ` / ${step.maxEntries}` : ''}{' '}
+        {indexes.length === 1 ? 'entry' : 'entries'}
+      </span>
+    ) : null;
+
+  const heading = (
+    <>
+      {step.icon && <span aria-hidden>{step.icon}</span>}
+      <h2 id={`step-${step.key}`} className="min-w-0 text-base font-semibold text-foreground">
+        {step.title}
+      </h2>
+      {step.isOptional && (
+        <span className="shrink-0 rounded-full border border-border bg-muted px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+          Optional
+        </span>
+      )}
+    </>
+  );
+
   return (
-    <section className="space-y-3" aria-labelledby={`step-${step.key}`}>
-      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border pb-2">
-        <div className="flex min-w-0 items-center gap-2">
-          {step.icon && <span aria-hidden>{step.icon}</span>}
-          <h2 id={`step-${step.key}`} className="text-base font-semibold text-foreground">
-            {step.title}
-          </h2>
-          {step.isOptional && (
-            <span className="rounded-full border border-border bg-muted px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
-              Optional
-            </span>
+    <section
+      className={cn('space-y-3', isTimeline && 'relative pl-9')}
+      aria-labelledby={`step-${step.key}`}
+    >
+      {/* The connector, drawn behind the disc and stopped short of the last
+          step so the line does not trail off past the end of the report. */}
+      {isTimeline && !isLast && (
+        <span aria-hidden className="absolute bottom-0 left-[0.9375rem] top-8 w-px bg-border" />
+      )}
+      {isTimeline && (
+        <span
+          aria-hidden
+          className="tabular absolute left-0 top-0 flex size-8 items-center justify-center rounded-full border border-border bg-card text-xs font-semibold text-muted-foreground"
+        >
+          {position + 1}
+        </span>
+      )}
+
+      {isAccordion ? (
+        <button
+          type="button"
+          onClick={onToggleStep}
+          aria-expanded={!isFolded}
+          className="flex w-full flex-wrap items-center gap-2 rounded-[var(--radius)] border border-border bg-card px-4 py-3 text-left"
+        >
+          <ChevronDown
+            className={cn('size-4 shrink-0 transition-transform', isFolded && '-rotate-90')}
+            aria-hidden
+          />
+          {heading}
+          <span className="flex-1" />
+          {entryCount}
+        </button>
+      ) : (
+        <div
+          className={cn(
+            'flex flex-wrap items-center justify-between gap-2',
+            style === 'bordered' && 'border-b border-border pb-2',
           )}
+        >
+          <div className="flex min-w-0 items-center gap-2">{heading}</div>
+          {entryCount}
         </div>
-        {step.mode === 'REPEATABLE' && (
-          <span className="tabular text-xs text-muted-foreground">
-            {indexes.length}
-            {step.maxEntries !== null ? ` / ${step.maxEntries}` : ''}{' '}
-            {indexes.length === 1 ? 'entry' : 'entries'}
-          </span>
-        )}
-      </div>
+      )}
 
-      {step.description && <p className="text-sm text-muted-foreground">{step.description}</p>}
+      {!hidden && step.description && (
+        <p className="text-sm text-muted-foreground">{step.description}</p>
+      )}
 
-      {indexes.map((index) => {
+      {!hidden && indexes.map((index) => {
         const entryKey = `${step.key}#${index}`;
         const isCollapsed = collapsed.has(entryKey);
         const entryIssues = issuesByStep.get(entryKey) ?? [];
@@ -340,6 +641,7 @@ function StepSection({
             key={entryKey}
             className={cn(
               'overflow-visible p-0',
+              density.card,
               entryIssues.length > 0 && 'border-destructive/60 ring-1 ring-destructive/40',
             )}
           >
@@ -371,7 +673,7 @@ function StepSection({
             )}
 
             {!isCollapsed && (
-              <div className="p-4 sm:p-5">
+              <div className={density.entry}>
                 {/* Only the issues that have no field to sit on. Anything with
                     a questionId is rendered against that question below, which
                     is where a respondent looks — repeating it here would say
@@ -423,7 +725,7 @@ function StepSection({
         );
       })}
 
-      {step.mode === 'REPEATABLE' && (
+      {!hidden && step.mode === 'REPEATABLE' && (
         <Button
           type="button"
           variant="outline"

@@ -106,6 +106,9 @@ function AcceptInviteContent() {
   });
 
   const accept = useMutation({
+    // Previously this mutation had no error path at all: an expired or already
+    // used invitation left the button spinning back to idle and said nothing.
+    meta: { errorFallback: 'Could not accept this invitation' },
     mutationFn: async () =>
       unwrap<{ organization: { id: string; name: string }; role: string }>(
         await fetchApi(`/organizations/invitations/${token}/accept`, { method: 'POST' }),

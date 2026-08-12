@@ -45,10 +45,9 @@ export default function OrganizationSettingsPage() {
     try {
       await updateOrg.mutateAsync({ name: name.trim(), slug: slug.trim() });
       toast.success('Organization updated');
-    } catch (err: any) {
-      // The old handler had no catch, so a rejected save still flashed a green
-      // "Saved" confirmation.
-      toast.error(err?.message ?? 'Could not save these changes');
+    } catch {
+      // The catch is what stops a rejected save flashing a green "Saved"
+      // confirmation; the toast itself comes from the global handler.
     }
   }
 

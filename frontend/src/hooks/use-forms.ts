@@ -112,12 +112,16 @@ export function useTrashedForms() {
 
 function useFormMutation<TArgs, TResult>(
   fn: (orgId: string, args: TArgs) => Promise<TResult>,
+  errorFallback: string,
   extraKeys: string[] = [],
 ) {
   const qc = useQueryClient();
   const orgId = useOrgId();
 
   return useMutation({
+    // Read by the global MutationCache handler in query-provider when the API's
+    // own message is too generic to show. See lib/errors.tsx.
+    meta: { errorFallback },
     mutationFn: (args: TArgs) => {
       if (!orgId) throw new Error('No active organization');
       return fn(orgId, args);
@@ -140,6 +144,7 @@ export function useCreateForm() {
       );
       return data?.form ?? data;
     },
+    'Could not create this form',
   );
 }
 
@@ -148,6 +153,7 @@ export function useUpdateForm(formId: string) {
   const orgId = useOrgId();
 
   return useMutation({
+    meta: { errorFallback: 'Could not save this form' },
     mutationFn: async (dto: Partial<Form>) => {
       const data = unwrap<any>(
         await fetchApi(`/organizations/${orgId}/forms/${formId}`, {
@@ -167,7 +173,7 @@ export function useUpdateForm(formId: string) {
 export function useDeleteForm() {
   return useFormMutation<string, void>(async (orgId, formId) => {
     await fetchApi(`/organizations/${orgId}/forms/${formId}`, { method: 'DELETE' });
-  }, ['forms-trash']);
+  }, 'Could not delete this form', ['forms-trash']);
 }
 
 export function useCloneForm() {
@@ -176,7 +182,7 @@ export function useCloneForm() {
       await fetchApi(`/organizations/${orgId}/forms/${formId}/clone`, { method: 'POST' }),
     );
     return data?.form ?? data;
-  });
+  }, 'Could not duplicate this form');
 }
 
 export function useRestoreForm() {
@@ -185,14 +191,14 @@ export function useRestoreForm() {
       await fetchApi(`/organizations/${orgId}/forms/${formId}/restore`, { method: 'POST' }),
     );
     return data?.form ?? data;
-  }, ['forms-trash']);
+  }, 'Could not restore this form', ['forms-trash']);
 }
 
 /** Hard delete from trash. */
 export function usePurgeForm() {
   return useFormMutation<string, void>(async (orgId, formId) => {
     await fetchApi(`/organizations/${orgId}/forms/${formId}/permanent`, { method: 'DELETE' });
-  }, ['forms-trash']);
+  }, 'Could not permanently delete this form', ['forms-trash']);
 }
 
 export function useCreateFromTemplate() {
@@ -203,5 +209,5 @@ export function useCreateFromTemplate() {
       }),
     );
     return data?.form ?? data;
-  });
+  }, 'Could not create a form from this template');
 }

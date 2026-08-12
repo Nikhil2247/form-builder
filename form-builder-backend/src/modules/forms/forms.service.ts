@@ -897,17 +897,40 @@ Respond ONLY with a valid JSON object matching this structure:
 
   /**
    * Export submissions in CSV or JSON format.
+   * ═════════════════════════════════════════════════════════════════════════
+   *
+   * Returns an async generator of body chunks rather than one finished string.
+   * The previous version loaded every matching row into an array and then built
+   * a second array of formatted lines beside it, so peak memory was roughly
+   * twice the export — and the whole thing was held until the last row was
+   * formatted, which is also why the client saw nothing until then.
+   *
+   * Rows are now walked in batches with a keyset cursor and written out as they
+   * arrive, so memory is bounded by BATCH_SIZE regardless of form size and the
+   * download starts immediately.
+   *
+   * Validation happens eagerly, *before* the generator is returned: generators
+   * are lazy, and a NotFoundException raised after the controller had already
+   * written a 200 and a Content-Disposition would arrive as a corrupt file
+   * rather than an error.
    */
-  async exportSubmissions(orgId: string, formId: string, format: 'csv' | 'json') {
+  async exportSubmissions(
+    orgId: string,
+    formId: string,
+    format: 'csv' | 'json',
+  ): Promise<AsyncGenerator<string>> {
     const form = await this.prisma.reader.form.findFirst({
       where: { id: formId, organizationId: orgId, deletedAt: null },
       include: { versions: { orderBy: { version: 'desc' }, take: 1 } },
     });
     if (!form) throw new NotFoundException('Form not found');
 
-    // HARD CAP: this builds the whole export in memory. A form with 500k
-    // responses would OOM the pod. Anything above this must go through an async
-    // export job that streams a cursor to object storage — see EXPORT_MAX_ROWS.
+    /**
+     * Still capped, but this is now a *policy* limit rather than a memory one:
+     * streaming means a huge export no longer risks the pod, it just occupies a
+     * request and a reader connection for a long time. Raising EXPORT_MAX_ROWS
+     * is safe in a way it was not before.
+     */
     const maxRows = parseInt(process.env.EXPORT_MAX_ROWS ?? '50000', 10);
     const total = await this.prisma.reader.formSubmission.count({ where: { formId } });
     if (total > maxRows) {
@@ -917,42 +940,83 @@ Respond ONLY with a valid JSON object matching this structure:
       );
     }
 
-    const submissions = await this.prisma.reader.formSubmission.findMany({
-      where: { formId },
-      orderBy: { submittedAt: 'desc' },
-      take: maxRows,
-    });
-
-    if (format === 'json') {
-      return submissions;
-    }
-
-    // CSV format
     const questions = (form.versions[0]?.questionsJson as any[]) || [];
+    return format === 'json'
+      ? this.streamJsonExport(formId, maxRows)
+      : this.streamCsvExport(formId, maxRows, questions);
+  }
+
+  /**
+   * Walk a form's submissions oldest-cap-first in keyset batches.
+   *
+   * `submittedAt` alone is not unique — two responses landing in the same
+   * millisecond would make an offset scan skip or repeat rows — so `id` is the
+   * tiebreaker and the cursor, giving a total order that is stable even while
+   * new submissions arrive mid-export.
+   */
+  private async *submissionBatches(formId: string, maxRows: number) {
+    const BATCH_SIZE = 1_000;
+    let cursor: string | undefined;
+    let emitted = 0;
+
+    while (emitted < maxRows) {
+      const batch = await this.prisma.reader.formSubmission.findMany({
+        where: { formId },
+        orderBy: [{ submittedAt: 'desc' }, { id: 'asc' }],
+        take: Math.min(BATCH_SIZE, maxRows - emitted),
+        ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+      });
+      if (batch.length === 0) return;
+
+      emitted += batch.length;
+      cursor = batch[batch.length - 1].id;
+      yield batch;
+    }
+  }
+
+  private async *streamCsvExport(formId: string, maxRows: number, questions: any[]) {
     // Extract labels or IDs for headers. Prioritize labels if available.
     const questionHeaders = questions.map((q) => q.label || q.id);
     const headers = ['Submission ID', 'Submitted At', 'Status', 'Country', ...questionHeaders];
 
-    const csvRows = [headers.map((h) => csvCell(h)).join(',')];
-
-    for (const sub of submissions) {
-      const answers = (sub.answers as Record<string, any>) || {};
-      const row = [
-        csvCell(sub.id),
-        csvCell(sub.submittedAt.toISOString()),
-        csvCell(sub.status),
-        csvCell(sub.country ?? ''),
-        ...questions.map((q) => {
-          const val = answers[q.id];
-          if (val === undefined || val === null) return '';
-          return csvCell(typeof val === 'object' ? JSON.stringify(val) : String(val));
-        }),
-      ];
-      csvRows.push(row.join(','));
-    }
-
     // CRLF is what Excel expects; a bare \n breaks multi-line cells there.
-    return csvRows.join('\r\n');
+    yield headers.map((h) => csvCell(h)).join(',');
+
+    for await (const batch of this.submissionBatches(formId, maxRows)) {
+      const lines: string[] = [];
+      for (const sub of batch) {
+        const answers = (sub.answers as Record<string, any>) || {};
+        lines.push(
+          [
+            csvCell(sub.id),
+            csvCell(sub.submittedAt.toISOString()),
+            csvCell(sub.status),
+            csvCell(sub.country ?? ''),
+            ...questions.map((q) => {
+              const val = answers[q.id];
+              if (val === undefined || val === null) return '';
+              return csvCell(typeof val === 'object' ? JSON.stringify(val) : String(val));
+            }),
+          ].join(','),
+        );
+      }
+      // Leading CRLF terminates the previous chunk's final row, so no trailing
+      // blank line is emitted at the end.
+      yield `\r\n${lines.join('\r\n')}`;
+    }
+  }
+
+  /** Same rows the non-streaming version returned, emitted as a JSON array. */
+  private async *streamJsonExport(formId: string, maxRows: number) {
+    yield '[';
+    let first = true;
+    for await (const batch of this.submissionBatches(formId, maxRows)) {
+      for (const sub of batch) {
+        yield first ? JSON.stringify(sub) : `,${JSON.stringify(sub)}`;
+        first = false;
+      }
+    }
+    yield ']';
   }
 
   /**
