@@ -54,6 +54,7 @@ export class FormAppStepsController {
       isOptional?: boolean;
       uniqueBy?: string[];
       occurredAtKey?: string | null;
+      schedule?: unknown;
       showWhen?: unknown;
     },
     @Req() req: Request,
@@ -79,6 +80,7 @@ export class FormAppStepsController {
       isOptional?: boolean;
       uniqueBy?: string[];
       occurredAtKey?: string | null;
+      schedule?: unknown;
       showWhen?: unknown;
     },
     @Req() req: Request,
@@ -175,6 +177,10 @@ export class FormAppStepsController {
       allowDrafts?: boolean;
       isPublished?: boolean;
       layoutMode?: AppLayoutMode;
+      /** NONE, hand-made FIXED windows, or a RECURRING cadence. */
+      periodMode?: 'NONE' | 'FIXED' | 'RECURRING';
+      /** Cadence, anchor, grace and backfill. Read only when RECURRING. */
+      periodConfig?: unknown;
     },
     @Req() req: Request,
   ) {

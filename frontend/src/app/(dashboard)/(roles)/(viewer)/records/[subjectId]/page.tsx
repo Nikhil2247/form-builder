@@ -2,7 +2,16 @@
 
 import React, { useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
-import { Boxes, ChevronRight, Contact, FileBox, Hash, Inbox, Trash2 } from 'lucide-react';
+import {
+  Boxes,
+  CalendarClock,
+  ChevronRight,
+  Contact,
+  FileBox,
+  Hash,
+  Inbox,
+  Trash2,
+} from 'lucide-react';
 import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
@@ -32,6 +41,7 @@ import type { Submission } from '@/hooks/use-submissions';
 import {
   useDeleteSubject,
   useSubject,
+  useSubjectEntryOptions,
   useSubjectTimeline,
   type TimelineEntry,
 } from '@/hooks/use-subjects';
@@ -215,16 +225,25 @@ export default function RecordDetailPage() {
             description="Every form filled against this record — visits, follow-ups, measurements — will appear here in order."
           />
         ) : (
-          <div className="space-y-3">
-            <ol className="relative space-y-3 border-l border-border pl-6">
-              {entries.map((entry, index) => (
-                <TimelineRow
-                  key={entry.id}
-                  entry={entry}
-                  onOpen={() => setOpenEntryIndex(index)}
-                />
-              ))}
-            </ol>
+          <div className="space-y-5">
+            {groupByPeriod(entries).map((group) => (
+              <div key={group.key} className="space-y-3">
+                {group.label && (
+                  <h3 className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                    {group.label}
+                  </h3>
+                )}
+                <ol className="relative space-y-3 border-l border-border pl-6">
+                  {group.entries.map((entry) => (
+                    <TimelineRow
+                      key={entry.id}
+                      entry={entry}
+                      onOpen={() => setOpenEntryIndex(entries.indexOf(entry))}
+                    />
+                  ))}
+                </ol>
+              </div>
+            ))}
 
             <div className="overflow-hidden rounded-xl border border-border bg-card">
               <DataTablePagination
@@ -235,6 +254,10 @@ export default function RecordDetailPage() {
             </div>
           </div>
         )}
+
+        {/* What is MISSING, which a list of what happened can never show. This
+            is the output a monitoring programme actually exists to produce. */}
+        <OutstandingEntries subjectId={subjectId} />
       </section>
 
       <EntryDialog
@@ -263,6 +286,108 @@ export default function RecordDetailPage() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Entries grouped into the cycle they were filed under.
+ *
+ * Grouped in memory over the page already fetched, never with a query per
+ * period — a dozen round-trips to render one page is what makes longitudinal
+ * views feel slow. Entries arrive ordered by `occurredAt`, so consecutive runs
+ * of the same period are already contiguous and this is a single pass.
+ *
+ * Standalone entries — no app, no period — fall into one unlabelled group, so a
+ * record whose history predates reporting periods still renders as a plain
+ * list rather than under a heading invented for it.
+ */
+function groupByPeriod(entries: TimelineEntry[]) {
+  const groups: Array<{ key: string; label: string | null; entries: TimelineEntry[] }> =
+    [];
+
+  for (const entry of entries) {
+    const key = entry.period?.id ?? '__none__';
+    const last = groups[groups.length - 1];
+    if (last && last.key === key) {
+      last.entries.push(entry);
+    } else {
+      groups.push({ key, label: entry.period?.label ?? null, entries: [entry] });
+    }
+  }
+
+  return groups;
+}
+
+/**
+ * What has NOT been recorded yet.
+ *
+ * Reuses the same availability data the "Add entry" menu is built from, so the
+ * two can never disagree about whether March's check is outstanding. Only steps
+ * that are actually scheduled appear — an unscheduled step has no date it was
+ * expected by, so calling it missing would be an opinion rather than a fact.
+ */
+function OutstandingEntries({ subjectId }: { subjectId: string }) {
+  const entries = useSubjectEntryOptions(subjectId);
+
+  const outstanding = (entries.data?.options ?? []).flatMap((option) =>
+    option.steps
+      .filter(
+        (step) =>
+          step.available &&
+          (step.due.status === 'DUE' || step.due.status === 'OVERDUE'),
+      )
+      .map((step) => ({ option, step })),
+  );
+
+  if (outstanding.length === 0) return null;
+
+  return (
+    <div className="space-y-3 rounded-xl border border-dashed border-border p-4">
+      <h3 className="flex items-center gap-2 text-sm font-semibold">
+        <CalendarClock className="size-4 text-muted-foreground" strokeWidth={1.5} />
+        Outstanding
+      </h3>
+      <ul className="space-y-2">
+        {outstanding.map(({ option, step }) => (
+          <li
+            key={`${option.app.id}-${step.stepKey}`}
+            className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm"
+          >
+            <span className="font-medium text-foreground">{step.title}</span>
+            <span className="text-xs text-muted-foreground">
+              {step.due.status === 'OVERDUE' ? (
+                <>
+                  {step.due.missedCount > 1
+                    ? `${step.due.missedCount} missed`
+                    : `${step.due.overdueByDays} days overdue`}
+                  {step.due.dueAt && (
+                    <>
+                      {' · was due '}
+                      <FormattedDate value={step.due.dueAt} />
+                    </>
+                  )}
+                </>
+              ) : (
+                <>
+                  Due <FormattedDate value={step.due.dueAt} />
+                </>
+              )}
+            </span>
+            {option.app.publicSlug && (
+              <a
+                href={
+                  `/a/${option.app.publicSlug}?subject=${encodeURIComponent(subjectId)}` +
+                  `&step=${encodeURIComponent(step.stepKey)}`
+                }
+                className="ml-auto text-xs font-medium text-primary underline underline-offset-4"
+              >
+                Record now
+              </a>
+            )}
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
 
 /**
  * One entry in the record's history.

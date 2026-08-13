@@ -28,6 +28,12 @@ import {
   uniqueByKeys,
   type StepScope,
 } from './step-scope';
+import { fileableWindows, readPeriodConfig } from './period-cadence';
+import {
+  dueStateFor,
+  scheduleAnchorKey,
+  type StepDueState,
+} from './step-schedule';
 
 /**
  * Form-app sessions — one sitting, many submissions, one act.
@@ -66,6 +72,20 @@ export interface SessionActor {
   fingerprint?: string;
 }
 
+/**
+ * A window a report may be filed into.
+ *
+ * `id` is NULL for a generated window nobody has filed into yet — the row is
+ * created on first use, not on every session open.
+ */
+export interface FileablePeriod {
+  id: string | null;
+  label: string;
+  startsAt: Date;
+  endsAt: Date;
+  sequence: number | null;
+}
+
 /** Why a step is or is not offerable for a record right now. */
 export type StepAvailabilityReason =
   | 'OPEN'
@@ -89,6 +109,10 @@ export interface StepAvailability {
   /** NULL when the step has no ceiling. */
   remaining: number | null;
   lastOccurredAt: Date | null;
+  /** Where the step stands against its schedule. NOT_SCHEDULED for most steps. */
+  due: StepDueState;
+  /** Start of the window this entry would be filed under, when there is one. */
+  periodStartsAt: Date | null;
   available: boolean;
   reason: StepAvailabilityReason;
   /** A sentence for the greyed-out case. NULL when the step is open. */
@@ -110,6 +134,7 @@ interface LoadedStep {
   showWhen: unknown;
   uniqueBy: unknown;
   occurredAtKey: string | null;
+  schedule: unknown;
   formId: string;
   form: {
     id: string;
@@ -445,7 +470,12 @@ export class FormAppSessionsService {
     app: {
       periodMode: 'NONE' | 'FIXED' | 'RECURRING';
       periodConfig: unknown;
-      periods: Array<{ id: string; label: string; startsAt: Date; endsAt: Date }>;
+      periods: Array<{
+        id: string;
+        label: string;
+        startsAt: Date;
+        endsAt: Date;
+      }>;
     },
     now: Date = new Date(),
   ): { windows: FileablePeriod[]; isClosed: boolean } {
@@ -593,7 +623,12 @@ export class FormAppSessionsService {
   async openSession(
     appId: string,
     actor: SessionActor,
-    options: { subjectId?: string; stepKeys?: string[] } = {},
+    options: {
+      subjectId?: string;
+      stepKeys?: string[];
+      /** File into a specific open window — the late-entry case. */
+      periodId?: string;
+    } = {},
   ) {
     const app = await this.loadApp(appId);
 
@@ -608,12 +643,20 @@ export class FormAppSessionsService {
       );
     }
 
-    const period = this.activePeriod(app);
-    if (app.periods.length > 0 && !period) {
+    const { windows, isClosed } = this.fileablePeriods(app);
+    if (isClosed) {
       throw new ForbiddenException(
         'This app is outside its reporting period and is not accepting reports right now.',
       );
     }
+
+    const window = this.pickPeriod(windows, options.periodId);
+    // Materialised here rather than at submit because the session row has to
+    // carry a real period id: SUBJECT_PERIOD counting is keyed on it, and a
+    // draft with a null period would count against the wrong bucket for the
+    // whole time it stayed open. In the steady state this is one indexed read;
+    // the insert happens once per window per app.
+    const period = window ? await this.materialisePeriod(appId, window) : null;
 
     // ── Follow-up: bind the subject before anything else ────────────────────
     //
@@ -637,7 +680,7 @@ export class FormAppSessionsService {
     const stepKeys = await this.resolveRequestedStepKeys(
       app,
       subjectId,
-      period?.id ?? null,
+      period,
       options.stepKeys,
       mode,
     );
@@ -683,7 +726,7 @@ export class FormAppSessionsService {
       data: {
         appId,
         organizationId: app.organizationId,
-        periodId: period?.id ?? null,
+        periodId: period,
         status: 'DRAFT',
         mode,
         subjectId,
@@ -787,6 +830,12 @@ export class FormAppSessionsService {
     appId: string,
     subjectId: string | null,
     periodId: string | null,
+    context: {
+      /** Start of the window, for describing what a per-period step is due in. */
+      periodStartsAt?: Date | null;
+      /** The record's creation, the default schedule anchor. Fetched if absent. */
+      subjectCreatedAt?: Date | null;
+    } = {},
   ): Promise<StepAvailability[]> {
     const steps = await this.loadSteps(appId);
     if (steps.length === 0) return [];
@@ -802,10 +851,42 @@ export class FormAppSessionsService {
     const visible = this.visibleSteps(steps, new Map(), accumulated);
     const visibleIds = new Set(visible.map((step) => step.id));
 
+    // The schedule anchor. REGISTRATION means the record's own creation; any
+    // other value names a step, whose latest entry is the anchor — "three
+    // months after course exit", which is when a placement follow-up is due.
+    //
+    // Read from history the caller already has, so schedules cost no query. The
+    // record's creation date is fetched only when a schedule actually needs it
+    // and the caller did not supply it.
+    const stepIdByKey = new Map(steps.map((step) => [step.key, step.id]));
+    let subjectCreatedAt = context.subjectCreatedAt ?? null;
+    if (subjectId && !subjectCreatedAt && steps.some((step) => step.schedule)) {
+      subjectCreatedAt =
+        (
+          await this.prisma.reader.subject.findUnique({
+            where: { id: subjectId },
+            select: { createdAt: true },
+          })
+        )?.createdAt ?? null;
+    }
+
+    const anchorFor = (step: LoadedStep): Date | null => {
+      const anchorKey = scheduleAnchorKey(step.schedule);
+      if (!anchorKey) return subjectCreatedAt;
+      const anchorStepId = stepIdByKey.get(anchorKey);
+      return anchorStepId ? history.lastOccurredAt(anchorStepId) : null;
+    };
+
     return steps.map((step): StepAvailability => {
       const existingCount = history.countFor(step, periodId);
       const max = effectiveMax(step);
       const remaining = max === null ? null : Math.max(max - existingCount, 0);
+
+      const due = dueStateFor({
+        schedule: step.schedule,
+        anchorAt: anchorFor(step),
+        existingCount,
+      });
 
       const base = {
         stepKey: step.key,
@@ -820,6 +901,10 @@ export class FormAppSessionsService {
         existingCount,
         remaining,
         lastOccurredAt: history.lastOccurredAt(step.id),
+        due,
+        // What this entry would be filed under, so a menu can say "Add March
+        // 2026" rather than the bare step title.
+        periodStartsAt: context.periodStartsAt ?? null,
       };
 
       // A record that exists was already registered. Checked before scope so
@@ -897,6 +982,8 @@ export class FormAppSessionsService {
         slug: true,
         icon: true,
         publicSlug: true,
+        periodMode: true,
+        periodConfig: true,
         periods: {
           where: { isActive: true },
           orderBy: { startsAt: 'desc' },
@@ -910,11 +997,13 @@ export class FormAppSessionsService {
     // would trade a real connection-pool risk for a saving nobody can perceive.
     const options = [];
     for (const app of apps) {
-      const period = this.activePeriod(app);
+      const { windows, isClosed } = this.fileablePeriods(app);
+      const current = windows[0] ?? null;
       const steps = await this.stepsAvailableForSubject(
         app.id,
         subjectId,
-        period?.id ?? null,
+        current?.id ?? null,
+        { periodStartsAt: current?.startsAt ?? null },
       );
       options.push({
         app: {
@@ -924,15 +1013,121 @@ export class FormAppSessionsService {
           icon: app.icon,
           publicSlug: app.publicSlug,
         },
-        period,
-        // An app whose periods are all closed accepts nothing right now, and
-        // says so once rather than repeating it on every step.
-        isOutsidePeriod: app.periods.length > 0 && !period,
+        period: current,
+        // Every window still open, so a worker filing late can pick the month
+        // the visit actually happened in rather than the month they typed it.
+        // One entry for a FIXED app; the current plus any in grace for a
+        // RECURRING one.
+        fileablePeriods: windows,
+        // An app whose FIXED windows are all closed accepts nothing right now,
+        // and says so once rather than repeating it on every step.
+        isOutsidePeriod: isClosed,
         steps,
       });
     }
 
     return { subjectId, options };
+  }
+
+  /**
+   * Records missing this window's entry for one step — the work queue.
+   *
+   * ── Why there is no total, and never will be ───────────────────────────────
+   * "342 students due" needs a COUNT over an anti-join, which has to probe
+   * every subject in the organization before it can answer. The LIMITed LIST
+   * below stops as soon as it has filled a page. The number is the expensive
+   * part; the rows are cheap. A work queue is worked through from the top, so
+   * the number was never the point — and a page that renders instantly beats a
+   * page that renders a count.
+   *
+   * Cursor pagination rather than offset for the same reason: OFFSET 500 makes
+   * the database walk and discard five hundred rows it has already excluded
+   * once.
+   */
+  async dueForStep(
+    orgId: string,
+    appId: string,
+    stepKey: string,
+    options: { limit?: number; cursor?: string } = {},
+  ) {
+    const app = await this.prisma.reader.formApp.findFirst({
+      where: { id: appId, organizationId: orgId, deletedAt: null },
+      select: {
+        id: true,
+        subjectTypeId: true,
+        periodMode: true,
+        periodConfig: true,
+        periods: {
+          where: { isActive: true },
+          orderBy: { startsAt: 'desc' },
+          select: { id: true, label: true, startsAt: true, endsAt: true },
+        },
+      },
+    });
+    if (!app) throw new NotFoundException('App not found.');
+
+    const step = await this.prisma.reader.formAppStep.findFirst({
+      where: { appId, key: stepKey },
+      select: { id: true, key: true, title: true, scope: true },
+    });
+    if (!step) throw new NotFoundException('Step not found.');
+
+    const { windows } = this.fileablePeriods(app);
+    const current = windows[0] ?? null;
+
+    // A SUBJECT-scoped step is "missing" if the record has NO entry ever; a
+    // SUBJECT_PERIOD one if it has none in THIS window. A SESSION-scoped step
+    // has no per-record notion of missing at all — its cardinality lives inside
+    // one sitting — so asking is a configuration error worth naming.
+    if (step.scope === 'SESSION') {
+      throw new BadRequestException(
+        `"${step.title}" is counted per sitting, so it is never outstanding for a record. Set its scope to per-record or per-period first.`,
+      );
+    }
+
+    const missing: any = {
+      formAppStepId: step.id,
+      deletedAt: null,
+      status: { not: 'DELETED' as const },
+    };
+    if (step.scope === 'SUBJECT_PERIOD') {
+      // NULL when the window exists only as a computation — nobody has filed
+      // into it yet, so by definition every record is missing it.
+      missing.periodId = current?.id ?? '__unmaterialised__';
+    }
+
+    const limit = Math.min(Math.max(options.limit ?? 25, 1), 100);
+
+    const records = await this.prisma.reader.subject.findMany({
+      where: {
+        organizationId: orgId,
+        subjectTypeId: app.subjectTypeId,
+        deletedAt: null,
+        // Prisma compiles this to NOT EXISTS, which the
+        // (subject_id, form_app_step_id, period_id) index serves as a probe.
+        submissions: { none: missing },
+      },
+      orderBy: { createdAt: 'desc' },
+      take: limit + 1,
+      ...(options.cursor ? { cursor: { id: options.cursor }, skip: 1 } : {}),
+      select: {
+        id: true,
+        displayName: true,
+        externalId: true,
+        createdAt: true,
+      },
+    });
+
+    const hasMore = records.length > limit;
+    const page = hasMore ? records.slice(0, limit) : records;
+
+    return {
+      step: { key: step.key, title: step.title, scope: step.scope },
+      period: current,
+      records: page,
+      // A cursor, not a page count. See the note above.
+      nextCursor: hasMore ? (page[page.length - 1]?.id ?? null) : null,
+    };
   }
 
   /**

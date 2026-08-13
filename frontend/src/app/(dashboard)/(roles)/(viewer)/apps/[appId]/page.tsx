@@ -24,6 +24,7 @@ import {
 import { formatCompact } from '@/components/shared/formatters';
 import { Can } from '@/components/auth/RoleGuard';
 import { DataAppsDisabled } from '@/components/apps/DataAppsGate';
+import { DueThisPeriod } from '@/components/apps/DueThisPeriod';
 import { PhonePreview } from '@/components/apps/PhonePreview';
 import { PhoneAppSimulator } from '@/components/apps/PhoneAppSimulator';
 import { FEATURES, useFeature } from '@/hooks/use-features';
@@ -277,6 +278,14 @@ export default function AppDetailPage() {
               }
             />
           </section>
+
+          {/* Above the step list, because it is the thing a data-entry worker
+              opens this page to act on — the steps themselves are reference. */}
+          <DueThisPeriod
+            appId={appId}
+            steps={steps}
+            publicSlug={detail?.isPublished ? (detail?.publicSlug ?? null) : null}
+          />
 
           <section className="space-y-3">
             <div className="flex flex-wrap items-baseline justify-between gap-2">

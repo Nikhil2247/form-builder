@@ -92,7 +92,29 @@ ALTER TABLE "form_submissions"
 -- `ORDER BY COALESCE(occurred_at, submitted_at)` cannot use a btree index —
 -- the timeline would sort its entire result set on every page load.
 ALTER TABLE "form_submissions" ADD COLUMN IF NOT EXISTS "occurred_at" TIMESTAMP(3);
-UPDATE "form_submissions" SET "occurred_at" = "submitted_at" WHERE "occurred_at" IS NULL;
+
+-- Two cases, and the second is why this is not simply `WHERE occurred_at IS NULL`.
+--
+--  1. The column was just created here, so every row is NULL.
+--  2. The column already existed because a `prisma db push` created it FROM THE
+--     SCHEMA, where it carries `@default(now())`. Postgres then stamped every
+--     pre-existing row with the moment of that push — so a response collected
+--     last March claims to have occurred the day somebody synced the schema,
+--     and the timeline orders the entire history by that one instant.
+--
+-- `form_app_step_id IS NULL` identifies case 2 precisely: only the new submit
+-- path writes a meaningful `occurred_at`, and it always writes
+-- `form_app_step_id` in the same statement. A row without one cannot have a
+-- deliberate occurrence date to protect. Standalone submissions match too and
+-- are unaffected — theirs already equals the submission time.
+--
+-- This MUST run before the provenance backfill below, which is about to give
+-- those same rows a `form_app_step_id` and would otherwise exclude them.
+UPDATE "form_submissions"
+   SET "occurred_at" = "submitted_at"
+ WHERE "occurred_at" IS NULL
+    OR "form_app_step_id" IS NULL;
+
 ALTER TABLE "form_submissions" ALTER COLUMN "occurred_at" SET NOT NULL;
 ALTER TABLE "form_submissions" ALTER COLUMN "occurred_at" SET DEFAULT CURRENT_TIMESTAMP;
 
@@ -121,20 +143,39 @@ UPDATE "form_submissions" s
 -- NULL, the partial unique index ignores them, and the first new entry for a
 -- step establishes the series.
 
-ALTER TABLE "form_submissions"
-  ADD CONSTRAINT "form_submissions_app_session_id_fkey"
-  FOREIGN KEY ("app_session_id") REFERENCES "form_app_sessions"("id")
-  ON DELETE SET NULL ON UPDATE CASCADE;
+-- Guarded, because Postgres has no `ADD CONSTRAINT IF NOT EXISTS`.
+--
+-- Every other statement in this file is idempotent, and these three were not —
+-- so re-running the migration against a database where a `prisma db push` had
+-- already created the foreign keys aborted the whole thing at this point with
+-- 42710, leaving the partial unique index below and both backfills unapplied.
+-- A migration that cannot be re-run is a migration that cannot be recovered.
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'form_submissions_app_session_id_fkey') THEN
+    ALTER TABLE "form_submissions"
+      ADD CONSTRAINT "form_submissions_app_session_id_fkey"
+      FOREIGN KEY ("app_session_id") REFERENCES "form_app_sessions"("id")
+      ON DELETE SET NULL ON UPDATE CASCADE;
+  END IF;
+END $$;
 
-ALTER TABLE "form_submissions"
-  ADD CONSTRAINT "form_submissions_form_app_step_id_fkey"
-  FOREIGN KEY ("form_app_step_id") REFERENCES "form_app_steps"("id")
-  ON DELETE SET NULL ON UPDATE CASCADE;
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'form_submissions_form_app_step_id_fkey') THEN
+    ALTER TABLE "form_submissions"
+      ADD CONSTRAINT "form_submissions_form_app_step_id_fkey"
+      FOREIGN KEY ("form_app_step_id") REFERENCES "form_app_steps"("id")
+      ON DELETE SET NULL ON UPDATE CASCADE;
+  END IF;
+END $$;
 
-ALTER TABLE "form_submissions"
-  ADD CONSTRAINT "form_submissions_period_id_fkey"
-  FOREIGN KEY ("period_id") REFERENCES "form_app_periods"("id")
-  ON DELETE SET NULL ON UPDATE CASCADE;
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'form_submissions_period_id_fkey') THEN
+    ALTER TABLE "form_submissions"
+      ADD CONSTRAINT "form_submissions_period_id_fkey"
+      FOREIGN KEY ("period_id") REFERENCES "form_app_periods"("id")
+      ON DELETE SET NULL ON UPDATE CASCADE;
+  END IF;
+END $$;
 
 -- ── Indexes ─────────────────────────────────────────────────────────────────
 

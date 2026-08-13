@@ -3,6 +3,7 @@
 import React from 'react';
 import {
   AlertTriangle,
+  Boxes,
   ChevronDown,
   ChevronUp,
   Fingerprint,
@@ -34,6 +35,7 @@ import {
   useUpdateAppStep,
   type FormAppStep,
   type StepMode,
+  type StepScope,
   type StepShapeDto,
 } from '@/hooks/use-form-apps';
 
@@ -399,6 +401,15 @@ function StepEditor({
     [form.data],
   );
 
+  // Candidates for "the date this happened". Restricted to date questions
+  // because the value is parsed as one server-side — offering a text field here
+  // would let an author nominate something that silently never parses and falls
+  // back to the submission time with nothing on screen to say so.
+  const dateQuestionKeys = React.useMemo(
+    () => questionKeys.filter((row) => row.type === 'DATE'),
+    [questionKeys],
+  );
+
   const isRepeatable = step.mode === 'REPEATABLE';
 
   const toggleUniqueBy = (key: string) => {
@@ -461,6 +472,34 @@ function StepEditor({
           </NativeSelect>
         </PanelRow>
 
+        {/* Placed immediately after "how many times", because it decides what
+            that number COUNTS. Read as a pair they are unambiguous; read apart,
+            "at most 6" is the same sentence with three different meanings. */}
+        <PanelRow
+          icon={Boxes}
+          title="Counted per"
+          hint={
+            step.scope === 'SESSION'
+              ? 'One sitting. The limits above reset every time somebody opens the app.'
+              : step.scope === 'SUBJECT'
+                ? "The record's whole history. Use this for anything filled once per person, or a fixed number of times ever."
+                : 'Each record, each reporting cycle. Use this for anything recorded on a repeating schedule — a monthly check, a quarterly return.'
+          }
+        >
+          <NativeSelect
+            className="w-full sm:w-52"
+            value={step.scope}
+            aria-label="Counted per"
+            onChange={(e) => onPatch({ scope: e.target.value as StepScope })}
+          >
+            <NativeSelectOption value="SESSION">Sitting</NativeSelectOption>
+            <NativeSelectOption value="SUBJECT">Record</NativeSelectOption>
+            <NativeSelectOption value="SUBJECT_PERIOD">
+              Record, per cycle
+            </NativeSelectOption>
+          </NativeSelect>
+        </PanelRow>
+
         {isRepeatable && (
           <PanelRow
             icon={ListOrdered}
@@ -499,6 +538,42 @@ function StepEditor({
               />
             </div>
           </PanelRow>
+        )}
+
+        {/* Only meaningful once entries are counted against a record: within
+            one sitting the submission time and the real-world date are the
+            same afternoon, so nominating a date question buys nothing. */}
+        {step.scope !== 'SESSION' && (
+          <PanelBlock
+            label="Date this happened"
+            hint={
+              form.isLoading
+                ? 'Loading this form’s questions…'
+                : dateQuestionKeys.length === 0
+                  ? 'This form has no date question. Add one to record when a visit actually took place.'
+                  : 'The timeline orders by this rather than by when the entry was typed, so a February visit written up in March still reads as February.'
+            }
+          >
+            {dateQuestionKeys.length > 0 && (
+              <NativeSelect
+                className="w-full"
+                aria-label="Date this happened"
+                value={step.occurredAtKey ?? ''}
+                onChange={(e) =>
+                  onPatch({ occurredAtKey: e.target.value || null })
+                }
+              >
+                <NativeSelectOption value="">
+                  When it was submitted
+                </NativeSelectOption>
+                {dateQuestionKeys.map((row) => (
+                  <NativeSelectOption key={row.key} value={row.key}>
+                    {row.label}
+                  </NativeSelectOption>
+                ))}
+              </NativeSelect>
+            )}
+          </PanelBlock>
         )}
 
         <PanelRow

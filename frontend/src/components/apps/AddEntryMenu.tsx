@@ -20,6 +20,8 @@ import {
   useSubjectEntryOptions,
   type AvailableStep,
   type EntryOption,
+  type FileablePeriod,
+  type StepDueState,
 } from '@/hooks/use-subjects';
 
 /**
@@ -118,16 +120,90 @@ function AppSection({
           record entries against it.
         </Notice>
       ) : (
-        option.steps.map((step) => (
-          <StepItem
-            key={step.stepKey}
-            step={step}
-            subjectId={subjectId}
-            publicSlug={option.app.publicSlug!}
-          />
-        ))
+        <>
+          {option.steps.map((step) => (
+            <StepItem
+              key={step.stepKey}
+              step={step}
+              subjectId={subjectId}
+              publicSlug={option.app.publicSlug!}
+              period={option.period}
+            />
+          ))}
+
+          {/* Late entry. Offered only when a closed window is still inside its
+              grace, because listing "file under February" all March would
+              invite entries into the wrong month rather than prevent them. */}
+          {option.fileablePeriods.length > 1 && (
+            <LateEntry
+              subjectId={subjectId}
+              publicSlug={option.app.publicSlug!}
+              steps={option.steps}
+              periods={option.fileablePeriods.slice(1)}
+            />
+          )}
+        </>
       )}
     </DropdownMenuGroup>
+  );
+}
+
+/**
+ * Filing into a window that has closed but is still in grace.
+ *
+ * A worker who visited on the 28th and reaches a keyboard on the 3rd needs the
+ * entry to land in the month it happened. Without this the only options are
+ * filing it under the wrong month or not filing it at all, and people choose
+ * the wrong month.
+ */
+function LateEntry({
+  subjectId,
+  publicSlug,
+  steps,
+  periods,
+}: {
+  subjectId: string;
+  publicSlug: string;
+  steps: AvailableStep[];
+  periods: FileablePeriod[];
+}) {
+  // Only steps counted per period can be filed into a past one — for anything
+  // else the window is a label rather than a bucket, so offering the choice
+  // would imply a distinction that does not exist.
+  const perPeriod = steps.filter(
+    (step) => step.available && step.scope === 'SUBJECT_PERIOD',
+  );
+  if (perPeriod.length === 0) return null;
+
+  return (
+    <>
+      <DropdownMenuSeparator />
+      <DropdownMenuLabel className="text-xs font-normal text-muted-foreground">
+        Record for an earlier period
+      </DropdownMenuLabel>
+      {periods.map((period) =>
+        perPeriod.map((step) => (
+          <DropdownMenuItem
+            key={`${period.startsAt}-${step.stepKey}`}
+            render={
+              <a
+                href={
+                  `/a/${publicSlug}?subject=${encodeURIComponent(subjectId)}` +
+                  `&step=${encodeURIComponent(step.stepKey)}` +
+                  (period.id ? `&period=${encodeURIComponent(period.id)}` : '')
+                }
+              />
+            }
+            className="cursor-pointer"
+          >
+            <CalendarClock className="mr-2 size-3.5 shrink-0" strokeWidth={1.5} />
+            <span className="truncate">
+              {step.title} · {period.label}
+            </span>
+          </DropdownMenuItem>
+        )),
+      )}
+    </>
   );
 }
 
@@ -150,10 +226,12 @@ function StepItem({
   step,
   subjectId,
   publicSlug,
+  period,
 }: {
   step: AvailableStep;
   subjectId: string;
   publicSlug: string;
+  period: FileablePeriod | null;
 }) {
   if (!step.available) {
     return (
@@ -163,7 +241,12 @@ function StepItem({
           <span className="truncate">{step.title}</span>
         </span>
         {step.detail && (
-          <span className="text-xs text-muted-foreground">{step.detail}</span>
+          <span className="text-xs text-muted-foreground">
+            {step.detail}
+            {/* Which window it is satisfied FOR. "Already recorded" alone reads
+                as permanent when it only means "for March". */}
+            {step.reason === 'PERIOD_SATISFIED' && period && ` (${period.label})`}
+          </span>
         )}
       </DropdownMenuItem>
     );
@@ -185,6 +268,7 @@ function StepItem({
       <span className="flex w-full items-center gap-2">
         {step.icon && <span aria-hidden>{step.icon}</span>}
         <span className="truncate font-medium">{step.title}</span>
+        <DueBadge due={step.due} />
         {step.remaining !== null && step.existingCount > 0 && (
           <span className="tabular ml-auto shrink-0 text-xs text-muted-foreground">
             {step.remaining} left
@@ -208,4 +292,33 @@ function StepItem({
       </span>
     </DropdownMenuItem>
   );
+}
+
+/**
+ * How far past its date a step is.
+ *
+ * Only OVERDUE and DUE get a badge. Marking "upcoming" would put a colour on
+ * every scheduled step at all times, which is the fastest way to teach people
+ * that the colours mean nothing.
+ */
+function DueBadge({ due }: { due: StepDueState }) {
+  if (due.status === 'OVERDUE') {
+    return (
+      <span className="shrink-0 rounded bg-destructive/10 px-1.5 py-0.5 text-xs font-medium text-destructive">
+        {due.missedCount > 1
+          ? `${due.missedCount} missed`
+          : `${due.overdueByDays}d overdue`}
+      </span>
+    );
+  }
+
+  if (due.status === 'DUE') {
+    return (
+      <span className="shrink-0 rounded bg-primary/10 px-1.5 py-0.5 text-xs font-medium text-primary">
+        Due
+      </span>
+    );
+  }
+
+  return null;
 }

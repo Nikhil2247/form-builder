@@ -62,8 +62,18 @@ export const CADENCE_DEFAULTS = {
 const DAY_MS = 86_400_000;
 
 const MONTH_NAMES = [
-  'January', 'February', 'March', 'April', 'May', 'June',
-  'July', 'August', 'September', 'October', 'November', 'December',
+  'January',
+  'February',
+  'March',
+  'April',
+  'May',
+  'June',
+  'July',
+  'August',
+  'September',
+  'October',
+  'November',
+  'December',
 ];
 
 /**
@@ -218,7 +228,10 @@ export function fileableWindows(
     const previous = shiftWindow(config, current, -back);
     // Grace runs from the window's END, so a 10-day grace on a monthly cadence
     // means "the 1st to the 10th", not "10 days from whenever this is asked".
-    if (now.getTime() <= previous.endsAt.getTime() + config.graceDays * DAY_MS) {
+    if (
+      now.getTime() <=
+      previous.endsAt.getTime() + config.graceDays * DAY_MS
+    ) {
       windows.push(previous);
     }
   }

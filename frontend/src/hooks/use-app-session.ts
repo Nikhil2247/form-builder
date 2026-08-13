@@ -77,6 +77,8 @@ export interface AppSession {
 
 /** How a session is opened. Absent fields mean "a plain new registration". */
 export interface OpenSessionOptions {
+  /** File into a specific open window — the late-entry case. */
+  periodId?: string;
   /** Record this session attaches to. Requires a signed-in caller. */
   subjectId?: string;
   /** Narrow the session to these steps, so "add one visit" is one form. */
@@ -188,6 +190,7 @@ export function useAppSession(publicSlug: string, options: OpenSessionOptions = 
   // `{}` default would be a fresh object every render and would reopen the
   // session on each one.
   const subjectId = options.subjectId;
+  const periodId = options.periodId;
   const stepKeysParam = options.stepKeys?.join(',');
 
   useEffect(() => {
@@ -199,6 +202,7 @@ export function useAppSession(publicSlug: string, options: OpenSessionOptions = 
       body: JSON.stringify({
         fingerprint: fp.current,
         subjectId,
+        periodId,
         stepKeys: stepKeysParam ? stepKeysParam.split(',') : undefined,
       }),
     })
@@ -225,7 +229,7 @@ export function useAppSession(publicSlug: string, options: OpenSessionOptions = 
     return () => {
       cancelled = true;
     };
-  }, [publicSlug, applyDrafts, subjectId, stepKeysParam]);
+  }, [publicSlug, applyDrafts, subjectId, periodId, stepKeysParam]);
 
   // Clear pending saves on unmount so a debounce cannot fire into a dead component.
   useEffect(() => {

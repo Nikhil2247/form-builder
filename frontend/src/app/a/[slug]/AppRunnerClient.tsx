@@ -50,9 +50,18 @@ function AppShellWithRunner({
   // an instruction.
   const subjectId = searchParams.get('subject') ?? undefined;
   const step = searchParams.get('step');
+  // Late entry: the window the visit actually belongs to, which is not always
+  // the one that is current when it gets typed up.
+  const periodId = searchParams.get('period') ?? undefined;
 
   return (
-    <AppShell slug={slug} app={app} subjectId={subjectId} stepKeys={step ? [step] : undefined} />
+    <AppShell
+      slug={slug}
+      app={app}
+      subjectId={subjectId}
+      stepKeys={step ? [step] : undefined}
+      periodId={periodId}
+    />
   );
 }
 
@@ -61,11 +70,13 @@ function AppShell({
   app,
   subjectId,
   stepKeys,
+  periodId,
 }: {
   slug: string;
   app: AppSummary & { theme?: FormTheme };
   subjectId?: string;
   stepKeys?: string[];
+  periodId?: string;
 }) {
   const theme: FormTheme = (app.theme ?? {}) as FormTheme;
   const branding = app.branding ?? {};
@@ -145,6 +156,7 @@ function AppShell({
             appearance={appearance}
             subjectId={subjectId}
             stepKeys={stepKeys}
+            periodId={periodId}
           />
         )}
 

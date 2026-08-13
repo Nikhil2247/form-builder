@@ -61,6 +61,29 @@ export interface AppForm {
 /** Filled once, or filled as many times as the respondent has records for. */
 export type StepMode = 'SINGLE' | 'REPEATABLE';
 
+/**
+ * Where a step's entry count is measured.
+ *
+ * SESSION — within one sitting, the original behaviour and still the default.
+ * SUBJECT — across the record's whole history ("registered once, ever").
+ * SUBJECT_PERIOD — per record, per reporting cycle ("one check a month").
+ */
+export type StepScope = 'SESSION' | 'SUBJECT' | 'SUBJECT_PERIOD';
+
+export interface ScheduleOffset {
+  days?: number;
+  weeks?: number;
+  months?: number;
+}
+
+/** When a step becomes due, relative to an anchor. Advisory, never a gate. */
+export interface StepSchedule {
+  /** `REGISTRATION`, or the key of the step whose latest entry is the anchor. */
+  anchor?: string;
+  offsets?: ScheduleOffset[];
+  graceDays?: number;
+}
+
 export interface FormAppStep {
   id: string;
   appId: string;
@@ -72,11 +95,17 @@ export interface FormAppStep {
   description: string | null;
   icon: string | null;
   mode: StepMode;
+  /** Where the entry count is measured: per sitting, per record, per cycle. */
+  scope: StepScope;
   minEntries: number;
   maxEntries: number | null;
   isOptional: boolean;
   /** Question keys that must not repeat across entries of this step. */
   uniqueBy: string[];
+  /** Question key holding the real-world date of an entry. */
+  occurredAtKey: string | null;
+  /** When the step becomes due. Advisory — it never blocks recording. */
+  schedule?: StepSchedule | null;
   showWhen?: unknown;
   form: AppForm & { status?: string; deletedAt?: string | null };
   /** False when the step's form was unpublished or deleted out from under it. */
@@ -130,6 +159,53 @@ export interface FormAppDetail extends Omit<FormApp, 'subjectType'> {
   branding: AppBranding | null;
   requireAuth: boolean;
   allowDrafts: boolean;
+  periodMode: PeriodMode;
+  periodConfig: PeriodConfig | null;
+}
+
+/**
+ * How an app's reporting windows come into being.
+ *
+ * NONE — always open. FIXED — hand-made windows, and the app is CLOSED outside
+ * them. RECURRING — derived from a cadence, and being between windows is
+ * ordinary rather than closed, because late entry is the normal case in field
+ * work.
+ */
+export type PeriodMode = 'NONE' | 'FIXED' | 'RECURRING';
+
+export type Cadence = 'WEEKLY' | 'MONTHLY' | 'QUARTERLY' | 'YEARLY';
+
+export interface PeriodConfig {
+  cadence?: Cadence;
+  /** ISO date the cycle counts from. */
+  anchor?: string;
+  /** How long after a window closes it still accepts entries. */
+  graceDays?: number;
+  /** How many closed windows back may be filed into. */
+  backfillPeriods?: number;
+}
+
+/** One record with no entry for a step in the current window. */
+export interface DueRecord {
+  id: string;
+  displayName: string;
+  externalId: string | null;
+  createdAt: string;
+}
+
+export interface DueResponse {
+  step: { key: string; title: string; scope: StepScope };
+  period: { id: string | null; label: string } | null;
+  records: DueRecord[];
+  /**
+   * Cursor for the next page, or NULL at the end.
+   *
+   * There is deliberately no total. Counting outstanding records means probing
+   * every subject in the organization; listing the next page stops as soon as
+   * the page is full. A work queue is worked from the top, so the number was
+   * never the point.
+   */
+  nextCursor: string | null;
 }
 
 export interface DashboardCardResult {
@@ -207,6 +283,37 @@ export function useFormAppDashboard(
       return { cards: Array.isArray(data?.cards) ? data.cards : [] };
     },
     enabled: !!orgId && !!appId && options.enabled !== false,
+    staleTime: 30_000,
+  });
+}
+
+/**
+ * The work queue: records with no entry for one step in the current window.
+ *
+ * Disabled until a step is chosen, because "outstanding" is meaningless without
+ * one — different steps of the same programme fall due on entirely different
+ * schedules.
+ */
+export function useAppDue(
+  appId: string | undefined,
+  stepKey: string | undefined,
+  options: { limit?: number; enabled?: boolean } = {},
+) {
+  const orgId = useOrgId();
+  const limit = options.limit ?? 10;
+
+  return useQuery<DueResponse>({
+    queryKey: ['form-app-due', orgId, appId, stepKey, limit],
+    queryFn: async () => {
+      const params = new URLSearchParams({
+        stepKey: stepKey ?? '',
+        limit: String(limit),
+      });
+      return unwrap<DueResponse>(
+        await fetchApi(`/organizations/${orgId}/apps/${appId}/due?${params}`),
+      );
+    },
+    enabled: !!orgId && !!appId && !!stepKey && options.enabled !== false,
     staleTime: 30_000,
   });
 }
@@ -413,10 +520,13 @@ export interface StepShapeDto {
   description?: string | null;
   icon?: string | null;
   mode?: StepMode;
+  scope?: StepScope;
   minEntries?: number;
   maxEntries?: number | null;
   isOptional?: boolean;
   uniqueBy?: string[];
+  occurredAtKey?: string | null;
+  schedule?: StepSchedule | null;
   showWhen?: unknown;
 }
 
@@ -549,6 +659,10 @@ export interface AppSettingsDto {
   isPublished?: boolean;
   /** How each step's fields are laid out. See AppRunner. */
   layoutMode?: AppLayoutMode;
+  /** NONE, hand-made FIXED windows, or a RECURRING cadence. */
+  periodMode?: PeriodMode;
+  /** Cadence, anchor, grace and backfill. Read only when RECURRING. */
+  periodConfig?: PeriodConfig;
 }
 
 export function useUpdateAppSettings() {
@@ -569,6 +683,8 @@ export function useUpdateAppSettings() {
       ...(dto.isPublished !== undefined && { isPublished: dto.isPublished }),
       ...(dto.themeConfig !== undefined && { themeConfig: dto.themeConfig }),
       ...(dto.branding !== undefined && { branding: dto.branding }),
+      ...(dto.periodMode !== undefined && { periodMode: dto.periodMode }),
+      ...(dto.periodConfig !== undefined && { periodConfig: dto.periodConfig }),
       // The server normalises this (lowercases, and treats blank as "retire the
       // link"); the empty-to-null step is mirrored so the hint under the field
       // does not read "no public address" and then flip back.

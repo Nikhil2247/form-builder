@@ -147,6 +147,7 @@ export function AppRunner({
   appearance = APP_APPEARANCE_DEFAULTS,
   subjectId,
   stepKeys,
+  periodId,
 }: {
   publicSlug: string;
   app: AppSummary;
@@ -160,6 +161,11 @@ export function AppRunner({
   subjectId?: string;
   /** Narrow the session to these steps, so adding one visit is one form. */
   stepKeys?: string[];
+  /**
+   * File into a window that has closed but is still in grace. The visit
+   * happened in February; the worker is typing it in March.
+   */
+  periodId?: string;
 }) {
   // Anything unrecognised falls back to the stacked layout rather than
   // rendering nothing, matching how the public form page treats PORTAL.
@@ -167,7 +173,7 @@ export function AppRunner({
   const layoutMode: AppLayoutMode =
     declared === 'GRID' || declared === 'INHERIT' ? declared : 'DOCUMENT';
   const density = DENSITY[appearance.density];
-  const session = useAppSession(publicSlug, { subjectId, stepKeys });
+  const session = useAppSession(publicSlug, { subjectId, stepKeys, periodId });
   const [issues, setIssues] = React.useState<SessionIssue[]>([]);
   const [submitError, setSubmitError] = React.useState('');
   const [isSubmitting, setIsSubmitting] = React.useState(false);

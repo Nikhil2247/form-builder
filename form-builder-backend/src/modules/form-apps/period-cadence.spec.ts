@@ -193,7 +193,10 @@ describe('fileableWindows', () => {
       config({ graceDays: 10, backfillPeriods: 1 }),
       new Date('2026-03-03T00:00:00Z'),
     );
-    expect(windows.map((w) => w.label)).toEqual(['March 2026', 'February 2026']);
+    expect(windows.map((w) => w.label)).toEqual([
+      'March 2026',
+      'February 2026',
+    ]);
   });
 
   it('stops offering it once the grace has run out', () => {

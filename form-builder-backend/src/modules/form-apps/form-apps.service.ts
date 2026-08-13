@@ -9,6 +9,8 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { normalizeTheme } from '../forms/form-structure';
 import { AuditService } from '../audit/audit.service';
+import { CADENCES, readPeriodConfig } from './period-cadence';
+import { readSchedule } from './step-schedule';
 
 /**
  * Form Apps — a data-entry surface over one subject type.
@@ -76,6 +78,13 @@ export const STEP_SCOPES = [
   'SESSION',
   'SUBJECT',
   'SUBJECT_PERIOD',
+] as const satisfies readonly string[];
+
+/** How an app's reporting windows come into being. See `period-cadence.ts`. */
+export const PERIOD_MODES = [
+  'NONE',
+  'FIXED',
+  'RECURRING',
 ] as const satisfies readonly string[];
 
 /** Read the layout out of a stored `config` blob, defaulting safely. */
@@ -188,6 +197,7 @@ export class FormAppsService {
       isOptional?: boolean;
       uniqueBy?: string[];
       occurredAtKey?: string | null;
+      schedule?: unknown;
       showWhen?: unknown;
     },
     userId?: string,
@@ -261,6 +271,7 @@ export class FormAppsService {
       isOptional?: boolean;
       uniqueBy?: string[];
       occurredAtKey?: string | null;
+      schedule?: unknown;
       showWhen?: unknown;
     },
     userId?: string,
@@ -426,6 +437,7 @@ export class FormAppsService {
     isOptional?: boolean;
     uniqueBy?: string[];
     occurredAtKey?: string | null;
+    schedule?: unknown;
     showWhen?: unknown;
   }) {
     const out: Record<string, any> = {};
@@ -443,6 +455,15 @@ export class FormAppsService {
       const key =
         typeof dto.occurredAtKey === 'string' ? dto.occurredAtKey.trim() : '';
       out.occurredAtKey = key === '' ? null : key.slice(0, 60);
+    }
+
+    if (dto.schedule !== undefined) {
+      // Normalised through the same reader the due calculation uses, so what is
+      // stored is exactly what will be read back. A schedule that reads as
+      // nothing — no offsets, or offsets that move zero days — is stored as
+      // NULL rather than as an object that silently never fires.
+      const parsed = readSchedule(dto.schedule);
+      out.schedule = parsed === null ? Prisma.DbNull : (parsed as any);
     }
 
     if (dto.mode !== undefined) {
@@ -661,10 +682,37 @@ export class FormAppsService {
       isPublished?: boolean;
       /** Presentation only. Dashboard cards are edited through `updateApp`. */
       layoutMode?: AppLayoutMode;
+      periodMode?: 'NONE' | 'FIXED' | 'RECURRING';
+      periodConfig?: unknown;
     },
     userId?: string,
   ) {
     const app = await this.assertApp(orgId, appId);
+
+    if (
+      dto.periodMode !== undefined &&
+      !PERIOD_MODES.includes(dto.periodMode)
+    ) {
+      throw new BadRequestException(
+        'Reporting periods are off, fixed windows, or a repeating cycle.',
+      );
+    }
+
+    // Validated on write rather than trusted on read. A RECURRING app whose
+    // cadence cannot be parsed has no windows at all, which silently turns off
+    // per-period counting for every step that depends on it — a failure that
+    // shows up as wrong numbers weeks later rather than as an error here.
+    let periodConfig: unknown;
+    if (dto.periodConfig !== undefined) {
+      const parsed = readPeriodConfig(dto.periodConfig);
+      const mode = dto.periodMode ?? app.periodMode;
+      if (mode === 'RECURRING' && !parsed) {
+        throw new BadRequestException(
+          `A repeating cycle needs a cadence: ${CADENCES.join(', ')}.`,
+        );
+      }
+      periodConfig = parsed ?? {};
+    }
 
     let publicSlug: string | null | undefined;
     if (dto.publicSlug !== undefined) {
@@ -692,6 +740,10 @@ export class FormAppsService {
           }),
           ...(dto.isPublished !== undefined && {
             isPublished: !!dto.isPublished,
+          }),
+          ...(dto.periodMode !== undefined && { periodMode: dto.periodMode }),
+          ...(periodConfig !== undefined && {
+            periodConfig: periodConfig as any,
           }),
           // Merged into the existing config rather than replacing it: the
           // dashboard cards live in the same column and are edited elsewhere,

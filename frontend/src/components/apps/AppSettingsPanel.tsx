@@ -18,6 +18,7 @@ import { toast } from 'sonner';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { NativeSelect } from '@/components/ui/native-select';
 import { Switch } from '@/components/ui/switch';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { ThemeCustomizer } from '@/components/builder/ThemeCustomizer';
@@ -43,8 +44,11 @@ import {
   useUpdateAppSettings,
   type AppBranding,
   type AppSettingsDto,
+  type Cadence,
   type FormAppDetail,
   type FormAppPeriod,
+  type PeriodConfig,
+  type PeriodMode,
 } from '@/hooks/use-form-apps';
 
 /**
@@ -138,6 +142,7 @@ export function AppSettingsPanel({
       </TabsContent>
 
       <TabsContent value="schedule" className="space-y-4">
+        <PeriodModeSection app={app} />
         <PeriodsSection app={app} />
       </TabsContent>
     </Tabs>
@@ -676,6 +681,173 @@ function AccessSection({
  * which is what makes "this quarter's reports" a query rather than a date range
  * someone has to remember.
  */
+const PERIOD_MODE_OPTIONS: Array<{
+  value: PeriodMode;
+  label: string;
+  hint: string;
+}> = [
+  {
+    value: 'NONE',
+    label: 'Always open',
+    hint: 'No windows. Reports are accepted whenever the app is published.',
+  },
+  {
+    value: 'FIXED',
+    label: 'Fixed windows',
+    hint: 'Hand-made windows. The app is closed outside them.',
+  },
+  {
+    value: 'RECURRING',
+    label: 'Repeating cycle',
+    hint: 'Windows follow a cadence. Being between them does not close the app, so late entries still land in the right cycle.',
+  },
+];
+
+const CADENCE_OPTIONS: Array<{ value: Cadence; label: string }> = [
+  { value: 'WEEKLY', label: 'Weekly' },
+  { value: 'MONTHLY', label: 'Monthly' },
+  { value: 'QUARTERLY', label: 'Quarterly' },
+  { value: 'YEARLY', label: 'Yearly' },
+];
+
+/**
+ * How the app's windows come into being.
+ *
+ * Presented before the window list because it decides whether that list is
+ * even meaningful: under a repeating cycle the windows are computed, and the
+ * hand-made rows below are only the ones that have already been filed into.
+ */
+function PeriodModeSection({ app }: { app: FormAppDetail }) {
+  const updateSettings = useUpdateAppSettings();
+  const config = app.periodConfig ?? {};
+
+  const save = async (dto: AppSettingsDto) => {
+    try {
+      await updateSettings.mutateAsync({ appId: app.id, ...dto });
+    } catch {
+      // Reported globally; the optimistic write rolls back.
+    }
+  };
+
+  const setMode = (mode: PeriodMode) =>
+    save({
+      periodMode: mode,
+      // A cadence is required for RECURRING, so one is supplied when switching
+      // into it rather than letting the save fail on a mode the author just
+      // picked. Monthly is the overwhelmingly common case.
+      ...(mode === 'RECURRING' && !config.cadence
+        ? {
+            periodConfig: {
+              cadence: 'MONTHLY',
+              anchor: new Date().toISOString().slice(0, 10),
+              graceDays: 10,
+              backfillPeriods: 1,
+            },
+          }
+        : {}),
+    });
+
+  const patchConfig = (patch: Partial<PeriodConfig>) =>
+    save({ periodConfig: { ...config, ...patch } });
+
+  return (
+    <PanelSection
+      title="Reporting cycle"
+      description="Whether reports are grouped into windows, and how those windows are decided."
+    >
+      <div className="space-y-3 py-3">
+        {PERIOD_MODE_OPTIONS.map((option) => (
+          <label
+            key={option.value}
+            className="flex cursor-pointer gap-3 rounded-lg border border-border p-3 has-[:checked]:border-primary has-[:checked]:bg-primary/5"
+          >
+            <input
+              type="radio"
+              name="period-mode"
+              className="mt-1 shrink-0"
+              checked={app.periodMode === option.value}
+              onChange={() => setMode(option.value)}
+            />
+            <span className="min-w-0">
+              <span className="block text-sm font-medium">{option.label}</span>
+              <span className="block text-xs text-muted-foreground">
+                {option.hint}
+              </span>
+            </span>
+          </label>
+        ))}
+
+        {app.periodMode === 'RECURRING' && (
+          <div className="grid grid-cols-1 gap-x-4 rounded-lg border border-border bg-muted/30 px-3 sm:grid-cols-2">
+            <PanelBlock label="Cadence" htmlFor="period-cadence">
+              <NativeSelect
+                id="period-cadence"
+                value={config.cadence ?? 'MONTHLY'}
+                onChange={(e) =>
+                  patchConfig({ cadence: e.target.value as Cadence })
+                }
+              >
+                {CADENCE_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </NativeSelect>
+            </PanelBlock>
+
+            <PanelBlock
+              label="Cycle starts from"
+              htmlFor="period-anchor"
+              hint="Where the count begins. An April date gives an April–March year."
+            >
+              <Input
+                id="period-anchor"
+                type="date"
+                value={(config.anchor ?? '').slice(0, 10)}
+                onChange={(e) => patchConfig({ anchor: e.target.value })}
+              />
+            </PanelBlock>
+
+            <PanelBlock
+              label="Grace days"
+              htmlFor="period-grace"
+              hint="How long a closed window still accepts entries. Field data arrives late; zero means it cannot."
+            >
+              <Input
+                id="period-grace"
+                type="number"
+                min={0}
+                max={90}
+                value={config.graceDays ?? 0}
+                onChange={(e) =>
+                  patchConfig({ graceDays: Number(e.target.value) })
+                }
+              />
+            </PanelBlock>
+
+            <PanelBlock
+              label="Earlier cycles offered"
+              htmlFor="period-backfill"
+              hint="How many closed windows a worker may file into, grace permitting."
+            >
+              <Input
+                id="period-backfill"
+                type="number"
+                min={0}
+                max={12}
+                value={config.backfillPeriods ?? 1}
+                onChange={(e) =>
+                  patchConfig({ backfillPeriods: Number(e.target.value) })
+                }
+              />
+            </PanelBlock>
+          </div>
+        )}
+      </div>
+    </PanelSection>
+  );
+}
+
 function PeriodsSection({ app }: { app: FormAppDetail }) {
   const createPeriod = useCreateAppPeriod();
   const [isAdding, setAdding] = React.useState(false);
@@ -708,8 +880,14 @@ function PeriodsSection({ app }: { app: FormAppDetail }) {
 
   return (
     <PanelSection
-      title="Reporting periods"
-      description="Leave this empty and the app accepts reports at any time. Add a window and it only opens inside it."
+      title={
+        app.periodMode === 'RECURRING' ? 'Cycles on record' : 'Reporting periods'
+      }
+      description={
+        app.periodMode === 'RECURRING'
+          ? 'Cycles are computed from the cadence above, and appear here once something has been filed into them. Editing a label changes what respondents see for that cycle.'
+          : 'Leave this empty and the app accepts reports at any time. Add a window and it only opens inside it.'
+      }
       action={
         <Button variant="outline" size="sm" className="gap-2" onClick={addPeriod} disabled={isAdding}>
           <CalendarPlus className="size-3.5" />

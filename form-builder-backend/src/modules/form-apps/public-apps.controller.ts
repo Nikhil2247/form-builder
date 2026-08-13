@@ -96,7 +96,18 @@ export class PublicAppsController {
   async openSession(
     @Param('publicSlug') publicSlug: string,
     @Body()
-    body: { fingerprint?: string; subjectId?: string; stepKeys?: string[] },
+    body: {
+      fingerprint?: string;
+      subjectId?: string;
+      stepKeys?: string[];
+      /**
+       * File into a specific open window. The late-entry case: a visit made on
+       * the 28th, typed on the 3rd, belongs to the month it happened. Validated
+       * against the windows the app is actually offering — an arbitrary id is
+       * refused rather than accepted into a closed cycle.
+       */
+      periodId?: string;
+    },
     @Req() req: Request,
   ) {
     const app = await this.apps.getPublicApp(publicSlug);
@@ -106,6 +117,7 @@ export class PublicAppsController {
       {
         subjectId: body?.subjectId,
         stepKeys: Array.isArray(body?.stepKeys) ? body.stepKeys : undefined,
+        periodId: body?.periodId,
       },
     );
   }

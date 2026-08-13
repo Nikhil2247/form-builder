@@ -67,6 +67,13 @@ import {
   type RuleValue,
 } from '../src/common/rules';
 import { normalizeFormStructure, normalizeTheme } from '../src/modules/forms/form-structure';
+// The real helpers, not a copy. Seeded submissions have to carry exactly the
+// occurrence keys and dates the submit path would have written, or the demo
+// data disagrees with the code that reads it.
+import {
+  occurredAtFor,
+  occurrenceKeyFor,
+} from '../src/modules/form-apps/step-scope';
 
 const CHECK_ONLY = process.argv.includes('--check');
 
@@ -182,6 +189,16 @@ interface ScenarioStep {
   uniqueBy: string[];
   /** Question key holding the real-world date of an entry. */
   occurredAtKey?: string;
+  /**
+   * When the step becomes due, relative to an anchor. Advisory only — an
+   * overdue step is still fillable, and one not yet due can be filled early.
+   */
+  schedule?: {
+    /** `REGISTRATION`, or the key of the step whose latest entry anchors it. */
+    anchor?: string;
+    offsets: Array<{ days?: number; weeks?: number; months?: number }>;
+    graceDays?: number;
+  };
   /** ExprNode over EARLIER steps, addressed `stepKey.questionKey`. */
   showWhen?: ExprNode;
 }
@@ -220,6 +237,19 @@ interface Scenario {
      * question's HALF/FULL width is honoured inside an app.
      */
     layoutMode?: 'DOCUMENT' | 'GRID' | 'INHERIT';
+    /**
+     * How the app's reporting windows come into being. Omitted means FIXED
+     * when the scenario lists periods and NONE when it does not, which is what
+     * every scenario written before recurring cycles assumed.
+     */
+    periodMode?: 'NONE' | 'FIXED' | 'RECURRING';
+    /** Read only under RECURRING. Cadence, anchor, grace and backfill. */
+    periodConfig?: {
+      cadence: 'WEEKLY' | 'MONTHLY' | 'QUARTERLY' | 'YEARLY';
+      anchor?: string;
+      graceDays?: number;
+      backfillPeriods?: number;
+    };
     dashboardCards: (formId: (slug: string) => string) => unknown[];
   };
   choiceLists: ScenarioChoiceList[];
@@ -3684,6 +3714,20 @@ const ALAMB: Scenario = {
     // Each form has its own layout: registration is GRID (paired fields),
     // progress and assessment are stacked DOCUMENT.
     layoutMode: 'INHERIT',
+    // A monthly progress check needs a monthly cycle. Under FIXED that means
+    // twelve hand-made windows a year and a programme that locks every field
+    // worker out on the 1st; under RECURRING the current month is computed and
+    // being between months is ordinary.
+    //
+    // Ten days of grace with one earlier cycle offered: a worker who visited on
+    // the 28th and reaches a keyboard on the 3rd files it under the month it
+    // happened, which is the single most common correction in field data.
+    periodMode: 'RECURRING',
+    periodConfig: {
+      cadence: 'MONTHLY',
+      graceDays: 10,
+      backfillPeriods: 1,
+    },
     dashboardCards: (formId) => [
       { title: 'Students registered', source: 'subjects' },
       { title: 'Enrolled this batch', source: 'subjects', filter: { createdWithinDays: 180 } },
@@ -5342,24 +5386,31 @@ const ALAMB: Scenario = {
       // Months apart from the sitting they are typed in, which is the whole
       // reason a follow-up needs its own date.
       occurredAtKey: 'followup_date',
+      // The programme's actual commitment: check on the student at one, three
+      // and six months after they leave. Anchored on the EXIT rather than on
+      // registration, because a student who dropped out in month two and one
+      // who completed all six are followed up on different clocks.
+      //
+      // A fortnight of grace before it reads as missed — a follow-up is a phone
+      // call that may take several attempts, and flagging it overdue the
+      // morning it falls due would make the chase list meaningless.
+      schedule: {
+        anchor: 'exit',
+        offsets: [{ months: 1 }, { months: 3 }, { months: 6 }],
+        graceDays: 14,
+      },
     },
   ],
 
   // ── Periods ─────────────────────────────────────────────────────────────────
-  periods: [
-    {
-      label: 'July–December 2025',
-      startsAt: monthStart(-7),
-      endsAt: monthStart(-1),
-      isActive: false,
-    },
-    {
-      label: 'January–June 2026',
-      startsAt: monthStart(-1),
-      endsAt: monthStart(5),
-      isActive: true,
-    },
-  ],
+  //
+  // Empty, deliberately. This app runs on a RECURRING monthly cadence, so its
+  // windows are COMPUTED and materialised the first time something is filed
+  // into one. It previously carried two hand-made half-year windows; under a
+  // monthly cadence those match no computed boundary, so they would sit in the
+  // table being ignored — two rows that look like configuration and govern
+  // nothing, which is worse than none.
+  periods: [],
 
   // ── Sessions ────────────────────────────────────────────────────────────────
   sessions: [
@@ -6222,6 +6273,14 @@ async function seedScenario(scenario: Scenario, ctx: SeedContext) {
       }),
       ...(scenario.app.layoutMode ? { layoutMode: scenario.app.layoutMode } : {}),
     } as any,
+    // FIXED when the scenario lists windows and NONE when it does not, which
+    // reproduces exactly how every scenario behaved before period modes: a
+    // hand-made window closed the app outside itself, and no windows meant
+    // always open.
+    periodMode:
+      scenario.app.periodMode ??
+      (scenario.periods.length > 0 ? 'FIXED' : 'NONE'),
+    periodConfig: (scenario.app.periodConfig ?? {}) as any,
     deletedAt: null,
   };
 
@@ -6261,6 +6320,7 @@ async function seedScenario(scenario: Scenario, ctx: SeedContext) {
       scope: step.scope ?? 'SESSION',
       uniqueBy: step.uniqueBy as any,
       occurredAtKey: step.occurredAtKey ?? null,
+      schedule: (step.schedule ?? null) as any,
       showWhen: (step.showWhen ?? null) as any,
     })),
   });
@@ -6343,6 +6403,36 @@ async function seedScenario(scenario: Scenario, ctx: SeedContext) {
     }> = [];
 
     for (const entry of entries) {
+      // Provenance and occurrence, computed with the SAME helpers the submit
+      // path uses rather than reproduced here. Seeded data that skipped this
+      // looked right on the record page and behaved wrong the moment anyone
+      // added an entry: with no `form_app_step_id`, three seeded progress
+      // checks count as zero, so the app offers a fourth as if it were the
+      // first and the demo contradicts itself.
+      const step = scenario.steps.find((s) => s.key === entry.stepKey);
+      const form = scenario.forms.find((f) => f.slug === entry.formSlug);
+      const keyToId = new Map<string, string>(
+        (form?.questions ?? [])
+          .filter((question) => question.id)
+          .map((question) => [question.key ?? question.id, question.id]),
+      );
+
+      const submittedAt = at(-session.daysAgo);
+      const scopedStep = step
+        ? {
+            id: stepIdByKey.get(step.key)!,
+            key: step.key,
+            title: step.title,
+            mode: step.mode,
+            scope: step.scope ?? ('SESSION' as const),
+            minEntries: step.minEntries,
+            maxEntries: step.maxEntries,
+            isOptional: step.isOptional,
+            uniqueBy: step.uniqueBy,
+            occurredAtKey: step.occurredAtKey ?? null,
+          }
+        : null;
+
       const submission = await prisma.formSubmission.create({
         data: {
           formId: formIdBySlug.get(entry.formSlug)!,
@@ -6350,7 +6440,25 @@ async function seedScenario(scenario: Scenario, ctx: SeedContext) {
           organizationId,
           subjectId: subject.id,
           answers: entry.answersById as any,
-          submittedAt: at(-session.daysAgo),
+          submittedAt,
+          occurredAt: scopedStep
+            ? occurredAtFor(
+                scopedStep,
+                entry.answersById as Record<string, unknown>,
+                keyToId,
+                submittedAt,
+              )
+            : submittedAt,
+          formAppStepId: scopedStep?.id ?? null,
+          periodId: activePeriodId,
+          occurrenceKey: scopedStep
+            ? occurrenceKeyFor(
+                scopedStep,
+                activePeriodId,
+                entry.answersById as Record<string, unknown>,
+                keyToId,
+              )
+            : null,
           status: 'SUBMITTED',
         },
         select: { id: true },

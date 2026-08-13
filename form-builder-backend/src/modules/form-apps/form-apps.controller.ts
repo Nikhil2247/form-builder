@@ -6,6 +6,7 @@ import {
   Delete,
   Body,
   Param,
+  Query,
   Req,
   UseGuards,
   ParseUUIDPipe,
@@ -13,6 +14,7 @@ import {
 import type { Request } from 'express';
 
 import { FormAppsService, type FormAppConfig } from './form-apps.service';
+import { FormAppSessionsService } from './form-app-sessions.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { OrgMemberGuard } from '../../common/guards/org-member.guard';
 import { RoleGuard } from '../../common/guards/role.guard';
@@ -29,7 +31,10 @@ import { OrgId } from '../../common/decorators/org-id.decorator';
 @Controller('organizations/:orgId/apps')
 @UseGuards(JwtAuthGuard, OrgMemberGuard, RoleGuard)
 export class FormAppsController {
-  constructor(private readonly apps: FormAppsService) {}
+  constructor(
+    private readonly apps: FormAppsService,
+    private readonly sessions: FormAppSessionsService,
+  ) {}
 
   @Get()
   @RequiredRole('VIEWER')
@@ -53,6 +58,29 @@ export class FormAppsController {
     @Param('appId', new ParseUUIDPipe()) appId: string,
   ) {
     return this.apps.getDashboard(orgId, appId);
+  }
+
+  /**
+   * The work queue: records with no entry for this step in the current window.
+   *
+   * VIEWER, like the rest of the dashboard — working through a chase list is
+   * data entry, not configuration.
+   *
+   * Cursor-paginated and deliberately WITHOUT a total. Counting outstanding
+   * records means probing every subject in the organization; listing the next
+   * twenty-five stops after twenty-five. See `dueForStep`.
+   */
+  @Get(':appId/due')
+  @RequiredRole('VIEWER')
+  getDue(
+    @OrgId() orgId: string,
+    @Param('appId', new ParseUUIDPipe()) appId: string,
+    @Query() query: { stepKey?: string; limit?: string; cursor?: string },
+  ) {
+    return this.sessions.dueForStep(orgId, appId, query.stepKey ?? '', {
+      limit: query.limit ? Number(query.limit) : undefined,
+      cursor: query.cursor,
+    });
   }
 
   @Post()

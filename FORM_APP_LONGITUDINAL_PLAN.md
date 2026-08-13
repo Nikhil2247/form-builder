@@ -1,11 +1,27 @@
 # Longitudinal recording — repeat visits, monthly cycles, follow-ups
 
-**Status:** P1 and P2 implemented (migration `20260813140000_longitudinal_recording`). P3 and P4 not started.
+**Status:** all four phases implemented.
 
-Delivered in P1/P2: step scope, occurrence keys + the partial unique index, `occurredAt`,
-follow-up sessions, `stepsAvailableForSubject`, the record page's "Add entry" menu, and the
-runner's follow-up mode. `occurredAt` shipped early with P2 because the submit path had to
-stamp it anyway; the recurring periods and backdating that complete P3 did not.
+Migrations: `20260813140000_longitudinal_recording` (P1/P2),
+`20260813160000_recurring_periods_and_schedules` (P3/P4). Neither has been run against a
+real database — there is no Docker in this environment.
+
+| phase | delivered |
+|-------|-----------|
+| P1 | step scope, occurrence keys + partial unique index, submission provenance columns |
+| P2 | follow-up sessions, `stepsAvailableForSubject`, "Add entry" menu, runner follow-up mode |
+| P3 | `occurredAt`, `periodMode`, recurring cadences, grace-window backdating, period-grouped timeline |
+| P4 | step schedules, due/overdue, the "Outstanding" panel, the "Still to record" work queue |
+
+Two decisions departed from the plan as written and are documented at their call sites:
+
+- **Periods materialise at session OPEN, not at submit.** The plan said open must never
+  write. In the steady state it does not — it is one indexed read against
+  `(appId, startsAt)`, and the INSERT happens once per window per app, not once per session.
+  The alternative (counting entries against a date range, so no row is needed) was tried and
+  rejected: it made a backdated entry's window disagree with the window it was filed under,
+  and a stamped `periodId` is what the filer actually chose.
+- **The work queue has no total.** Not "count it cheaply" — no count at all. See §9.
 **Question this answers:** *"What is a form session, and how do I record a second visit / next month's progress against a record that already exists?"*
 
 ---

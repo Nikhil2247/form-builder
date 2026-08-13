@@ -112,6 +112,22 @@ export type StepAvailabilityReason =
   | 'MAX_REACHED'
   | 'HIDDEN_BY_CONDITION';
 
+/** Where a step stands against its schedule. */
+export type DueStatus =
+  | 'NOT_SCHEDULED'
+  | 'UP_TO_DATE'
+  | 'UPCOMING'
+  | 'DUE'
+  | 'OVERDUE';
+
+export interface StepDueState {
+  status: DueStatus;
+  dueAt: string | null;
+  overdueByDays: number;
+  /** Scheduled occurrences with no entry whose grace has already run out. */
+  missedCount: number;
+}
+
 export interface AvailableStep {
   stepKey: string;
   title: string;
@@ -125,10 +141,26 @@ export interface AvailableStep {
   existingCount: number;
   remaining: number | null;
   lastOccurredAt: string | null;
+  due: StepDueState;
+  periodStartsAt: string | null;
   available: boolean;
   reason: StepAvailabilityReason;
   /** A sentence explaining the greyed-out case. NULL when the step is open. */
   detail: string | null;
+}
+
+/**
+ * A window a report may be filed into.
+ *
+ * `id` is NULL for a generated window nobody has filed into yet — the row is
+ * created server-side on first use.
+ */
+export interface FileablePeriod {
+  id: string | null;
+  label: string;
+  startsAt: string;
+  endsAt: string;
+  sequence: number | null;
 }
 
 /** One app that records against this record, and what it will accept now. */
@@ -140,7 +172,9 @@ export interface EntryOption {
     icon: string | null;
     publicSlug: string | null;
   };
-  period: { id: string; label: string; startsAt: string; endsAt: string } | null;
+  period: FileablePeriod | null;
+  /** Every window still open — the current one, plus any inside its grace. */
+  fileablePeriods: FileablePeriod[];
   isOutsidePeriod: boolean;
   steps: AvailableStep[];
 }
