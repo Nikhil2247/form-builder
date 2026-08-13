@@ -3,7 +3,7 @@ import { S3Client } from '@aws-sdk/client-s3';
 
 export type StorageClientWrapper =
   | { type: 'minio'; client: Minio.Client; bucket: string }
-  | { type: 's3';   client: S3Client;     bucket: string };
+  | { type: 's3'; client: S3Client; bucket: string };
 
 export function createStorageClient(): StorageClientWrapper {
   if (process.env.STORAGE_PROVIDER === 's3') {
@@ -25,9 +25,9 @@ export function createStorageClient(): StorageClientWrapper {
     type: 'minio',
     bucket: process.env.MINIO_DEFAULT_BUCKET ?? 'formbuilder-uploads',
     client: new Minio.Client({
-      endPoint:  process.env.MINIO_ENDPOINT ?? 'localhost',
-      port:      parseInt(process.env.MINIO_PORT ?? '9000', 10),
-      useSSL:    process.env.MINIO_USE_SSL === 'true',
+      endPoint: process.env.MINIO_ENDPOINT ?? 'localhost',
+      port: parseInt(process.env.MINIO_PORT ?? '9000', 10),
+      useSSL: process.env.MINIO_USE_SSL === 'true',
       accessKey: process.env.MINIO_ACCESS_KEY!,
       secretKey: process.env.MINIO_SECRET_KEY!,
     }),

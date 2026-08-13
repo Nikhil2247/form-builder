@@ -1,5 +1,12 @@
 import { Transform, Type } from 'class-transformer';
-import { IsInt, IsOptional, IsString, Max, MaxLength, Min } from 'class-validator';
+import {
+  IsInt,
+  IsOptional,
+  IsString,
+  Max,
+  MaxLength,
+  Min,
+} from 'class-validator';
 import { DEFAULT_PAGE, DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE } from './pagination';
 
 /**
@@ -38,6 +45,8 @@ export class SortablePaginationQueryDto extends PaginationQueryDto {
   sortBy?: string;
 
   @IsOptional()
-  @Transform(({ value }) => (String(value).toLowerCase() === 'asc' ? 'asc' : 'desc'))
+  @Transform(({ value }) =>
+    String(value).toLowerCase() === 'asc' ? 'asc' : 'desc',
+  )
   sortOrder?: 'asc' | 'desc' = 'desc';
 }

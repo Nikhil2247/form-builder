@@ -1,4 +1,9 @@
-import { Injectable, Logger, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  OnModuleInit,
+  OnModuleDestroy,
+} from '@nestjs/common';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { RedisService } from '../../common/redis/redis.service';
 import { isWorkerMode } from '../../config/runtime.config';
@@ -21,7 +26,10 @@ export class AnalyticsFlushService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(AnalyticsFlushService.name);
   private timer: NodeJS.Timeout | null = null;
 
-  private readonly intervalMs = parseInt(process.env.ANALYTICS_FLUSH_MS ?? '30000', 10);
+  private readonly intervalMs = parseInt(
+    process.env.ANALYTICS_FLUSH_MS ?? '30000',
+    10,
+  );
 
   constructor(
     private readonly prisma: PrismaService,
@@ -105,10 +113,12 @@ export class AnalyticsFlushService implements OnModuleInit, OnModuleDestroy {
       } catch (e) {
         // A deleted form leaves an orphaned counter; drop it rather than
         // retrying forever.
-        this.logger.warn(`Failed to flush analytics for form ${formId}`, e as any);
+        this.logger.warn(`Failed to flush analytics for form ${formId}`, e);
       }
     }
 
-    this.logger.debug(`Flushed analytics for ${perForm.size} form(s) on ${day}`);
+    this.logger.debug(
+      `Flushed analytics for ${perForm.size} form(s) on ${day}`,
+    );
   }
 }

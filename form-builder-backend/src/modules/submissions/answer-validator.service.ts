@@ -138,7 +138,9 @@ export class AnswerValidatorService {
     const issues: ValidationIssue[] = [];
     const sanitized: Record<string, any> = {};
 
-    const questions = Array.isArray(questionsJson) ? (questionsJson as QuestionLike[]) : [];
+    const questions = Array.isArray(questionsJson)
+      ? (questionsJson as QuestionLike[])
+      : [];
     if (questions.length === 0) {
       return {
         valid: false,
@@ -146,7 +148,8 @@ export class AnswerValidatorService {
           {
             questionId: '_form',
             code: 'EMPTY_SCHEMA',
-            message: 'This form version has no questions and cannot accept submissions.',
+            message:
+              'This form version has no questions and cannot accept submissions.',
           },
         ],
         sanitized: {},
@@ -157,7 +160,11 @@ export class AnswerValidatorService {
       return {
         valid: false,
         issues: [
-          { questionId: '_form', code: 'INVALID_PAYLOAD', message: 'Answers must be an object.' },
+          {
+            questionId: '_form',
+            code: 'INVALID_PAYLOAD',
+            message: 'Answers must be an object.',
+          },
         ],
         sanitized: {},
       };
@@ -194,9 +201,12 @@ export class AnswerValidatorService {
     }
 
     for (const q of questions) {
-      if (!q || typeof q.id !== 'string' || NON_ANSWERABLE.has(q.type)) continue;
+      if (!q || typeof q.id !== 'string' || NON_ANSWERABLE.has(q.type))
+        continue;
 
-      const isVisible = opts.visibleQuestionIds ? opts.visibleQuestionIds.has(q.id) : true;
+      const isVisible = opts.visibleQuestionIds
+        ? opts.visibleQuestionIds.has(q.id)
+        : true;
       const raw = answers[q.id];
       // A REQUIRE rule can make an otherwise-optional question mandatory. It can
       // only ever add: a rule must not be able to waive a requirement the author
@@ -241,7 +251,13 @@ export class AnswerValidatorService {
       // whose emptiness `validateOne` deliberately reads as "unconfigured,
       // accept anything". Without this a list-backed dropdown would accept
       // any string at all.
-      const listIssue = this.validateAgainstChoiceList(q, outcome.value, answers, questions, opts);
+      const listIssue = this.validateAgainstChoiceList(
+        q,
+        outcome.value,
+        answers,
+        questions,
+        opts,
+      );
       if (listIssue) {
         issues.push({ questionId: q.id, label: q.label, ...listIssue });
         continue;
@@ -256,7 +272,9 @@ export class AnswerValidatorService {
     const knownIds = new Set(questions.map((q) => q.id));
     const unknown = answerKeys.filter((k) => !knownIds.has(k));
     if (unknown.length > 0) {
-      this.logger.debug(`Dropped ${unknown.length} unknown answer key(s): ${unknown.slice(0, 5).join(', ')}`);
+      this.logger.debug(
+        `Dropped ${unknown.length} unknown answer key(s): ${unknown.slice(0, 5).join(', ')}`,
+      );
     }
 
     return { valid: issues.length === 0, issues, sanitized };
@@ -285,7 +303,8 @@ export class AnswerValidatorService {
     opts: { choiceItems?: Map<string, ResolvedChoiceItem> },
   ): { code: string; message: string } | undefined {
     const source = q.optionsSource;
-    if (!source || source.kind !== 'CHOICE_LIST' || !source.listSlug) return undefined;
+    if (!source || source.kind !== 'CHOICE_LIST' || !source.listSlug)
+      return undefined;
 
     const label = q.label ?? q.id;
     const items = opts.choiceItems;
@@ -293,24 +312,35 @@ export class AnswerValidatorService {
     // closed rather than accepting anything, since the alternative is silently
     // storing values that are not on the list.
     if (!items) {
-      return { code: 'OPTION_SOURCE', message: `"${label}" could not be checked against its list.` };
+      return {
+        code: 'OPTION_SOURCE',
+        message: `"${label}" could not be checked against its list.`,
+      };
     }
 
     const submitted = Array.isArray(value) ? value : [value];
 
     for (const entry of submitted) {
       if (typeof entry !== 'string') {
-        return { code: 'TYPE', message: `"${label}" must be a value from its list.` };
+        return {
+          code: 'TYPE',
+          message: `"${label}" must be a value from its list.`,
+        };
       }
 
       const item = items.get(`${source.listSlug}::${entry}`);
       if (!item) {
-        return { code: 'OPTION', message: `"${entry}" is not a valid option for "${label}".` };
+        return {
+          code: 'OPTION',
+          message: `"${entry}" is not a valid option for "${label}".`,
+        };
       }
 
       if (!source.parentQuestionKey) continue;
 
-      const parentQuestion = questions.find((other) => other.key === source.parentQuestionKey);
+      const parentQuestion = questions.find(
+        (other) => other.key === source.parentQuestionKey,
+      );
       // A parent that is not on this version can only mean the form changed
       // under an in-flight respondent. Skip the consistency check rather than
       // reject: membership already passed, and the pairing is unverifiable.
@@ -341,20 +371,31 @@ export class AnswerValidatorService {
     switch (q.type) {
       case 'SHORT_TEXT':
       case 'LONG_TEXT': {
-        if (typeof raw !== 'string') return bad('TYPE', `"${label}" must be text.`);
-        const cap = q.type === 'LONG_TEXT' ? LIMITS.MAX_LONG_TEXT_LENGTH : LIMITS.MAX_TEXT_LENGTH;
+        if (typeof raw !== 'string')
+          return bad('TYPE', `"${label}" must be text.`);
+        const cap =
+          q.type === 'LONG_TEXT'
+            ? LIMITS.MAX_LONG_TEXT_LENGTH
+            : LIMITS.MAX_TEXT_LENGTH;
         const maxLen = Math.min(v.maxLength ?? cap, cap);
         if (raw.length > maxLen)
-          return bad('MAX_LENGTH', `"${label}" must be at most ${maxLen} characters.`);
+          return bad(
+            'MAX_LENGTH',
+            `"${label}" must be at most ${maxLen} characters.`,
+          );
         if (v.minLength != null && raw.length < v.minLength)
-          return bad('MIN_LENGTH', `"${label}" must be at least ${v.minLength} characters.`);
+          return bad(
+            'MIN_LENGTH',
+            `"${label}" must be at least ${v.minLength} characters.`,
+          );
         if (v.pattern && !safeRegexTest(v.pattern, raw))
           return bad('PATTERN', `"${label}" is not in the expected format.`);
         return { value: raw };
       }
 
       case 'EMAIL': {
-        if (typeof raw !== 'string') return bad('TYPE', `"${label}" must be text.`);
+        if (typeof raw !== 'string')
+          return bad('TYPE', `"${label}" must be text.`);
         const s = raw.trim().toLowerCase();
         if (s.length > 320 || !EMAIL_RE.test(s))
           return bad('EMAIL', `"${label}" must be a valid email address.`);
@@ -362,7 +403,8 @@ export class AnswerValidatorService {
       }
 
       case 'URL': {
-        if (typeof raw !== 'string') return bad('TYPE', `"${label}" must be text.`);
+        if (typeof raw !== 'string')
+          return bad('TYPE', `"${label}" must be text.`);
         const s = raw.trim();
         if (s.length > 2048 || !URL_RE.test(s))
           return bad('URL', `"${label}" must be a valid http(s) URL.`);
@@ -370,22 +412,27 @@ export class AnswerValidatorService {
       }
 
       case 'PHONE': {
-        if (typeof raw !== 'string') return bad('TYPE', `"${label}" must be text.`);
+        if (typeof raw !== 'string')
+          return bad('TYPE', `"${label}" must be text.`);
         const s = raw.trim();
-        if (!PHONE_RE.test(s)) return bad('PHONE', `"${label}" must be a valid phone number.`);
+        if (!PHONE_RE.test(s))
+          return bad('PHONE', `"${label}" must be a valid phone number.`);
         return { value: s };
       }
 
       case 'NUMBER':
       case 'SLIDER': {
         const n = typeof raw === 'number' ? raw : Number(raw);
-        if (!Number.isFinite(n)) return bad('TYPE', `"${label}" must be a number.`);
+        if (!Number.isFinite(n))
+          return bad('TYPE', `"${label}" must be a number.`);
         // A slider's bounds live on the question (`sliderMin`/`sliderMax`,
         // written by normalizeFormStructure); a number's live in `validation`.
         const min = q.type === 'SLIDER' ? (q.sliderMin ?? v.min) : v.min;
         const max = q.type === 'SLIDER' ? (q.sliderMax ?? v.max) : v.max;
-        if (min != null && n < min) return bad('MIN', `"${label}" must be at least ${min}.`);
-        if (max != null && n > max) return bad('MAX', `"${label}" must be at most ${max}.`);
+        if (min != null && n < min)
+          return bad('MIN', `"${label}" must be at least ${min}.`);
+        if (max != null && n > max)
+          return bad('MAX', `"${label}" must be at most ${max}.`);
         return { value: n };
       }
 
@@ -394,37 +441,50 @@ export class AnswerValidatorService {
         const ceiling = v.max ?? 5;
         const n = Number(raw);
         if (!Number.isInteger(n) || n < 1 || n > ceiling)
-          return bad('RANGE', `"${label}" must be a whole number between 1 and ${ceiling}.`);
+          return bad(
+            'RANGE',
+            `"${label}" must be a whole number between 1 and ${ceiling}.`,
+          );
         return { value: n };
       }
 
       case 'NPS': {
         const n = Number(raw);
         if (!Number.isInteger(n) || n < 0 || n > 10)
-          return bad('RANGE', `"${label}" must be a whole number between 0 and 10.`);
+          return bad(
+            'RANGE',
+            `"${label}" must be a whole number between 0 and 10.`,
+          );
         return { value: n };
       }
 
       case 'DATE': {
-        if (typeof raw !== 'string') return bad('TYPE', `"${label}" must be a date string.`);
+        if (typeof raw !== 'string')
+          return bad('TYPE', `"${label}" must be a date string.`);
         const d = new Date(raw);
-        if (Number.isNaN(d.getTime())) return bad('DATE', `"${label}" must be a valid date.`);
+        if (Number.isNaN(d.getTime()))
+          return bad('DATE', `"${label}" must be a valid date.`);
         return { value: raw };
       }
 
       case 'SINGLE_CHOICE':
       case 'DROPDOWN': {
-        if (typeof raw !== 'string') return bad('TYPE', `"${label}" must be a single choice.`);
+        if (typeof raw !== 'string')
+          return bad('TYPE', `"${label}" must be a single choice.`);
         const allowed = optionValues(q);
         // An empty option list means the author left the question unconfigured;
         // accept the value rather than blocking the respondent.
         if (allowed.size > 0 && !allowed.has(raw))
-          return bad('OPTION', `"${raw}" is not a valid option for "${label}".`);
+          return bad(
+            'OPTION',
+            `"${raw}" is not a valid option for "${label}".`,
+          );
         return { value: raw };
       }
 
       case 'MULTI_CHOICE': {
-        if (!Array.isArray(raw)) return bad('TYPE', `"${label}" must be a list of choices.`);
+        if (!Array.isArray(raw))
+          return bad('TYPE', `"${label}" must be a list of choices.`);
         if (raw.length > LIMITS.MAX_MULTI_CHOICE_SELECTIONS)
           return bad('TOO_MANY', `"${label}" has too many selections.`);
         const allowed = optionValues(q);
@@ -433,11 +493,17 @@ export class AnswerValidatorService {
           if (typeof item !== 'string')
             return bad('TYPE', `"${label}" contains a non-text selection.`);
           if (allowed.size > 0 && !allowed.has(item))
-            return bad('OPTION', `"${item}" is not a valid option for "${label}".`);
+            return bad(
+              'OPTION',
+              `"${item}" is not a valid option for "${label}".`,
+            );
           if (!cleaned.includes(item)) cleaned.push(item);
         }
         if (v.min != null && cleaned.length < v.min)
-          return bad('MIN', `"${label}" requires at least ${v.min} selection(s).`);
+          return bad(
+            'MIN',
+            `"${label}" requires at least ${v.min} selection(s).`,
+          );
         if (v.max != null && cleaned.length > v.max)
           return bad('MAX', `"${label}" allows at most ${v.max} selection(s).`);
         return { value: cleaned };
@@ -451,16 +517,28 @@ export class AnswerValidatorService {
         const out: Record<string, any> = {};
         for (const [rowKey, colVal] of Object.entries(raw)) {
           if (rowKeys.size > 0 && !rowKeys.has(rowKey))
-            return bad('OPTION', `"${rowKey}" is not a valid row for "${label}".`);
+            return bad(
+              'OPTION',
+              `"${rowKey}" is not a valid row for "${label}".`,
+            );
           if (Array.isArray(colVal)) {
             for (const c of colVal) {
-              if (typeof c !== 'string' || (colKeys.size > 0 && !colKeys.has(c)))
-                return bad('OPTION', `"${c}" is not a valid column for "${label}".`);
+              if (
+                typeof c !== 'string' ||
+                (colKeys.size > 0 && !colKeys.has(c))
+              )
+                return bad(
+                  'OPTION',
+                  `"${c}" is not a valid column for "${label}".`,
+                );
             }
             out[rowKey] = colVal;
           } else if (typeof colVal === 'string') {
             if (colKeys.size > 0 && !colKeys.has(colVal))
-              return bad('OPTION', `"${colVal}" is not a valid column for "${label}".`);
+              return bad(
+                'OPTION',
+                `"${colVal}" is not a valid column for "${label}".`,
+              );
             out[rowKey] = colVal;
           } else {
             return bad('TYPE', `"${label}" has an invalid cell value.`);
@@ -470,11 +548,15 @@ export class AnswerValidatorService {
       }
 
       case 'SIGNATURE': {
-        if (typeof raw !== 'string') return bad('TYPE', `"${label}" must be a signature image.`);
+        if (typeof raw !== 'string')
+          return bad('TYPE', `"${label}" must be a signature image.`);
         if (!raw.startsWith('data:image/'))
           return bad('SIGNATURE', `"${label}" must be a data-URL image.`);
         if (Buffer.byteLength(raw, 'utf8') > LIMITS.MAX_SIGNATURE_BYTES)
-          return bad('SIGNATURE_TOO_LARGE', `"${label}" signature image is too large.`);
+          return bad(
+            'SIGNATURE_TOO_LARGE',
+            `"${label}" signature image is too large.`,
+          );
         return { value: raw };
       }
 
@@ -483,10 +565,14 @@ export class AnswerValidatorService {
         // ownership are checked separately by SubmissionsService against the DB —
         // here we only enforce shape so a caller cannot smuggle an object in.
         const ids = Array.isArray(raw) ? raw : [raw];
-        if (ids.length > 20) return bad('TOO_MANY', `"${label}" has too many files.`);
+        if (ids.length > 20)
+          return bad('TOO_MANY', `"${label}" has too many files.`);
         for (const id of ids) {
           if (typeof id !== 'string' || !UUID_OR_ID_RE.test(id))
-            return bad('FILE_REF', `"${label}" contains an invalid file reference.`);
+            return bad(
+              'FILE_REF',
+              `"${label}" contains an invalid file reference.`,
+            );
         }
         return { value: Array.isArray(raw) ? ids : ids[0] };
       }

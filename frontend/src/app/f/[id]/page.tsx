@@ -1,4 +1,5 @@
 import type { Metadata } from 'next';
+import { connection } from 'next/server';
 import { API_BASE_URL_SERVER } from '@/lib/config';
 import { FormRunnerClient } from './FormRunnerClient';
 import { FormUnavailable } from './FormUnavailable';
@@ -122,6 +123,19 @@ export async function generateMetadata({ params }: PageProps): Promise<Metadata>
 }
 
 export default async function PublicFormPage({ params }: PageProps) {
+  // Pin this route to per-request rendering.
+  //
+  // It already renders per request in practice — no generateStaticParams, and a
+  // `no-store` fetch — but "in practice" is not good enough once a CSP nonce is
+  // involved. A nonce is only valid for the one response whose header carries
+  // it; a page shell that got prerendered or parked in the full route cache
+  // would hand every later visitor a stale nonce, and the browser would refuse
+  // to run a single script on it. `connection()` is the documented way to say
+  // "wait for a real request" and makes that failure mode unreachable rather
+  // than merely unlikely. It costs nothing here: this page can never be static,
+  // because which version a slug serves changes when the author republishes.
+  await connection();
+
   const { id: slug } = await params;
   const result = await loadForm(slug);
 

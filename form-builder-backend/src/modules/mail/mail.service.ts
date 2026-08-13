@@ -10,7 +10,20 @@ import * as nodemailer from 'nodemailer';
  * notification email delivered to the form owner.
  */
 function escapeHtml(value: unknown): string {
-  return String(value ?? '')
+  // Objects and arrays are JSON-encoded rather than left to `String()`, which
+  // renders them as "[object Object]". These values are answer payloads, and a
+  // FILE_UPLOAD or a repeating-section answer IS an object — so the default
+  // stringification would silently put "[object Object]" in the notification
+  // email where the respondent's answer should be.
+  const text =
+    value === null || value === undefined
+      ? ''
+      : typeof value === 'object'
+        ? JSON.stringify(value)
+        : // eslint-disable-next-line @typescript-eslint/no-base-to-string
+          String(value);
+
+  return text
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
@@ -30,30 +43,45 @@ export class MailService {
         host: smtpConfig.host,
         port: smtpConfig.port,
         secure: smtpConfig.port === 465,
-        auth: (smtpConfig.user && smtpConfig.pass) ? {
-          user: smtpConfig.user,
-          pass: smtpConfig.pass,
-        } : undefined,
+        auth:
+          smtpConfig.user && smtpConfig.pass
+            ? {
+                user: smtpConfig.user,
+                pass: smtpConfig.pass,
+              }
+            : undefined,
       });
       this.logger.log('SMTP transporter initialized');
     } else {
-      this.logger.warn('SMTP configuration not found. Email sending will be skipped.');
+      this.logger.warn(
+        'SMTP configuration not found. Email sending will be skipped.',
+      );
     }
   }
 
-  async sendInvitationEmail(to: string, inviterName: string, orgName: string, inviteUrl: string) {
+  async sendInvitationEmail(
+    to: string,
+    inviterName: string,
+    orgName: string,
+    inviteUrl: string,
+  ) {
     if (!this.transporter) {
-      this.logger.warn(`Skipping invitation email to ${to} (SMTP not configured)`);
+      this.logger.warn(
+        `Skipping invitation email to ${to} (SMTP not configured)`,
+      );
       return;
     }
 
     const from = this.configService.get('smtp.from');
-    
+
     try {
       await this.transporter.sendMail({
         from,
         to,
-        subject: `You've been invited to join ${orgName} on FormBuilder`.slice(0, 200),
+        subject: `You've been invited to join ${orgName} on FormBuilder`.slice(
+          0,
+          200,
+        ),
         html: `
           <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #eee; border-radius: 8px;">
             <h2 style="color: #333; text-align: center;">Welcome to FormBuilder!</h2>
@@ -89,9 +117,15 @@ export class MailService {
    * Previously registration reused sendPasswordResetEmail, so new users received
    * a "Reset your password" message containing a /verify-email link.
    */
-  async sendVerificationEmail(to: string, verifyUrl: string, firstName?: string) {
+  async sendVerificationEmail(
+    to: string,
+    verifyUrl: string,
+    firstName?: string,
+  ) {
     if (!this.transporter) {
-      this.logger.warn(`Skipping verification email to ${to} (SMTP not configured)`);
+      this.logger.warn(
+        `Skipping verification email to ${to} (SMTP not configured)`,
+      );
       return;
     }
 
@@ -135,12 +169,14 @@ export class MailService {
 
   async sendPasswordResetEmail(to: string, resetUrl: string) {
     if (!this.transporter) {
-      this.logger.warn(`Skipping password reset email to ${to} (SMTP not configured)`);
+      this.logger.warn(
+        `Skipping password reset email to ${to} (SMTP not configured)`,
+      );
       return;
     }
 
     const from = this.configService.get('smtp.from');
-    
+
     try {
       await this.transporter.sendMail({
         from,
@@ -176,13 +212,18 @@ export class MailService {
     }
   }
 
-  async sendSubmissionNotificationEmail(to: string[], formTitle: string, submissionId: string, answers: any) {
+  async sendSubmissionNotificationEmail(
+    to: string[],
+    formTitle: string,
+    submissionId: string,
+    answers: any,
+  ) {
     if (!this.transporter || to.length === 0) {
       return;
     }
 
     const from = this.configService.get('smtp.from');
-    
+
     // Create a simple HTML table of the top 10 answers
     // Both key and value are respondent-controlled — escape both.
     const answersHtml = Object.entries(answers || {})
@@ -221,7 +262,10 @@ export class MailService {
       });
       this.logger.log(`Submission notification email sent to ${to.join(', ')}`);
     } catch (error) {
-      this.logger.error(`Failed to send submission notification email to ${to.join(', ')}`, error);
+      this.logger.error(
+        `Failed to send submission notification email to ${to.join(', ')}`,
+        error,
+      );
     }
   }
 }

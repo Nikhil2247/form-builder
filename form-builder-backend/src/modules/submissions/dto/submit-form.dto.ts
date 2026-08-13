@@ -1,4 +1,13 @@
-import { IsObject, IsInt, IsOptional, Min, Max, IsString, MaxLength, IsUUID } from 'class-validator';
+import {
+  IsObject,
+  IsInt,
+  IsOptional,
+  Min,
+  Max,
+  IsString,
+  MaxLength,
+  IsUUID,
+} from 'class-validator';
 
 export class SubmitFormDto {
   /**

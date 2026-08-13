@@ -77,7 +77,6 @@ export function getRedisUrl(): string {
     throw new Error('REDIS_URL is required in production.');
   }
 
-  // eslint-disable-next-line no-console
   console.warn(
     '[env] REDIS_URL is not set — falling back to redis://localhost:6379. ' +
       'If Redis is not running there, queues, caching and rate limiting will fail ' +

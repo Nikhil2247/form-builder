@@ -2,7 +2,9 @@ import * as Joi from 'joi';
 import { getRedisUrl } from './env';
 
 export const validationSchema = Joi.object({
-  NODE_ENV: Joi.string().valid('development', 'production', 'test').default('development'),
+  NODE_ENV: Joi.string()
+    .valid('development', 'production', 'test')
+    .default('development'),
   PORT: Joi.number().default(3000),
   DATABASE_URL: Joi.string().required(),
   DATABASE_REPLICA_URL: Joi.string().optional(),
@@ -10,6 +12,17 @@ export const validationSchema = Joi.object({
   JWT_SECRET: Joi.string().min(32).required(),
   JWT_ACCESS_TTL_SECONDS: Joi.number().default(86_400),
   JWT_REFRESH_TTL_DAYS: Joi.number().default(1),
+  /**
+   * How long an authenticated session may be served from Redis without
+   * re-reading the database. 0 disables the cache entirely.
+   *
+   * Capped at 300 on purpose: this value is the window in which a revoked
+   * permission can still be honoured if an invalidation fails to land, and
+   * anything above a few minutes stops being a cache and starts being a second,
+   * unaccountable source of truth for authorization. Refuse to boot rather than
+   * let a "5" get typed with an extra zero. See SessionCacheService.
+   */
+  SESSION_CACHE_TTL_SECONDS: Joi.number().min(0).max(300).default(60),
   STORAGE_PROVIDER: Joi.string().valid('minio', 's3').default('minio'),
   MINIO_ENDPOINT: Joi.string().default('localhost'),
   MINIO_PORT: Joi.number().default(9000),
@@ -47,6 +60,16 @@ export default () => ({
     accessTtl: parseInt(process.env.JWT_ACCESS_TTL_SECONDS ?? '86400', 10),
     refreshTtlDays: parseInt(process.env.JWT_REFRESH_TTL_DAYS ?? '1', 10),
   },
+  session: {
+    // Mirrored here for visibility in the config tree. SessionCacheService reads
+    // the variable directly via intEnv() rather than through ConfigService,
+    // because guards and Passport strategies are constructed early and must not
+    // depend on config-module initialisation ordering.
+    cacheTtlSeconds: parseInt(
+      process.env.SESSION_CACHE_TTL_SECONDS ?? '60',
+      10,
+    ),
+  },
   smtp: {
     host: process.env.SMTP_HOST,
     port: parseInt(process.env.SMTP_PORT ?? '587', 10),
@@ -57,7 +80,10 @@ export default () => ({
   storage: {
     provider: process.env.STORAGE_PROVIDER ?? 'minio',
     maxFileSizeMb: parseInt(process.env.MAX_FILE_SIZE_MB ?? '25', 10),
-    presignedUrlTtl: parseInt(process.env.PRESIGNED_URL_TTL_SECONDS ?? '900', 10),
+    presignedUrlTtl: parseInt(
+      process.env.PRESIGNED_URL_TTL_SECONDS ?? '900',
+      10,
+    ),
     minio: {
       endpoint: process.env.MINIO_ENDPOINT ?? 'localhost',
       port: parseInt(process.env.MINIO_PORT ?? '9000', 10),
@@ -73,5 +99,7 @@ export default () => ({
       bucket: process.env.AWS_S3_BUCKET,
     },
   },
-  cors: { origins: (process.env.CORS_ORIGINS ?? 'http://localhost:3001').split(',') },
+  cors: {
+    origins: (process.env.CORS_ORIGINS ?? 'http://localhost:3001').split(','),
+  },
 });

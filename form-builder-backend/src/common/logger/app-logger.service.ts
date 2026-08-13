@@ -58,10 +58,17 @@ export class AppLogger {
     this.winston.warn(message, { context: this.context, ...meta });
   }
 
-  error(message: string, error?: Error | unknown, meta?: Record<string, any>) {
+  // `unknown` alone, not `Error | unknown` — the union collapses to `unknown`
+  // anyway, so naming Error in it only implied a narrowing that never existed.
+  // The `instanceof` below is what actually does the narrowing.
+  error(message: string, error?: unknown, meta?: Record<string, any>) {
     const errMeta =
       error instanceof Error
-        ? { errorMessage: error.message, stack: error.stack, errorName: error.name }
+        ? {
+            errorMessage: error.message,
+            stack: error.stack,
+            errorName: error.name,
+          }
         : { error };
 
     this.winston.error(message, { context: this.context, ...errMeta, ...meta });
@@ -90,7 +97,7 @@ export class AppLogger {
     userId?: string;
   }) {
     this.winston.http('→ Incoming request', {
-      context:   'HTTP',
+      context: 'HTTP',
       direction: 'IN',
       ...meta,
     });
@@ -112,12 +119,14 @@ export class AppLogger {
   }) {
     // Pick level based on status code
     const level =
-      meta.statusCode >= 500 ? 'error'
-      : meta.statusCode >= 400 ? 'warn'
-      : 'http';
+      meta.statusCode >= 500
+        ? 'error'
+        : meta.statusCode >= 400
+          ? 'warn'
+          : 'http';
 
     this.winston.log(level, '← Outgoing response', {
-      context:   'HTTP',
+      context: 'HTTP',
       direction: 'OUT',
       ...meta,
     });

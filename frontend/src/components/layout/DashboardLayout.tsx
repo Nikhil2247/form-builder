@@ -5,11 +5,21 @@ import { Sidebar } from './Sidebar';
 import { Header } from './Header';
 import { usePathname } from 'next/navigation';
 import { useSidebarStore } from '@/store/sidebar-store';
+import { useNotificationStream } from '@/hooks/use-notifications';
 import { cn } from '@/lib/utils';
 
 export function DashboardLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const { isCollapsed } = useSidebarStore();
+
+  // The single notification stream for the whole app shell.
+  //
+  // Here rather than in <Header/>, which is deliberately not rendered on the
+  // form builder — the page a user spends the longest on, and the last place
+  // you want their notifications to quietly stop arriving. Called before the
+  // early return below so the hook order is unconditional; on the invite page
+  // there is no session yet, and the hook does nothing without one.
+  useNotificationStream();
 
   const isBuilderPage = pathname === '/forms/builder' || pathname.startsWith('/forms/builder?');
   const isInvitePage = pathname.startsWith('/invite');

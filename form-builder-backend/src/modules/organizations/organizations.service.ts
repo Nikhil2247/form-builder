@@ -1,7 +1,13 @@
-import { Injectable, NotFoundException, ForbiddenException, ConflictException, BadRequestException } from '@nestjs/common';
+import {
+  Injectable,
+  NotFoundException,
+  ForbiddenException,
+  ConflictException,
+  BadRequestException,
+} from '@nestjs/common';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { MailService } from '../mail/mail.service';
-import { CreateOrganizationDto } from './dto/create-organization.dto';
+
 import { UpdateOrganizationDto } from './dto/update-organization.dto';
 import * as crypto from 'crypto';
 import {
@@ -13,15 +19,23 @@ import {
   memberSelect,
   invitationSelect,
   auditLogSelect,
-  organizationDetailSelect,
 } from '../../common/prisma/selects';
 import { resolveActiveOrganization } from '../../common/tenancy/active-organization';
+import { SessionCacheService } from '../../common/session/session-cache.service';
+import { NotificationsService } from '../notifications/notifications.service';
+import { NOTIFICATION_TYPES } from '../notifications/notification-recipients';
 
 @Injectable()
 export class OrganizationsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly mailService: MailService,
+    // Every method below that changes a membership, an active-org pointer, or an
+    // organization's activity flags MUST invalidate the affected users' cached
+    // sessions. A cached session that still lists a membership the database has
+    // dropped is not a stale read — it is a removed member who can still get in.
+    private readonly sessions: SessionCacheService,
+    private readonly notifications: NotificationsService,
   ) {}
 
   /**
@@ -103,7 +117,10 @@ export class OrganizationsService {
       select: { lastActiveOrganizationId: true },
     });
 
-    const { active } = resolveActiveOrganization(memberships, user?.lastActiveOrganizationId);
+    const { active } = resolveActiveOrganization(
+      memberships,
+      user?.lastActiveOrganizationId,
+    );
 
     if (!active) {
       throw new NotFoundException('You are not a member of any organization.');
@@ -127,7 +144,9 @@ export class OrganizationsService {
     const membership = await this.prisma.reader.organizationMember.findUnique({
       where: { organizationId_userId: { organizationId: orgId, userId } },
       include: {
-        organization: { select: { id: true, name: true, isActive: true, suspendedAt: true } },
+        organization: {
+          select: { id: true, name: true, isActive: true, suspendedAt: true },
+        },
       },
     });
 
@@ -135,7 +154,10 @@ export class OrganizationsService {
       throw new NotFoundException('You are not a member of this organization.');
     }
 
-    if (!membership.organization.isActive || membership.organization.suspendedAt) {
+    if (
+      !membership.organization.isActive ||
+      membership.organization.suspendedAt
+    ) {
       throw new BadRequestException('This organization has been suspended.');
     }
 
@@ -143,6 +165,12 @@ export class OrganizationsService {
       where: { id: userId },
       data: { lastActiveOrganizationId: orgId },
     });
+
+    // `lastActiveOrganizationId` is part of the cached session and feeds
+    // resolveActiveOrganization. Skipping this would leave the switcher visibly
+    // broken — the user picks a workspace, the next request still reports the
+    // old one as active, and the UI snaps back.
+    await this.sessions.invalidate(userId);
 
     return {
       activeOrganizationId: orgId,
@@ -206,13 +234,20 @@ export class OrganizationsService {
    * All members are removed and the org becomes inaccessible.
    */
   async deleteOrganization(orgId: string) {
-    return this.prisma.writer.organization.update({
+    const deleted = await this.prisma.writer.organization.update({
       where: { id: orgId },
       data: {
         deletedAt: new Date(),
         isActive: false,
       },
     });
+
+    // Clears `isActive` for every member at once: the flag lives inside each
+    // member's cached session, so without this the org is deleted for the
+    // database and still open for business for everyone already signed in.
+    await this.sessions.invalidateOrganizationMembers(orgId);
+
+    return deleted;
   }
 
   // ══════════════════════════════════════════════════════════════════════════
@@ -245,7 +280,12 @@ export class OrganizationsService {
    * Change a member's role within the organization.
    * Cannot demote the last ADMIN.
    */
-  async updateMemberRole(orgId: string, memberId: string, newRole: string, actorUserId: string) {
+  async updateMemberRole(
+    orgId: string,
+    memberId: string,
+    newRole: string,
+    actorUserId: string,
+  ) {
     const member = await this.prisma.reader.organizationMember.findFirst({
       where: { id: memberId, organizationId: orgId },
     });
@@ -268,10 +308,16 @@ export class OrganizationsService {
       }
     }
 
-    return this.prisma.writer.organizationMember.update({
+    const updated = await this.prisma.writer.organizationMember.update({
       where: { id: memberId },
       data: { role: newRole as any },
     });
+
+    // A demotion that does not reach the cache is a user who keeps their old
+    // permissions — RoleGuard reads the role this guard cached.
+    await this.sessions.invalidate(member.userId);
+
+    return updated;
   }
 
   /**
@@ -300,9 +346,15 @@ export class OrganizationsService {
       }
     }
 
-    return this.prisma.writer.organizationMember.delete({
+    const removed = await this.prisma.writer.organizationMember.delete({
       where: { id: memberId },
     });
+
+    // The one that matters most: an ex-member whose session still lists the
+    // membership passes OrgMemberGuard and reads the tenant's data.
+    await this.sessions.invalidate(member.userId);
+
+    return removed;
   }
 
   // ══════════════════════════════════════════════════════════════════════════
@@ -313,7 +365,12 @@ export class OrganizationsService {
    * Create an invitation for a new member.
    * Returns the invite link token (shown once).
    */
-  async createInvitation(orgId: string, email: string, role: string, invitedById: string) {
+  async createInvitation(
+    orgId: string,
+    email: string,
+    role: string,
+    invitedById: string,
+  ) {
     // Check if user is already a member
     const existingUser = await this.prisma.reader.user.findUnique({
       where: { email: email.toLowerCase() },
@@ -324,35 +381,48 @@ export class OrganizationsService {
       // Only membership in THIS org blocks the invite. Belonging to other
       // organizations is expected under multi-org — and reporting it would
       // leak one tenant's membership roster to another.
-      const existingMembership = await this.prisma.reader.organizationMember.findUnique({
-        where: {
-          organizationId_userId: { organizationId: orgId, userId: existingUser.id },
-        },
-      });
+      const existingMembership =
+        await this.prisma.reader.organizationMember.findUnique({
+          where: {
+            organizationId_userId: {
+              organizationId: orgId,
+              userId: existingUser.id,
+            },
+          },
+        });
 
       if (existingMembership) {
-        throw new ConflictException('This user is already a member of your organization.');
+        throw new ConflictException(
+          'This user is already a member of your organization.',
+        );
       }
     }
 
     // Check for existing pending invitation
-    const existingInvite = await this.prisma.reader.organizationInvitation.findFirst({
-      where: {
-        organizationId: orgId,
-        email: email.toLowerCase(),
-        status: 'PENDING',
-        expiresAt: { gt: new Date() },
-      },
-    });
+    const existingInvite =
+      await this.prisma.reader.organizationInvitation.findFirst({
+        where: {
+          organizationId: orgId,
+          email: email.toLowerCase(),
+          status: 'PENDING',
+          expiresAt: { gt: new Date() },
+        },
+      });
 
     if (existingInvite) {
-      throw new ConflictException('An active invitation already exists for this email.');
+      throw new ConflictException(
+        'An active invitation already exists for this email.',
+      );
     }
 
     // Check member quota & get org name + inviter details
     const org = await this.prisma.reader.organization.findUnique({
       where: { id: orgId },
-      select: { name: true, maxMembers: true, _count: { select: { members: true } } },
+      select: {
+        name: true,
+        maxMembers: true,
+        _count: { select: { members: true } },
+      },
     });
 
     if (org && org._count.members >= org.maxMembers) {
@@ -363,12 +433,17 @@ export class OrganizationsService {
       where: { id: invitedById },
       select: { firstName: true, lastName: true },
     });
-    const inviterName = inviter ? `${inviter.firstName} ${inviter.lastName}` : 'An administrator';
+    const inviterName = inviter
+      ? `${inviter.firstName} ${inviter.lastName}`
+      : 'An administrator';
     const orgName = org?.name ?? 'your organization';
 
     // Generate invite token
     const rawToken = crypto.randomBytes(32).toString('hex');
-    const hashedToken = crypto.createHash('sha256').update(rawToken).digest('hex');
+    const hashedToken = crypto
+      .createHash('sha256')
+      .update(rawToken)
+      .digest('hex');
     const expiresAt = new Date();
     expiresAt.setDate(expiresAt.getDate() + 7); // 7-day expiry
 
@@ -384,12 +459,14 @@ export class OrganizationsService {
     });
 
     // Determine the frontend base URL (you might want this in env config)
-    const frontendUrl = process.env.CORS_ORIGINS?.split(',')[0] || 'http://localhost:3001';
+    const frontendUrl =
+      process.env.CORS_ORIGINS?.split(',')[0] || 'http://localhost:3001';
     const inviteUrl = `${frontendUrl}/invite/accept?token=${rawToken}`;
 
     // Send the email in the background
-    this.mailService.sendInvitationEmail(email, inviterName, orgName, inviteUrl)
-      .catch(err => console.error('Failed to send invite email:', err));
+    this.mailService
+      .sendInvitationEmail(email, inviterName, orgName, inviteUrl)
+      .catch((err) => console.error('Failed to send invite email:', err));
 
     return {
       invitationId: invitation.id,
@@ -409,19 +486,25 @@ export class OrganizationsService {
    * only display data — never the member roster or org settings.
    */
   async previewInvitation(rawToken: string) {
-    const hashedToken = crypto.createHash('sha256').update(rawToken).digest('hex');
+    const hashedToken = crypto
+      .createHash('sha256')
+      .update(rawToken)
+      .digest('hex');
 
-    const invitation = await this.prisma.reader.organizationInvitation.findUnique({
-      where: { token: hashedToken },
-      select: {
-        email: true,
-        role: true,
-        status: true,
-        expiresAt: true,
-        organization: { select: { name: true, logoUrl: true, isActive: true } },
-        invitedBy: { select: { firstName: true, lastName: true } },
-      },
-    });
+    const invitation =
+      await this.prisma.reader.organizationInvitation.findUnique({
+        where: { token: hashedToken },
+        select: {
+          email: true,
+          role: true,
+          status: true,
+          expiresAt: true,
+          organization: {
+            select: { name: true, logoUrl: true, isActive: true },
+          },
+          invitedBy: { select: { firstName: true, lastName: true } },
+        },
+      });
 
     if (!invitation) {
       throw new NotFoundException('Invalid invitation link.');
@@ -441,8 +524,13 @@ export class OrganizationsService {
       // Pre-computed so the client renders one honest state rather than
       // re-deriving validity from three fields and getting it subtly wrong.
       isAcceptable:
-        invitation.status === 'PENDING' && !isExpired && invitation.organization.isActive,
-      status: isExpired && invitation.status === 'PENDING' ? 'EXPIRED' : invitation.status,
+        invitation.status === 'PENDING' &&
+        !isExpired &&
+        invitation.organization.isActive,
+      status:
+        isExpired && invitation.status === 'PENDING'
+          ? 'EXPIRED'
+          : invitation.status,
     };
   }
 
@@ -451,23 +539,29 @@ export class OrganizationsService {
    * Creates the OrganizationMember record.
    */
   async acceptInvitation(rawToken: string, userId: string) {
-    const hashedToken = crypto.createHash('sha256').update(rawToken).digest('hex');
+    const hashedToken = crypto
+      .createHash('sha256')
+      .update(rawToken)
+      .digest('hex');
 
-    const invitation = await this.prisma.reader.organizationInvitation.findUnique({
-      where: { token: hashedToken },
-      include: {
-        organization: {
-          select: { id: true, name: true, isActive: true },
+    const invitation =
+      await this.prisma.reader.organizationInvitation.findUnique({
+        where: { token: hashedToken },
+        include: {
+          organization: {
+            select: { id: true, name: true, isActive: true },
+          },
         },
-      },
-    });
+      });
 
     if (!invitation) {
       throw new NotFoundException('Invalid invitation token.');
     }
 
     if (invitation.status !== 'PENDING') {
-      throw new BadRequestException(`This invitation has already been ${invitation.status.toLowerCase()}.`);
+      throw new BadRequestException(
+        `This invitation has already been ${invitation.status.toLowerCase()}.`,
+      );
     }
 
     if (invitation.expiresAt < new Date()) {
@@ -485,14 +579,20 @@ export class OrganizationsService {
 
     // Joining additional organizations is the normal case now — only a
     // duplicate membership in THIS org is a conflict.
-    const existingMembership = await this.prisma.reader.organizationMember.findUnique({
-      where: {
-        organizationId_userId: { organizationId: invitation.organizationId, userId },
-      },
-    });
+    const existingMembership =
+      await this.prisma.reader.organizationMember.findUnique({
+        where: {
+          organizationId_userId: {
+            organizationId: invitation.organizationId,
+            userId,
+          },
+        },
+      });
 
     if (existingMembership) {
-      throw new ConflictException('You are already a member of this organization.');
+      throw new ConflictException(
+        'You are already a member of this organization.',
+      );
     }
 
     // Transaction: create membership + update invitation
@@ -520,6 +620,49 @@ export class OrganizationsService {
       });
     });
 
+    // Two cached fields changed at once — the membership list gained an entry
+    // and the active-org pointer moved. Invalidated after the transaction
+    // commits, never inside it: clearing the key first would let a concurrent
+    // request repopulate it from the pre-commit state and leave the stale copy
+    // behind with a full TTL ahead of it.
+    await this.sessions.invalidate(userId);
+
+    // Tell the org's admins somebody joined.
+    //
+    // AFTER the transaction, for the same reason the session invalidation is:
+    // a notification about a membership that then failed to commit is a lie the
+    // recipient cannot un-see. `notifyOrganization` swallows its own failures,
+    // so this cannot turn a successful acceptance into a 500 — accepting an
+    // invitation must not fail because Redis hiccuped.
+    //
+    // `actorUserId` is the joiner, so they are excluded: the person who just
+    // clicked "accept" does not need to be told that they accepted. The
+    // audience is ADMINs only — member management is `member:view`, and a
+    // VIEWER cannot open /team to act on it. That rule lives in
+    // notification-recipients.ts and is tested there.
+    const joiner = await this.prisma.reader.user.findUnique({
+      where: { id: userId },
+      select: { firstName: true, lastName: true, email: true },
+    });
+    const joinerName = joiner
+      ? `${joiner.firstName ?? ''} ${joiner.lastName ?? ''}`.trim() ||
+        joiner.email
+      : 'A new member';
+
+    await this.notifications.notifyOrganization({
+      organizationId: invitation.organizationId,
+      type: NOTIFICATION_TYPES.MEMBER_JOINED,
+      title: `${joinerName} joined ${invitation.organization.name}`,
+      body: `They accepted their invitation and now have the ${invitation.role} role.`,
+      metadata: {
+        organizationId: invitation.organizationId,
+        userId,
+        role: invitation.role,
+        href: '/team',
+      },
+      actorUserId: userId,
+    });
+
     return {
       message: 'Invitation accepted successfully.',
       organization: {
@@ -533,7 +676,10 @@ export class OrganizationsService {
   /**
    * List all invitations for an organization.
    */
-  async listInvitations(orgId: string, pagination: Pagination = parsePagination()) {
+  async listInvitations(
+    orgId: string,
+    pagination: Pagination = parsePagination(),
+  ) {
     const where = { organizationId: orgId };
 
     const [invitations, total] = await Promise.all([
@@ -557,9 +703,10 @@ export class OrganizationsService {
    * Revoke a pending invitation.
    */
   async revokeInvitation(orgId: string, invitationId: string) {
-    const invitation = await this.prisma.reader.organizationInvitation.findFirst({
-      where: { id: invitationId, organizationId: orgId, status: 'PENDING' },
-    });
+    const invitation =
+      await this.prisma.reader.organizationInvitation.findFirst({
+        where: { id: invitationId, organizationId: orgId, status: 'PENDING' },
+      });
 
     if (!invitation) {
       throw new NotFoundException('Pending invitation not found.');

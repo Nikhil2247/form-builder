@@ -8,16 +8,27 @@ import { API_BASE_URL } from '@/lib/config';
 // Types
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** Mirrors the API's FormSubmission record. */
+export type SubmissionStatus = 'SUBMITTED' | 'FLAGGED_SPAM' | 'REJECTED' | 'DELETED';
+
+/**
+ * Mirrors the API's FormSubmission record.
+ *
+ * `answers` is optional because the two list endpoints disagree about it on
+ * purpose: the org-wide list omits the payload entirely (it renders respondent,
+ * form, status and time, and shipping every answer for a page of long-form
+ * surveys was the largest response the API produced), while the per-form grid
+ * needs it to fill one column per question. Typing it as always-present made
+ * `submission.answers[q.id]` look safe on the org-wide page, where it is not.
+ */
 export interface Submission {
   id: string;
   formId: string;
   formVersionId?: string;
-  answers: Record<string, any>;
+  answers?: Record<string, any>;
   submittedAt: string;
   processedAt?: string | null;
   completionTimeMs: number;
-  status?: 'SUBMITTED' | 'FLAGGED_SPAM' | 'REJECTED' | 'DELETED';
+  status?: SubmissionStatus;
   country?: string | null;
   quizScore?: number;
   maxQuizScore?: number;

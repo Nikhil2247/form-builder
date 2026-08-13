@@ -24,7 +24,10 @@ describe('normalizeFormStructure', () => {
   describe('questions', () => {
     it('gives a duplicate question id a new one, so two questions cannot share an answer key', () => {
       const { questions } = normalizeFormStructure({
-        questions: [q({ id: 'dup', label: 'First' }), q({ id: 'dup', label: 'Second' })],
+        questions: [
+          q({ id: 'dup', label: 'First' }),
+          q({ id: 'dup', label: 'Second' }),
+        ],
       });
 
       expect(questions).toHaveLength(2);
@@ -41,9 +44,9 @@ describe('normalizeFormStructure', () => {
     });
 
     it('rejects an unknown question type instead of storing a field nothing can render', () => {
-      expect(() => normalizeFormStructure({ questions: [q({ type: 'TELEPATHY' })] })).toThrow(
-        BadRequestException,
-      );
+      expect(() =>
+        normalizeFormStructure({ questions: [q({ type: 'TELEPATHY' })] }),
+      ).toThrow(BadRequestException);
     });
 
     it('moves a question on a non-existent page onto a real one, so it is not invisible', () => {
@@ -64,7 +67,9 @@ describe('normalizeFormStructure', () => {
 
     it('rejects a choice question with no options, which no one could answer', () => {
       expect(() =>
-        normalizeFormStructure({ questions: [q({ type: 'SINGLE_CHOICE', options: [] })] }),
+        normalizeFormStructure({
+          questions: [q({ type: 'SINGLE_CHOICE', options: [] })],
+        }),
       ).toThrow(BadRequestException);
     });
 
@@ -86,17 +91,22 @@ describe('normalizeFormStructure', () => {
 
     it('repairs an inverted slider range that would render an unusable control', () => {
       const { questions } = normalizeFormStructure({
-        questions: [q({ type: 'SLIDER', sliderMin: 50, sliderMax: 10, sliderStep: 0 })],
+        questions: [
+          q({ type: 'SLIDER', sliderMin: 50, sliderMax: 10, sliderStep: 0 }),
+        ],
       });
       expect(questions[0].sliderMax).toBeGreaterThan(questions[0].sliderMin);
       expect(questions[0].sliderStep).toBeGreaterThan(0);
     });
 
     it('rejects a form over the question ceiling', () => {
-      const questions = Array.from({ length: STRUCTURE_LIMITS.MAX_QUESTIONS + 1 }, (_, i) =>
-        q({ id: `q${i}` }),
+      const questions = Array.from(
+        { length: STRUCTURE_LIMITS.MAX_QUESTIONS + 1 },
+        (_, i) => q({ id: `q${i}` }),
       );
-      expect(() => normalizeFormStructure({ questions })).toThrow(BadRequestException);
+      expect(() => normalizeFormStructure({ questions })).toThrow(
+        BadRequestException,
+      );
     });
   });
 
@@ -105,8 +115,22 @@ describe('normalizeFormStructure', () => {
       const { logic } = normalizeFormStructure({
         questions: [q({ id: 'a' }), q({ id: 'b' })],
         logic: [
-          { id: 'r1', triggerQuestionId: 'a', operator: 'EQUALS', value: 'x', action: 'HIDE', targetQuestionId: 'b' },
-          { id: 'r2', triggerQuestionId: 'a', operator: 'EQUALS', value: 'x', action: 'HIDE', targetQuestionId: 'gone' },
+          {
+            id: 'r1',
+            triggerQuestionId: 'a',
+            operator: 'EQUALS',
+            value: 'x',
+            action: 'HIDE',
+            targetQuestionId: 'b',
+          },
+          {
+            id: 'r2',
+            triggerQuestionId: 'a',
+            operator: 'EQUALS',
+            value: 'x',
+            action: 'HIDE',
+            targetQuestionId: 'gone',
+          },
         ],
       });
       expect(logic.map((r: any) => r.id)).toEqual(['r1']);
@@ -116,7 +140,14 @@ describe('normalizeFormStructure', () => {
       const { logic } = normalizeFormStructure({
         questions: [q({ id: 'a' })],
         logic: [
-          { id: 'r', triggerQuestionId: 'gone', operator: 'EQUALS', value: '', action: 'SHOW', targetQuestionId: 'a' },
+          {
+            id: 'r',
+            triggerQuestionId: 'gone',
+            operator: 'EQUALS',
+            value: '',
+            action: 'SHOW',
+            targetQuestionId: 'a',
+          },
         ],
       });
       expect(logic).toHaveLength(0);
@@ -126,7 +157,14 @@ describe('normalizeFormStructure', () => {
       const { logic } = normalizeFormStructure({
         questions: [q({ id: 'a' })],
         logic: [
-          { id: 'r', triggerQuestionId: 'a', operator: 'EQUALS', value: '1', action: 'HIDE', targetQuestionId: 'a' },
+          {
+            id: 'r',
+            triggerQuestionId: 'a',
+            operator: 'EQUALS',
+            value: '1',
+            action: 'HIDE',
+            targetQuestionId: 'a',
+          },
         ],
       });
       expect(logic).toHaveLength(0);
@@ -137,7 +175,14 @@ describe('normalizeFormStructure', () => {
         pages: [{ pageNumber: 1, title: 'One' }],
         questions: [q({ id: 'a' })],
         logic: [
-          { id: 'r', triggerQuestionId: 'a', operator: 'EQUALS', value: '1', action: 'JUMP_TO_PAGE', targetPageNumber: 7 },
+          {
+            id: 'r',
+            triggerQuestionId: 'a',
+            operator: 'EQUALS',
+            value: '1',
+            action: 'JUMP_TO_PAGE',
+            targetPageNumber: 7,
+          },
         ],
       });
       expect(logic).toHaveLength(0);
@@ -148,7 +193,14 @@ describe('normalizeFormStructure', () => {
       const { logic } = normalizeFormStructure(
         {
           logic: [
-            { id: 'r', triggerQuestionId: 'stored', operator: 'EQUALS', value: '1', action: 'HIDE', targetQuestionId: 'stored2' },
+            {
+              id: 'r',
+              triggerQuestionId: 'stored',
+              operator: 'EQUALS',
+              value: '1',
+              action: 'HIDE',
+              targetQuestionId: 'stored2',
+            },
           ],
         },
         { questions: [q({ id: 'stored' }), q({ id: 'stored2' })] },
@@ -174,7 +226,9 @@ describe('normalizeFormStructure', () => {
     });
 
     it('rejects a non-array', () => {
-      expect(() => normalizeFormStructure({ pages: 'nope' })).toThrow(BadRequestException);
+      expect(() => normalizeFormStructure({ pages: 'nope' })).toThrow(
+        BadRequestException,
+      );
     });
   });
 
@@ -182,7 +236,9 @@ describe('normalizeFormStructure', () => {
     const huge = Array.from({ length: 200 }, (_, i) =>
       q({ id: `q${i}`, description: 'x'.repeat(5_000) }),
     );
-    expect(() => normalizeFormStructure({ questions: huge })).toThrow(BadRequestException);
+    expect(() => normalizeFormStructure({ questions: huge })).toThrow(
+      BadRequestException,
+    );
   });
 });
 
@@ -197,7 +253,9 @@ describe('normalizeTheme', () => {
   });
 
   it('strips a data: URL logo', () => {
-    expect(normalizeTheme({ logoUrl: 'data:text/html,<script>x</script>' }).logoUrl).toBeUndefined();
+    expect(
+      normalizeTheme({ logoUrl: 'data:text/html,<script>x</script>' }).logoUrl,
+    ).toBeUndefined();
   });
 
   it('keeps ordinary http(s) images', () => {
@@ -208,16 +266,22 @@ describe('normalizeTheme', () => {
 
 describe('normalizeNotifyEmails', () => {
   it('lowercases, trims and de-duplicates', () => {
-    expect(normalizeNotifyEmails([' A@B.com ', 'a@b.com'])).toEqual(['a@b.com']);
+    expect(normalizeNotifyEmails([' A@B.com ', 'a@b.com'])).toEqual([
+      'a@b.com',
+    ]);
   });
 
   it('drops anything that is not an address', () => {
-    expect(normalizeNotifyEmails(['nope', 42, null, 'ok@ok.com'])).toEqual(['ok@ok.com']);
+    expect(normalizeNotifyEmails(['nope', 42, null, 'ok@ok.com'])).toEqual([
+      'ok@ok.com',
+    ]);
   });
 
   it('caps the list', () => {
     const many = Array.from({ length: 50 }, (_, i) => `p${i}@x.com`);
-    expect(normalizeNotifyEmails(many)).toHaveLength(STRUCTURE_LIMITS.MAX_NOTIFY_EMAILS);
+    expect(normalizeNotifyEmails(many)).toHaveLength(
+      STRUCTURE_LIMITS.MAX_NOTIFY_EMAILS,
+    );
   });
 });
 
@@ -240,7 +304,11 @@ describe('normalizeFormStructure — optionsSource', () => {
     const result = normalizeFormStructure({
       questions: [
         dropdown({
-          optionsSource: { kind: 'CHOICE_LIST', listSlug: 'in-districts', searchable: true },
+          optionsSource: {
+            kind: 'CHOICE_LIST',
+            listSlug: 'in-districts',
+            searchable: true,
+          },
         }),
       ],
     });
@@ -256,7 +324,11 @@ describe('normalizeFormStructure — optionsSource', () => {
   it('does not demand static options when a list is bound', () => {
     expect(() =>
       normalizeFormStructure({
-        questions: [dropdown({ optionsSource: { kind: 'CHOICE_LIST', listSlug: 'in-districts' } })],
+        questions: [
+          dropdown({
+            optionsSource: { kind: 'CHOICE_LIST', listSlug: 'in-districts' },
+          }),
+        ],
       }),
     ).not.toThrow();
   });
@@ -282,14 +354,18 @@ describe('normalizeFormStructure — optionsSource', () => {
 
   it('refuses a binding with no list', () => {
     expect(() =>
-      normalizeFormStructure({ questions: [dropdown({ optionsSource: { kind: 'CHOICE_LIST' } })] }),
+      normalizeFormStructure({
+        questions: [dropdown({ optionsSource: { kind: 'CHOICE_LIST' } })],
+      }),
     ).toThrow(/missing the list/i);
   });
 
   it('refuses an unknown source kind', () => {
     expect(() =>
       normalizeFormStructure({
-        questions: [dropdown({ optionsSource: { kind: 'REST_API', listSlug: 'x' } })],
+        questions: [
+          dropdown({ optionsSource: { kind: 'REST_API', listSlug: 'x' } }),
+        ],
       }),
     ).toThrow(/unknown kind/i);
   });
@@ -320,9 +396,9 @@ describe('normalizeFormStructure — optionsSource', () => {
     // Not subtle: the child is filtered by an answer the respondent has not been
     // asked for yet, so its dropdown is permanently empty.
     it('rejects a parent that comes after the child', () => {
-      expect(() => normalizeFormStructure({ questions: [child(), parent()] })).toThrow(
-        /comes after it/i,
-      );
+      expect(() =>
+        normalizeFormStructure({ questions: [child(), parent()] }),
+      ).toThrow(/comes after it/i);
     });
 
     it('rejects a parent that is not on the form', () => {

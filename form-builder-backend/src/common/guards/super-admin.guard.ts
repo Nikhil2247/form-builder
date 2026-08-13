@@ -1,4 +1,9 @@
-import { Injectable, CanActivate, ExecutionContext, ForbiddenException } from '@nestjs/common';
+import {
+  Injectable,
+  CanActivate,
+  ExecutionContext,
+  ForbiddenException,
+} from '@nestjs/common';
 import { AppLogger } from '../logger/app-logger.service';
 
 /**
@@ -22,12 +27,18 @@ export class SuperAdminGuard implements CanActivate {
     const user = request.user;
 
     if (!user) {
-      this.logger.warn('SuperAdmin access denied: No authenticated user found.', { path: request.url });
+      this.logger.warn(
+        'SuperAdmin access denied: No authenticated user found.',
+        { path: request.url },
+      );
       throw new ForbiddenException('Super Administrator access required.');
     }
 
     if (user.systemRole !== 'SUPER_ADMIN') {
-      this.logger.warn(`SuperAdmin access denied for user ${user.sub}`, { path: request.url, email: user.email });
+      this.logger.warn(`SuperAdmin access denied for user ${user.sub}`, {
+        path: request.url,
+        email: user.email,
+      });
       throw new ForbiddenException('Super Administrator access required.');
     }
 

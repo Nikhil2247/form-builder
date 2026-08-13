@@ -46,7 +46,13 @@ export class SubjectsController {
   @RequiredRole('EDITOR')
   createSubjectType(
     @OrgId() orgId: string,
-    @Body() body: { name: string; slug?: string; icon?: string; identityConfig?: IdentityConfig },
+    @Body()
+    body: {
+      name: string;
+      slug?: string;
+      icon?: string;
+      identityConfig?: IdentityConfig;
+    },
     @Req() req: Request,
   ) {
     return this.subjects.createSubjectType(orgId, body, (req.user as any)?.sub);
@@ -66,7 +72,12 @@ export class SubjectsController {
     },
     @Req() req: Request,
   ) {
-    return this.subjects.updateSubjectType(orgId, subjectTypeId, body, (req.user as any)?.sub);
+    return this.subjects.updateSubjectType(
+      orgId,
+      subjectTypeId,
+      body,
+      (req.user as any)?.sub,
+    );
   }
 
   @Delete('subject-types/:subjectTypeId')
@@ -76,7 +87,11 @@ export class SubjectsController {
     @Param('subjectTypeId', new ParseUUIDPipe()) subjectTypeId: string,
     @Req() req: Request,
   ) {
-    return this.subjects.deleteSubjectType(orgId, subjectTypeId, (req.user as any)?.sub);
+    return this.subjects.deleteSubjectType(
+      orgId,
+      subjectTypeId,
+      (req.user as any)?.sub,
+    );
   }
 
   // ── Subjects ──────────────────────────────────────────────────────────────
@@ -85,7 +100,8 @@ export class SubjectsController {
   @RequiredRole('VIEWER')
   listSubjects(
     @OrgId() orgId: string,
-    @Query() query: PaginationQueryDto & { subjectTypeId?: string; search?: string },
+    @Query()
+    query: PaginationQueryDto & { subjectTypeId?: string; search?: string },
   ) {
     return this.subjects.listSubjects(
       orgId,
@@ -104,7 +120,8 @@ export class SubjectsController {
   @RequiredRole('VIEWER')
   findDuplicates(
     @OrgId() orgId: string,
-    @Query() query: { subjectTypeId: string; displayName?: string; externalId?: string },
+    @Query()
+    query: { subjectTypeId: string; displayName?: string; externalId?: string },
   ) {
     return this.subjects.findPossibleDuplicates(orgId, query.subjectTypeId, {
       displayName: query.displayName,
@@ -128,7 +145,11 @@ export class SubjectsController {
     @Param('subjectId', new ParseUUIDPipe()) subjectId: string,
     @Query() query: PaginationQueryDto,
   ) {
-    return this.subjects.getSubjectTimeline(orgId, subjectId, parsePagination(query));
+    return this.subjects.getSubjectTimeline(
+      orgId,
+      subjectId,
+      parsePagination(query),
+    );
   }
 
   @Delete('subjects/:subjectId')
@@ -138,6 +159,10 @@ export class SubjectsController {
     @Param('subjectId', new ParseUUIDPipe()) subjectId: string,
     @Req() req: Request,
   ) {
-    return this.subjects.deleteSubject(orgId, subjectId, (req.user as any)?.sub);
+    return this.subjects.deleteSubject(
+      orgId,
+      subjectId,
+      (req.user as any)?.sub,
+    );
   }
 }

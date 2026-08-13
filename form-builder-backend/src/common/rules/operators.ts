@@ -104,7 +104,9 @@ export function toDate(v: RuleValue): Date | null {
   // own offset. Anything else is rejected rather than guessed at.
   if (!/^\d{4}-\d{2}-\d{2}([T ].*)?$/.test(trimmed)) return null;
 
-  const ms = Date.parse(trimmed.length === 10 ? `${trimmed}T00:00:00Z` : trimmed);
+  const ms = Date.parse(
+    trimmed.length === 10 ? `${trimmed}T00:00:00Z` : trimmed,
+  );
   return Number.isNaN(ms) ? null : new Date(ms);
 }
 
@@ -117,7 +119,10 @@ function isoDate(d: Date): string {
 function wholeYearsBetween(from: Date, to: Date): number {
   let years = to.getUTCFullYear() - from.getUTCFullYear();
   const monthDelta = to.getUTCMonth() - from.getUTCMonth();
-  if (monthDelta < 0 || (monthDelta === 0 && to.getUTCDate() < from.getUTCDate())) {
+  if (
+    monthDelta < 0 ||
+    (monthDelta === 0 && to.getUTCDate() < from.getUTCDate())
+  ) {
     years -= 1;
   }
   return years;
@@ -125,7 +130,8 @@ function wholeYearsBetween(from: Date, to: Date): number {
 
 function wholeMonthsBetween(from: Date, to: Date): number {
   let months =
-    (to.getUTCFullYear() - from.getUTCFullYear()) * 12 + (to.getUTCMonth() - from.getUTCMonth());
+    (to.getUTCFullYear() - from.getUTCFullYear()) * 12 +
+    (to.getUTCMonth() - from.getUTCMonth());
   if (to.getUTCDate() < from.getUTCDate()) months -= 1;
   return months;
 }
@@ -133,7 +139,11 @@ function wholeMonthsBetween(from: Date, to: Date): number {
 const MS_PER_DAY = 86_400_000;
 
 /** Apply a numeric binary op, yielding null if either side isn't a number. */
-function numeric2(a: RuleValue, b: RuleValue, fn: (x: number, y: number) => number): RuleValue {
+function numeric2(
+  a: RuleValue,
+  b: RuleValue,
+  fn: (x: number, y: number) => number,
+): RuleValue {
   const x = toNumber(a);
   const y = toNumber(b);
   if (x === null || y === null) return null;
@@ -194,13 +204,33 @@ function looseEquals(a: RuleValue, b: RuleValue): boolean {
 
 export const OPERATORS: Readonly<Record<string, OperatorDef>> = {
   // ── Arithmetic ──
-  add: { minArgs: 2, maxArgs: Infinity, fn: (a) => reduceNumeric(a, (x, y) => x + y) },
-  sub: { minArgs: 2, maxArgs: 2, fn: (a) => numeric2(a[0], a[1], (x, y) => x - y) },
-  mul: { minArgs: 2, maxArgs: Infinity, fn: (a) => reduceNumeric(a, (x, y) => x * y) },
+  add: {
+    minArgs: 2,
+    maxArgs: Infinity,
+    fn: (a) => reduceNumeric(a, (x, y) => x + y),
+  },
+  sub: {
+    minArgs: 2,
+    maxArgs: 2,
+    fn: (a) => numeric2(a[0], a[1], (x, y) => x - y),
+  },
+  mul: {
+    minArgs: 2,
+    maxArgs: Infinity,
+    fn: (a) => reduceNumeric(a, (x, y) => x * y),
+  },
   // Division by zero is null, not Infinity — a form should show "no value"
   // rather than a value no respondent can interpret.
-  div: { minArgs: 2, maxArgs: 2, fn: (a) => numeric2(a[0], a[1], (x, y) => (y === 0 ? NaN : x / y)) },
-  mod: { minArgs: 2, maxArgs: 2, fn: (a) => numeric2(a[0], a[1], (x, y) => (y === 0 ? NaN : x % y)) },
+  div: {
+    minArgs: 2,
+    maxArgs: 2,
+    fn: (a) => numeric2(a[0], a[1], (x, y) => (y === 0 ? NaN : x / y)),
+  },
+  mod: {
+    minArgs: 2,
+    maxArgs: 2,
+    fn: (a) => numeric2(a[0], a[1], (x, y) => (y === 0 ? NaN : x % y)),
+  },
   abs: { minArgs: 1, maxArgs: 1, fn: (a) => unaryNumeric(a[0], Math.abs) },
   floor: { minArgs: 1, maxArgs: 1, fn: (a) => unaryNumeric(a[0], Math.floor) },
   ceil: { minArgs: 1, maxArgs: 1, fn: (a) => unaryNumeric(a[0], Math.ceil) },
@@ -218,16 +248,40 @@ export const OPERATORS: Readonly<Record<string, OperatorDef>> = {
       return Math.round(x * factor) / factor;
     },
   },
-  min: { minArgs: 1, maxArgs: Infinity, fn: (a) => reduceNumeric(a, (x, y) => Math.min(x, y)) },
-  max: { minArgs: 1, maxArgs: Infinity, fn: (a) => reduceNumeric(a, (x, y) => Math.max(x, y)) },
+  min: {
+    minArgs: 1,
+    maxArgs: Infinity,
+    fn: (a) => reduceNumeric(a, (x, y) => Math.min(x, y)),
+  },
+  max: {
+    minArgs: 1,
+    maxArgs: Infinity,
+    fn: (a) => reduceNumeric(a, (x, y) => Math.max(x, y)),
+  },
 
   // ── Comparison ──
   eq: { minArgs: 2, maxArgs: 2, fn: (a) => looseEquals(a[0], a[1]) },
   neq: { minArgs: 2, maxArgs: 2, fn: (a) => !looseEquals(a[0], a[1]) },
-  gt: { minArgs: 2, maxArgs: 2, fn: (a) => cmpResult(a[0], a[1], (c) => c > 0) },
-  gte: { minArgs: 2, maxArgs: 2, fn: (a) => cmpResult(a[0], a[1], (c) => c >= 0) },
-  lt: { minArgs: 2, maxArgs: 2, fn: (a) => cmpResult(a[0], a[1], (c) => c < 0) },
-  lte: { minArgs: 2, maxArgs: 2, fn: (a) => cmpResult(a[0], a[1], (c) => c <= 0) },
+  gt: {
+    minArgs: 2,
+    maxArgs: 2,
+    fn: (a) => cmpResult(a[0], a[1], (c) => c > 0),
+  },
+  gte: {
+    minArgs: 2,
+    maxArgs: 2,
+    fn: (a) => cmpResult(a[0], a[1], (c) => c >= 0),
+  },
+  lt: {
+    minArgs: 2,
+    maxArgs: 2,
+    fn: (a) => cmpResult(a[0], a[1], (c) => c < 0),
+  },
+  lte: {
+    minArgs: 2,
+    maxArgs: 2,
+    fn: (a) => cmpResult(a[0], a[1], (c) => c <= 0),
+  },
   between: {
     minArgs: 3,
     maxArgs: 3,
@@ -259,13 +313,23 @@ export const OPERATORS: Readonly<Record<string, OperatorDef>> = {
 
   // ── Dates ──
   today: { minArgs: 0, maxArgs: 0, fn: (_a, ctx) => isoDate(ctx.evalTime) },
-  yearsBetween: { minArgs: 2, maxArgs: 2, fn: (a) => dates2(a, wholeYearsBetween) },
-  monthsBetween: { minArgs: 2, maxArgs: 2, fn: (a) => dates2(a, wholeMonthsBetween) },
+  yearsBetween: {
+    minArgs: 2,
+    maxArgs: 2,
+    fn: (a) => dates2(a, wholeYearsBetween),
+  },
+  monthsBetween: {
+    minArgs: 2,
+    maxArgs: 2,
+    fn: (a) => dates2(a, wholeMonthsBetween),
+  },
   daysBetween: {
     minArgs: 2,
     maxArgs: 2,
     fn: (a) =>
-      dates2(a, (from, to) => Math.floor((to.getTime() - from.getTime()) / MS_PER_DAY)),
+      dates2(a, (from, to) =>
+        Math.floor((to.getTime() - from.getTime()) / MS_PER_DAY),
+      ),
   },
   addDays: {
     minArgs: 2,
@@ -307,12 +371,18 @@ export const OPERATORS: Readonly<Record<string, OperatorDef>> = {
       // A fixed token set, applied in one pass so replacements can't cascade.
       return pattern.replace(/YYYY|MM|DD|HH|mm/g, (token) => {
         switch (token) {
-          case 'YYYY': return String(d.getUTCFullYear());
-          case 'MM': return pad(d.getUTCMonth() + 1);
-          case 'DD': return pad(d.getUTCDate());
-          case 'HH': return pad(d.getUTCHours());
-          case 'mm': return pad(d.getUTCMinutes());
-          default: return token;
+          case 'YYYY':
+            return String(d.getUTCFullYear());
+          case 'MM':
+            return pad(d.getUTCMonth() + 1);
+          case 'DD':
+            return pad(d.getUTCDate());
+          case 'HH':
+            return pad(d.getUTCHours());
+          case 'mm':
+            return pad(d.getUTCMinutes());
+          default:
+            return token;
         }
       });
     },
@@ -325,13 +395,22 @@ export const OPERATORS: Readonly<Record<string, OperatorDef>> = {
     // Nulls contribute nothing rather than the literal "null".
     fn: (a) => a.map((v) => toText(v) ?? '').join(''),
   },
-  upper: { minArgs: 1, maxArgs: 1, fn: (a) => toText(a[0])?.toUpperCase() ?? null },
-  lower: { minArgs: 1, maxArgs: 1, fn: (a) => toText(a[0])?.toLowerCase() ?? null },
+  upper: {
+    minArgs: 1,
+    maxArgs: 1,
+    fn: (a) => toText(a[0])?.toUpperCase() ?? null,
+  },
+  lower: {
+    minArgs: 1,
+    maxArgs: 1,
+    fn: (a) => toText(a[0])?.toLowerCase() ?? null,
+  },
   trim: { minArgs: 1, maxArgs: 1, fn: (a) => toText(a[0])?.trim() ?? null },
   length: {
     minArgs: 1,
     maxArgs: 1,
-    fn: (a) => (Array.isArray(a[0]) ? a[0].length : (toText(a[0])?.length ?? null)),
+    fn: (a) =>
+      Array.isArray(a[0]) ? a[0].length : (toText(a[0])?.length ?? null),
   },
   contains: {
     minArgs: 2,
@@ -389,7 +468,11 @@ export const OPERATORS: Readonly<Record<string, OperatorDef>> = {
 
   // ── Choices / repeating sections ──
   count: { minArgs: 1, maxArgs: 1, fn: (a) => toArray(a[0]).length },
-  includes: { minArgs: 2, maxArgs: 2, fn: (a) => toArray(a[0]).some((v) => looseEquals(v, a[1])) },
+  includes: {
+    minArgs: 2,
+    maxArgs: 2,
+    fn: (a) => toArray(a[0]).some((v) => looseEquals(v, a[1])),
+  },
   sumOf: {
     minArgs: 1,
     maxArgs: 1,
@@ -408,7 +491,10 @@ export const OPERATORS: Readonly<Record<string, OperatorDef>> = {
 // ── Small shared shapes ─────────────────────────────────────────────────────
 
 /** Apply a two-date function, yielding null unless both sides parse as dates. */
-function dates2(args: RuleValue[], fn: (from: Date, to: Date) => number): RuleValue {
+function dates2(
+  args: RuleValue[],
+  fn: (from: Date, to: Date) => number,
+): RuleValue {
   const from = toDate(args[0]);
   const to = toDate(args[1]);
   if (!from || !to) return null;
@@ -423,7 +509,10 @@ function unaryNumeric(v: RuleValue, fn: (x: number) => number): RuleValue {
   return Number.isFinite(result) ? result : null;
 }
 
-function reduceNumeric(args: RuleValue[], fn: (x: number, y: number) => number): RuleValue {
+function reduceNumeric(
+  args: RuleValue[],
+  fn: (x: number, y: number) => number,
+): RuleValue {
   const nums: number[] = [];
   for (const arg of args) {
     const n = toNumber(arg);

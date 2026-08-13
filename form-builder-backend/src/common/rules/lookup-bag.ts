@@ -53,12 +53,18 @@ export function planLookupRequests(
   const byKey = new Map<string, LookupRequest>();
 
   for (const spec of specs) {
-    if (!spec || typeof spec.list !== 'string' || typeof spec.column !== 'string') continue;
+    if (
+      !spec ||
+      typeof spec.list !== 'string' ||
+      typeof spec.column !== 'string'
+    )
+      continue;
     if (typeof spec.field !== 'string') continue;
 
     const answer = answers[spec.field];
     // Arrays (multi-choice) identify no single item; blanks identify none yet.
-    if (answer === null || answer === undefined || Array.isArray(answer)) continue;
+    if (answer === null || answer === undefined || Array.isArray(answer))
+      continue;
 
     const value =
       typeof answer === 'string'
@@ -102,7 +108,9 @@ export function resolveLookupBag(
     bag[request.key] =
       raw === undefined || raw === null
         ? null
-        : typeof raw === 'string' || typeof raw === 'number' || typeof raw === 'boolean'
+        : typeof raw === 'string' ||
+            typeof raw === 'number' ||
+            typeof raw === 'boolean'
           ? raw
           : // Nested objects have no meaning in this value system; a column
             // holding one reads as absent rather than leaking a structure the

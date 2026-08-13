@@ -55,7 +55,9 @@ export function parsePagination(input: PaginationInput = {}): Pagination {
 
   const page = rawPage !== null && rawPage >= 1 ? rawPage : DEFAULT_PAGE;
   const limit =
-    rawLimit !== null && rawLimit >= 1 ? Math.min(rawLimit, MAX_PAGE_SIZE) : DEFAULT_PAGE_SIZE;
+    rawLimit !== null && rawLimit >= 1
+      ? Math.min(rawLimit, MAX_PAGE_SIZE)
+      : DEFAULT_PAGE_SIZE;
 
   return { page, limit, skip: (page - 1) * limit, take: limit };
 }

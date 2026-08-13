@@ -15,4 +15,5 @@ export const ROLES_KEY = 'requiredRole';
  *
  * Must be used with RoleGuard (which must come after OrgMemberGuard).
  */
-export const RequiredRole = (role: 'ADMIN' | 'EDITOR' | 'VIEWER') => SetMetadata(ROLES_KEY, role);
+export const RequiredRole = (role: 'ADMIN' | 'EDITOR' | 'VIEWER') =>
+  SetMetadata(ROLES_KEY, role);

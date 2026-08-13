@@ -1,6 +1,7 @@
 import {
   Injectable,
   BadRequestException,
+  ConflictException,
   Logger,
   ForbiddenException,
   NotFoundException,
@@ -9,17 +10,34 @@ import {
 } from '@nestjs/common';
 import * as argon2 from 'argon2';
 import { createHash, randomUUID } from 'crypto';
-import { SubmissionProducer, SubmissionPayload } from './queues/submission.producer';
+import {
+  SubmissionProducer,
+  SubmissionPayload,
+} from './queues/submission.producer';
 import { SubmitFormDto } from './dto/submit-form.dto';
 import { AnswerValidatorService } from './answer-validator.service';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { RedisService } from '../../common/redis/redis.service';
+import { AuditService } from '../audit/audit.service';
+import { StorageService } from '../storage/storage.service';
 import {
   parsePagination,
   paginated,
   type Pagination,
 } from '../../common/pagination/pagination';
-import { submissionListSelect } from '../../common/prisma/selects';
+import {
+  submissionDetailSelect,
+  submissionListSelect,
+  userSummarySelect,
+} from '../../common/prisma/selects';
+import { ReviewSubmissionDto } from './dto/review-submission.dto';
+import { BulkSubmissionsDto } from './dto/bulk-submissions.dto';
+import {
+  assertAllBulkIdsAuthorized,
+  assertStatusTransition,
+  normaliseBulkIds,
+} from './submission-review.policy';
+import { SubmissionStatus } from '@prisma/client';
 import {
   readPlan,
   planIsEmpty,
@@ -30,8 +48,14 @@ import {
   type RuleValue,
 } from '../../common/rules';
 import { ChoiceListsService } from '../choice-lists/choice-lists.service';
-import type { ResolvedChoiceItem, ValidationIssue } from './answer-validator.service';
-import { hiddenByLegacyLogic, type LegacyLogicRule } from '../../common/legacy-logic';
+import type {
+  ResolvedChoiceItem,
+  ValidationIssue,
+} from './answer-validator.service';
+import {
+  hiddenByLegacyLogic,
+  type LegacyLogicRule,
+} from '../../common/legacy-logic';
 import { resolveReferences } from '../subjects/subjects.service';
 
 /**
@@ -78,6 +102,8 @@ export class SubmissionsService {
     private readonly redis: RedisService,
     private readonly validator: AnswerValidatorService,
     private readonly choiceLists: ChoiceListsService,
+    private readonly audit: AuditService,
+    private readonly storage: StorageService,
   ) {}
 
   // ══════════════════════════════════════════════════════════════════════════
@@ -93,7 +119,9 @@ export class SubmissionsService {
   ) {
     // ── 1. Cheap bot checks first (no I/O) ──────────────────────────────────
     if (dto.honeypot && dto.honeypot.trim() !== '') {
-      this.logger.warn(`Spam detected via honeypot on form ${formId} from ${maskIp(ip)}`);
+      this.logger.warn(
+        `Spam detected via honeypot on form ${formId} from ${maskIp(ip)}`,
+      );
       // Return a success-shaped response: telling a bot it was detected just
       // teaches the operator to fix their bot.
       return { submissionId: randomUUID(), status: 'ENQUEUED' };
@@ -125,7 +153,9 @@ export class SubmissionsService {
     }
 
     if (policy.requireAuth && !userId) {
-      throw new UnauthorizedException('You must be signed in to submit this form.');
+      throw new UnauthorizedException(
+        'You must be signed in to submit this form.',
+      );
     }
 
     if (policy.isPasswordProtected) {
@@ -133,7 +163,8 @@ export class SubmissionsService {
         throw new UnauthorizedException('This form requires a password.');
       }
       const ok =
-        !!policy.passwordHash && (await argon2.verify(policy.passwordHash, dto.formPassword));
+        !!policy.passwordHash &&
+        (await argon2.verify(policy.passwordHash, dto.formPassword));
       if (!ok) throw new UnauthorizedException('Incorrect form password.');
     }
 
@@ -152,7 +183,12 @@ export class SubmissionsService {
     if (dto.formVersionId && dto.formVersionId !== policy.currentVersionId) {
       const claimed = await this.prisma.reader.formVersion.findFirst({
         where: { id: dto.formVersionId, formId },
-        select: { id: true, questionsJson: true, compiledRules: true, logicJson: true },
+        select: {
+          id: true,
+          questionsJson: true,
+          compiledRules: true,
+          logicJson: true,
+        },
       });
       if (!claimed) {
         throw new BadRequestException('Unknown form version for this form.');
@@ -182,7 +218,11 @@ export class SubmissionsService {
     // The subject this entry attaches to, if any. Verified against the form's
     // own org AND subject type — a client-supplied id is otherwise a direct
     // route into another tenant's records.
-    const subjectId = await this.resolveSubjectId(formId, policy.organizationId, dto.subjectId);
+    const subjectId = await this.resolveSubjectId(
+      formId,
+      policy.organizationId,
+      dto.subjectId,
+    );
 
     const prepared = await this.prepareAnswers({
       organizationId: policy.organizationId,
@@ -191,7 +231,7 @@ export class SubmissionsService {
       questionsJson,
       logicJson,
       compiledRules,
-      answers: dto.answers as Record<string, any>,
+      answers: dto.answers,
       subjectId,
     });
 
@@ -205,14 +245,25 @@ export class SubmissionsService {
     const result = { sanitized: prepared.sanitized };
 
     // ── 7. File references must belong to this form and be real ─────────────
-    await this.assertFileReferencesValid(result.sanitized, questionsJson, formId);
+    await this.assertFileReferencesValid(
+      result.sanitized,
+      questionsJson,
+      formId,
+    );
 
     // ── 8. Duplicate prevention ─────────────────────────────────────────────
     const dailySalt = new Date().toISOString().slice(0, 10);
-    const respondentIpHash = createHash('sha256').update(ip + dailySalt).digest('hex');
+    const respondentIpHash = createHash('sha256')
+      .update(ip + dailySalt)
+      .digest('hex');
 
     if (!policy.allowMultiple) {
-      await this.assertNotDuplicate(formId, respondentIpHash, dto.fingerprint, userId);
+      await this.assertNotDuplicate(
+        formId,
+        respondentIpHash,
+        dto.fingerprint,
+        userId,
+      );
     }
 
     // ── 9. Quotas — Redis counters, not COUNT(*) ────────────────────────────
@@ -228,7 +279,9 @@ export class SubmissionsService {
     try {
       await this.assertWithinFormCap(policy);
     } catch (err) {
-      await this.releaseQuota(`quota:sub:${policy.organizationId}:${monthKey()}`);
+      await this.releaseQuota(
+        `quota:sub:${policy.organizationId}:${monthKey()}`,
+      );
       throw err;
     }
 
@@ -255,8 +308,11 @@ export class SubmissionsService {
       // The response never reached the queue, so it will never be stored. Both
       // claims must be released or the quota drifts permanently upward on every
       // Redis or BullMQ blip.
-      await this.releaseQuota(`quota:sub:${policy.organizationId}:${monthKey()}`);
-      if (policy.maxSubmissions) await this.releaseQuota(`quota:form:${policy.formId}`);
+      await this.releaseQuota(
+        `quota:sub:${policy.organizationId}:${monthKey()}`,
+      );
+      if (policy.maxSubmissions)
+        await this.releaseQuota(`quota:form:${policy.formId}`);
       throw err;
     }
 
@@ -274,7 +330,7 @@ export class SubmissionsService {
     try {
       await this.redis.decr(key);
     } catch (err) {
-      this.logger.warn(`Could not release quota slot ${key}`, err as any);
+      this.logger.warn(`Could not release quota slot ${key}`, err);
     }
   }
 
@@ -308,13 +364,17 @@ export class SubmissionsService {
   }): Promise<{ sanitized: Record<string, any>; issues: ValidationIssue[] }> {
     const plan = readPlan(input.compiledRules);
     const questionList = Array.isArray(input.questionsJson)
-      ? (input.questionsJson as any[])
+      ? input.questionsJson
       : [];
 
     // Cross-form values are resolved to a plain bag here, before evaluation, so
     // the interpreter performs no I/O and the reachable set stays exactly what
     // the compiler recorded at publish time.
-    const refs = await resolveReferences(this.prisma, plan, input.subjectId ?? null);
+    const refs = await resolveReferences(
+      this.prisma,
+      plan,
+      input.subjectId ?? null,
+    );
 
     // Choice-list items this submission touches, resolved once. Two consumers:
     // the validator checks membership and cascade consistency against them,
@@ -337,7 +397,9 @@ export class SubmissionsService {
     // exactly which questions the respondent could see.
     const hiddenQuestionIds = hiddenByLegacyLogic(
       questionList as Array<{ id: string }>,
-      Array.isArray(input.logicJson) ? (input.logicJson as LegacyLogicRule[]) : [],
+      Array.isArray(input.logicJson)
+        ? (input.logicJson as LegacyLogicRule[])
+        : [],
       answers,
     );
 
@@ -363,7 +425,9 @@ export class SubmissionsService {
       // the respondent. The engine already applies this to its own SHOW rules;
       // repeating it here covers the case where legacy logic did the hiding.
       extraRequiredIds = new Set(
-        [...evaluated.requiredQuestionIds].filter((id) => !hiddenQuestionIds.has(id)),
+        [...evaluated.requiredQuestionIds].filter(
+          (id) => !hiddenQuestionIds.has(id),
+        ),
       );
 
       // A rule that cannot be evaluated is a bug in the published form, not a
@@ -411,7 +475,11 @@ export class SubmissionsService {
   }
 
   /** File-reference ownership check, reused by the session submit path. */
-  async assertFilesBelongToForm(answers: Record<string, any>, questionsJson: unknown, formId: string) {
+  async assertFilesBelongToForm(
+    answers: Record<string, any>,
+    questionsJson: unknown,
+    formId: string,
+  ) {
     return this.assertFileReferencesValid(answers, questionsJson, formId);
   }
 
@@ -448,7 +516,12 @@ export class SubmissionsService {
 
     for (const question of questions) {
       const source = question?.optionsSource;
-      if (!source || source.kind !== 'CHOICE_LIST' || typeof source.listSlug !== 'string') continue;
+      if (
+        !source ||
+        source.kind !== 'CHOICE_LIST' ||
+        typeof source.listSlug !== 'string'
+      )
+        continue;
       hasListBackedQuestion = true;
 
       const answer = answersById[question.id];
@@ -481,15 +554,23 @@ export class SubmissionsService {
       return { choiceItems: undefined, lookups: {} };
     }
 
-    const resolved = await this.choiceLists.resolveItemsForValidation(organizationId, wanted);
+    const resolved = await this.choiceLists.resolveItemsForValidation(
+      organizationId,
+      wanted,
+    );
 
     const choiceItems = new Map<string, ResolvedChoiceItem>();
     const metadataByKey = new Map<string, Record<string, unknown>>();
     for (const [key, item] of resolved) {
-      choiceItems.set(key, { value: item.value, parentValue: item.parentValue });
+      choiceItems.set(key, {
+        value: item.value,
+        parentValue: item.parentValue,
+      });
       metadataByKey.set(
         key,
-        item.metadata && typeof item.metadata === 'object' && !Array.isArray(item.metadata)
+        item.metadata &&
+          typeof item.metadata === 'object' &&
+          !Array.isArray(item.metadata)
           ? (item.metadata as Record<string, unknown>)
           : {},
       );
@@ -521,7 +602,10 @@ export class SubmissionsService {
       const cached = await this.redis.get(cacheKey);
       if (cached) return JSON.parse(cached) as IngestPolicy;
     } catch (err) {
-      this.logger.warn('Redis read failed for ingest policy; falling back to DB', err as any);
+      this.logger.warn(
+        'Redis read failed for ingest policy; falling back to DB',
+        err,
+      );
     }
 
     const form = await this.prisma.reader.form.findUnique({
@@ -556,7 +640,9 @@ export class SubmissionsService {
     if (!form) return null;
 
     const active =
-      form.versions.find((v) => v.version === form.currentVersion) ?? form.versions[0] ?? null;
+      form.versions.find((v) => v.version === form.currentVersion) ??
+      form.versions[0] ??
+      null;
 
     const policy: IngestPolicy = {
       formId: form.id,
@@ -579,9 +665,13 @@ export class SubmissionsService {
     };
 
     try {
-      await this.redis.set(cacheKey, JSON.stringify(policy), POLICY_TTL_SECONDS);
+      await this.redis.set(
+        cacheKey,
+        JSON.stringify(policy),
+        POLICY_TTL_SECONDS,
+      );
     } catch (err) {
-      this.logger.warn('Redis write failed for ingest policy', err as any);
+      this.logger.warn('Redis write failed for ingest policy', err);
     }
 
     return policy;
@@ -620,7 +710,7 @@ export class SubmissionsService {
       if (err instanceof ForbiddenException) throw err;
       // Redis unavailable: fail OPEN. Losing a customer's responses is worse
       // than briefly overshooting a soft quota.
-      this.logger.error('Quota counter unavailable; allowing submission', err as any);
+      this.logger.error('Quota counter unavailable; allowing submission', err);
     }
   }
 
@@ -655,13 +745,20 @@ export class SubmissionsService {
             data: { status: 'CLOSED' },
           })
           .catch(() => undefined);
-        await this.redis.del(`ingest_policy:${policy.formId}`).catch(() => undefined);
+        await this.redis
+          .del(`ingest_policy:${policy.formId}`)
+          .catch(() => undefined);
 
-        throw new ForbiddenException('This form is no longer accepting responses.');
+        throw new ForbiddenException(
+          'This form is no longer accepting responses.',
+        );
       }
     } catch (err) {
       if (err instanceof ForbiddenException) throw err;
-      this.logger.error('Form cap counter unavailable; allowing submission', err as any);
+      this.logger.error(
+        'Form cap counter unavailable; allowing submission',
+        err,
+      );
     }
   }
 
@@ -669,30 +766,41 @@ export class SubmissionsService {
   // HELPERS
   // ══════════════════════════════════════════════════════════════════════════
 
-  private async verifyCaptcha(token: string | undefined, ip: string, formId: string) {
+  private async verifyCaptcha(
+    token: string | undefined,
+    ip: string,
+    formId: string,
+  ) {
     const secret = process.env.CLOUDFLARE_TURNSTILE_SECRET;
     if (!secret) return; // not configured — skip
 
     if (!token) throw new BadRequestException('CAPTCHA verification required');
 
     try {
-      const res = await fetch('https://challenges.cloudflare.com/turnstile/v0/siteverify', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ secret, response: token, remoteip: ip }),
-        signal: AbortSignal.timeout(5000),
-      });
+      const res = await fetch(
+        'https://challenges.cloudflare.com/turnstile/v0/siteverify',
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ secret, response: token, remoteip: ip }),
+          signal: AbortSignal.timeout(5000),
+        },
+      );
       const data: any = await res.json();
       if (!data.success) {
-        this.logger.warn(`CAPTCHA failed for form ${formId} from ${maskIp(ip)}`);
+        this.logger.warn(
+          `CAPTCHA failed for form ${formId} from ${maskIp(ip)}`,
+        );
         throw new BadRequestException('CAPTCHA verification failed');
       }
     } catch (err) {
       if (err instanceof BadRequestException) throw err;
       // Network error contacting Cloudflare. Fail CLOSED: the operator enabled
       // CAPTCHA deliberately, so bypassing it on error defeats the purpose.
-      this.logger.error('Error verifying CAPTCHA', err as any);
-      throw new BadRequestException('CAPTCHA verification unavailable, please retry');
+      this.logger.error('Error verifying CAPTCHA', err);
+      throw new BadRequestException(
+        'CAPTCHA verification unavailable, please retry',
+      );
     }
   }
 
@@ -755,7 +863,7 @@ export class SubmissionsService {
     questionsJson: unknown,
     formId: string,
   ) {
-    const questions = Array.isArray(questionsJson) ? (questionsJson as any[]) : [];
+    const questions = Array.isArray(questionsJson) ? questionsJson : [];
     const fileQuestionIds = new Set(
       questions.filter((q) => q?.type === 'FILE_UPLOAD').map((q) => q.id),
     );
@@ -765,7 +873,8 @@ export class SubmissionsService {
     for (const qid of fileQuestionIds) {
       const val = answers[qid];
       if (!val) continue;
-      if (Array.isArray(val)) ids.push(...val.filter((v) => typeof v === 'string'));
+      if (Array.isArray(val))
+        ids.push(...val.filter((v) => typeof v === 'string'));
       else if (typeof val === 'string') ids.push(val);
     }
     if (ids.length === 0) return;
@@ -776,16 +885,22 @@ export class SubmissionsService {
     });
 
     if (files.length !== ids.length) {
-      throw new BadRequestException('One or more uploaded files could not be found.');
+      throw new BadRequestException(
+        'One or more uploaded files could not be found.',
+      );
     }
 
     for (const f of files) {
       if (f.submissionId) {
-        throw new BadRequestException('A referenced file is already attached to a submission.');
+        throw new BadRequestException(
+          'A referenced file is already attached to a submission.',
+        );
       }
       // Object keys embed the form id: uploads/org_{orgId}/form_{formId}/...
       if (!f.objectKey.includes(`/form_${formId}/`)) {
-        throw new BadRequestException('A referenced file does not belong to this form.');
+        throw new BadRequestException(
+          'A referenced file does not belong to this form.',
+        );
       }
     }
   }
@@ -799,11 +914,22 @@ export class SubmissionsService {
     // A signed-in respondent is the strongest signal available.
     if (userId) {
       const existing = await this.prisma.reader.formSubmission.findFirst({
-        where: { formId, respondentId: userId, status: { not: 'DELETED' } },
+        // A deleted response does not block a resubmission — that is the point
+        // of a moderator deleting one. `deletedAt` joins the existing status
+        // check so this path cannot diverge from the read paths if `status` and
+        // `deletedAt` ever disagree on a row.
+        where: {
+          formId,
+          respondentId: userId,
+          deletedAt: null,
+          status: { not: 'DELETED' },
+        },
         select: { id: true },
       });
       if (existing) {
-        throw new ForbiddenException('You have already responded to this form.');
+        throw new ForbiddenException(
+          'You have already responded to this form.',
+        );
       }
       return;
     }
@@ -819,11 +945,13 @@ export class SubmissionsService {
       // SET NX: only succeeds if the marker is absent.
       const ok = await client.set(marker, '1', 'EX', 60 * 60 * 24 * 30, 'NX');
       if (ok === null) {
-        throw new ForbiddenException('You have already responded to this form.');
+        throw new ForbiddenException(
+          'You have already responded to this form.',
+        );
       }
     } catch (err) {
       if (err instanceof ForbiddenException) throw err;
-      this.logger.warn('Duplicate check unavailable; allowing submission', err as any);
+      this.logger.warn('Duplicate check unavailable; allowing submission', err);
     }
   }
 
@@ -836,7 +964,23 @@ export class SubmissionsService {
     pagination: Pagination = parsePagination(),
     search?: string,
   ) {
-    const where: any = { form: { organizationId: orgId }, status: { not: 'DELETED' } };
+    // `deletedAt: null` alongside the status filter, not instead of it — and
+    // this pairing is repeated at every read site, so it is worth stating once
+    // why both are there when either alone would do today.
+    //
+    // `deletedAt` is the primary filter: the migration backfilled a timestamp
+    // onto every row already sitting at status DELETED, so it is complete, and
+    // it is the column @@index([formId, deletedAt, submittedAt desc]) is built
+    // on. The status clause stays because `status` is writable from more places
+    // than `deletedAt` is — the spam pipeline and any direct database repair can
+    // reach it — and a row that acquires DELETED without a timestamp must not
+    // become visible again. The cost of keeping both is nothing; the cost of
+    // guessing wrong is a deleted response reappearing in a list or an export.
+    const where: any = {
+      form: { organizationId: orgId },
+      deletedAt: null,
+      status: { not: 'DELETED' },
+    };
 
     if (search?.trim()) {
       const term = search.trim();
@@ -844,7 +988,12 @@ export class SubmissionsService {
       // search threw. Search the fields that actually exist, plus the answer
       // payload via the GIN index on `answers`.
       where.OR = [
-        { form: { organizationId: orgId, title: { contains: term, mode: 'insensitive' } } },
+        {
+          form: {
+            organizationId: orgId,
+            title: { contains: term, mode: 'insensitive' },
+          },
+        },
         ...(isUuid(term) ? [{ id: term }] : []),
         { answers: { string_contains: term } },
       ];
@@ -870,6 +1019,518 @@ export class SubmissionsService {
 
     return paginated('submissions', submissions, pagination, total);
   }
+
+  /**
+   * One submission, fully resolved: the answers labelled against the schema the
+   * respondent actually saw, the attached files with fresh download URLs, and
+   * the review/deletion provenance.
+   *
+   * ── Why the version matters so much here ──────────────────────────────────
+   * The answers column is a bag keyed by question id and nothing else. It has no
+   * labels, no types, no option lists. Rendering it requires a question schema,
+   * and there are two candidates: the form's CURRENT version, which is one query
+   * away and always available, and the version this submission is bound to.
+   *
+   * It must be the latter, and the failure mode of getting it wrong is silent.
+   * Re-publishing a form mints a new FormVersion; question ids are stable across
+   * that, so an old answer keyed `q_7` will happily find `q_7` in the new
+   * version and render under whatever label `q_7` carries *now*. Change "Do you
+   * consent to contact?" to "Do you consent to data sharing?" and every historic
+   * yes/no is retroactively relabelled as consent to something the respondent
+   * was never asked about. Nothing errors; the screen just lies. That is the
+   * entire reason FormVersion is immutable, so this reads through
+   * `formVersion`, the submission's own relation, and never through `form`.
+   */
+  async getSubmissionDetail(orgId: string, submissionId: string) {
+    const submission = await this.prisma.reader.formSubmission.findFirst({
+      // Tenancy goes through `form.organizationId`, not the denormalised
+      // `organizationId` column on the submission — the schema says that column
+      // is "nullable only so the backfill can run online", and a row the
+      // backfill has not reached yet would be invisible to its own org.
+      where: {
+        id: submissionId,
+        form: { organizationId: orgId },
+        deletedAt: null,
+      },
+      select: {
+        ...submissionDetailSelect,
+        subjectId: true,
+        subject: { select: { id: true, displayName: true, externalId: true } },
+        // Version metadata AND its questions: one join instead of a second
+        // round trip, and it makes it structurally impossible for this method
+        // to accidentally resolve against the current version.
+        formVersion: {
+          select: { id: true, version: true, questionsJson: true },
+        },
+        reviewNote: true,
+        reviewedAt: true,
+        reviewedBy: { select: userSummarySelect },
+        deletedAt: true,
+        deletedBy: { select: userSummarySelect },
+        files: {
+          select: {
+            id: true,
+            questionId: true,
+            originalName: true,
+            mimeType: true,
+            sizeBytes: true,
+            status: true,
+            verifiedAt: true,
+          },
+        },
+      },
+    });
+
+    if (!submission) throw new NotFoundException('Submission not found.');
+
+    const questions = Array.isArray(submission.formVersion?.questionsJson)
+      ? (submission.formVersion.questionsJson as any[])
+      : [];
+    const answers = (submission.answers ?? {}) as Record<string, unknown>;
+
+    const { formVersion, files, ...rest } = submission;
+
+    return {
+      ...rest,
+      formVersion: { id: formVersion.id, version: formVersion.version },
+      answers: resolveAnswers(questions, answers),
+      files: await this.resolveSubmissionFiles(orgId, files),
+    };
+  }
+
+  /**
+   * Attach a short-lived download URL to each file on a submission.
+   *
+   * Deliberately reuses `StorageService.generateDownloadUrl` rather than
+   * signing here. That method re-checks the tenant, refuses QUARANTINED objects
+   * and refuses anything not yet VERIFIED — three rules that must not have a
+   * second implementation, because a second implementation is how a quarantined
+   * object eventually gets served to somebody.
+   *
+   * The cost is one lookup per file, which is acceptable for a single-submission
+   * detail view and is not on any list or export path. A file that cannot be
+   * signed (still uploading, quarantined, reaped) yields a null URL instead of
+   * failing the whole request — the reviewer should still see that the file
+   * exists and what state it is in.
+   */
+  private async resolveSubmissionFiles(
+    orgId: string,
+    files: Array<{
+      id: string;
+      questionId: string;
+      originalName: string;
+      mimeType: string;
+      sizeBytes: bigint;
+      status: string;
+      verifiedAt: Date | null;
+    }>,
+  ) {
+    return Promise.all(
+      files.map(async (file) => {
+        let downloadUrl: string | null = null;
+        try {
+          downloadUrl = (await this.storage.generateDownloadUrl(orgId, file.id))
+            .downloadUrl;
+        } catch (err) {
+          // Expected for PENDING_UPLOAD and QUARANTINED files. Logged at debug
+          // because on a submission with many pending uploads this would
+          // otherwise be a wall of warnings describing normal operation.
+          this.logger.debug(
+            `No download URL for file ${file.id} (status ${file.status}): ${
+              err instanceof Error ? err.message : String(err)
+            }`,
+          );
+        }
+
+        return {
+          ...file,
+          // BigInt does not survive JSON.stringify — it throws rather than
+          // producing a wrong number, so this is a 500 rather than a display
+          // bug if it is forgotten. Same treatment as Organization.storageUsedBytes.
+          sizeBytes: file.sizeBytes.toString(),
+          downloadUrl,
+        };
+      }),
+    );
+  }
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // REVIEW & MODERATION
+  // ══════════════════════════════════════════════════════════════════════════
+
+  /**
+   * Annotate and/or re-status a single submission.
+   *
+   * `reviewedById`/`reviewedAt` are stamped on every successful call, including
+   * a note-only edit: "who last looked at this and when" is the question the
+   * fields exist to answer, and it is answered by any review action, not only by
+   * a status change.
+   */
+  async reviewSubmission(
+    orgId: string,
+    submissionId: string,
+    dto: ReviewSubmissionDto,
+    userId: string,
+    ipAddress?: string,
+  ) {
+    // `undefined` means "leave alone" and `null` means "clear", so presence has
+    // to be tested with `in`/`!== undefined` rather than truthiness — a note of
+    // `null` is a real instruction and `if (dto.reviewNote)` would drop it.
+    const wantsNote = dto.reviewNote !== undefined;
+    const wantsStatus = dto.status !== undefined;
+    if (!wantsNote && !wantsStatus) {
+      throw new BadRequestException('Provide a reviewNote, a status, or both.');
+    }
+
+    const current = await this.prisma.reader.formSubmission.findFirst({
+      where: {
+        id: submissionId,
+        form: { organizationId: orgId },
+        deletedAt: null,
+      },
+      select: { id: true, formId: true, status: true, reviewNote: true },
+    });
+    if (!current) throw new NotFoundException('Submission not found.');
+
+    if (wantsStatus) assertStatusTransition(current.status, dto.status!);
+
+    const reviewedAt = new Date();
+    const result = await this.prisma.writer.formSubmission.updateMany({
+      // The tenancy and not-deleted predicates are repeated on the WRITE, not
+      // just checked on the read above. Between the two statements another
+      // reviewer can delete this row, and an update whose WHERE is only `{ id }`
+      // would happily resurrect the status of a submission that is now deleted.
+      //
+      // When a status change is requested the current status joins the WHERE as
+      // a compare-and-swap: two reviewers acting on the same submission at once
+      // should not have one silently overwrite a transition the other just made
+      // and that this request never validated against.
+      where: {
+        id: submissionId,
+        form: { organizationId: orgId },
+        deletedAt: null,
+        ...(wantsStatus ? { status: current.status } : {}),
+      },
+      data: {
+        ...(wantsStatus ? { status: dto.status } : {}),
+        ...(wantsNote ? { reviewNote: dto.reviewNote } : {}),
+        reviewedById: userId,
+        reviewedAt,
+      },
+    });
+
+    if (result.count === 0) {
+      throw new ConflictException(
+        'This submission changed while you were reviewing it. Reload and try again.',
+      );
+    }
+
+    this.audit.log({
+      organizationId: orgId,
+      userId,
+      action: 'submission.reviewed',
+      resource: 'submission',
+      resourceId: submissionId,
+      // Both sides of the status move, because "what did it used to be" is the
+      // question an audit trail is read to answer. The note bodies are NOT
+      // recorded — they are internal free text that can quote respondent PII,
+      // and audit logs have a longer retention than the submissions themselves.
+      metadata: {
+        formId: current.formId,
+        ...(wantsStatus
+          ? { fromStatus: current.status, toStatus: dto.status }
+          : {}),
+        ...(wantsNote
+          ? { noteChanged: true, noteCleared: dto.reviewNote === null }
+          : {}),
+      },
+      ipAddress,
+    });
+
+    return this.reviewStateOf(submissionId);
+  }
+
+  /**
+   * Soft-delete one submission.
+   *
+   * All three columns move together — `status`, `deletedAt`, `deletedById` — for
+   * the reason the schema gives: a submission is evidence, and "deleted" without
+   * "when" and "by whom" cannot answer a question anyone will later ask.
+   *
+   * What deliberately does NOT happen here: no analytics counter is decremented
+   * and no Redis quota slot is released. A response that was received was
+   * received, the organization was charged for it on arrival, and letting a
+   * delete hand the slot back would turn "delete after submit" into an unlimited
+   * quota bypass. The FormAnalytics rows and the `quota:sub:*` counters are
+   * therefore untouched by every path in this section.
+   */
+  async deleteSubmission(
+    orgId: string,
+    submissionId: string,
+    userId: string,
+    ipAddress?: string,
+  ) {
+    const current = await this.prisma.reader.formSubmission.findFirst({
+      where: {
+        id: submissionId,
+        form: { organizationId: orgId },
+        deletedAt: null,
+      },
+      select: { id: true, formId: true, status: true },
+    });
+    if (!current) throw new NotFoundException('Submission not found.');
+
+    const deletedAt = new Date();
+    const result = await this.prisma.writer.formSubmission.updateMany({
+      where: {
+        id: submissionId,
+        form: { organizationId: orgId },
+        deletedAt: null,
+      },
+      data: {
+        status: SubmissionStatus.DELETED,
+        deletedAt,
+        deletedById: userId,
+      },
+    });
+
+    // Zero rows means a concurrent delete won. That is the outcome the caller
+    // wanted, so it is reported as success rather than as a conflict — but the
+    // audit entry is skipped, because the deletion this request describes is not
+    // the one that actually happened.
+    if (result.count === 0) {
+      return { id: submissionId, deleted: true, alreadyDeleted: true };
+    }
+
+    this.audit.log({
+      organizationId: orgId,
+      userId,
+      action: 'submission.deleted',
+      resource: 'submission',
+      resourceId: submissionId,
+      metadata: { formId: current.formId, previousStatus: current.status },
+      ipAddress,
+    });
+
+    return {
+      id: submissionId,
+      deleted: true,
+      alreadyDeleted: false,
+      deletedAt,
+    };
+  }
+
+  /**
+   * Bulk status change or bulk soft-delete over an explicit list of ids.
+   *
+   * ── The tenancy shape ─────────────────────────────────────────────────────
+   * Every id is resolved against this organization in ONE query, before anything
+   * is written. The alternative — loop the ids, check each, act on each — is the
+   * standard way this endpoint becomes a cross-tenant write: the org predicate
+   * has to be repeated on every branch of the loop, and it only takes one branch
+   * where it is missing or where an early `continue` skips it. Here the org
+   * filter exists in exactly one place, and `assertAllBulkIdsAuthorized` treats
+   * anything the query did not return as unauthorised without caring whether it
+   * belongs to another tenant, does not exist, or is already deleted.
+   *
+   * The write repeats the same predicates rather than trusting the pre-check,
+   * for the same reason the single-row paths do: rows can change between the two
+   * statements.
+   */
+  async bulkUpdateSubmissions(
+    orgId: string,
+    dto: BulkSubmissionsDto,
+    userId: string,
+    ipAddress?: string,
+  ) {
+    const ids = normaliseBulkIds(dto.ids);
+
+    if (dto.action === 'SET_STATUS' && !dto.status) {
+      throw new BadRequestException(
+        'A status is required when action is SET_STATUS.',
+      );
+    }
+
+    const rows = await this.prisma.reader.formSubmission.findMany({
+      where: {
+        id: { in: ids },
+        form: { organizationId: orgId },
+        deletedAt: null,
+      },
+      select: { id: true, status: true },
+    });
+
+    const authorized = assertAllBulkIdsAuthorized(
+      ids,
+      rows.map((row) => row.id),
+    );
+
+    // Shared by both branches, and repeated on the write for the reason above.
+    const scope = {
+      id: { in: authorized },
+      form: { organizationId: orgId },
+      deletedAt: null,
+    };
+
+    if (dto.action === 'DELETE') {
+      const deletedAt = new Date();
+      const result = await this.prisma.writer.formSubmission.updateMany({
+        where: scope,
+        data: {
+          status: SubmissionStatus.DELETED,
+          deletedAt,
+          deletedById: userId,
+        },
+      });
+
+      this.audit.log({
+        organizationId: orgId,
+        userId,
+        action: 'submission.bulk_deleted',
+        resource: 'submission',
+        // No single resourceId applies, so the ids go in the metadata. Capped
+        // by MAX_BULK_SUBMISSION_IDS, so this JSON column cannot grow unbounded.
+        metadata: {
+          submissionIds: authorized,
+          requested: ids.length,
+          affected: result.count,
+        },
+        ipAddress,
+      });
+
+      return {
+        action: dto.action,
+        requested: ids.length,
+        affected: result.count,
+      };
+    }
+
+    const target = dto.status!;
+    // Validated per row against that row's OWN current status. A bulk call is
+    // still a set of individual transitions and gets the same rules as PATCH —
+    // "it was a bulk action" is not a reason to let a DELETED row be revived.
+    for (const row of rows) assertStatusTransition(row.status, target);
+
+    const result = await this.prisma.writer.formSubmission.updateMany({
+      where: scope,
+      data: { status: target, reviewedById: userId, reviewedAt: new Date() },
+    });
+
+    this.audit.log({
+      organizationId: orgId,
+      userId,
+      action: 'submission.bulk_status_changed',
+      resource: 'submission',
+      metadata: {
+        submissionIds: authorized,
+        toStatus: target,
+        requested: ids.length,
+        affected: result.count,
+      },
+      ipAddress,
+    });
+
+    return {
+      action: dto.action,
+      status: target,
+      requested: ids.length,
+      affected: result.count,
+    };
+  }
+
+  /**
+   * The review fields as they now stand, for the mutation response.
+   *
+   * Re-read rather than assembled from the DTO so the client renders what the
+   * database holds — including `reviewedBy`, which the request only knows as an
+   * id, and any field a concurrent writer touched.
+   */
+  private async reviewStateOf(submissionId: string) {
+    return this.prisma.reader.formSubmission.findUniqueOrThrow({
+      where: { id: submissionId },
+      select: {
+        id: true,
+        status: true,
+        reviewNote: true,
+        reviewedAt: true,
+        reviewedBy: { select: userSummarySelect },
+      },
+    });
+  }
+}
+
+/**
+ * Label a stored answer bag against the question schema it was captured under.
+ *
+ * Iterates the QUESTIONS rather than the answers, so the result is in the order
+ * the respondent saw and an unanswered question is present-and-null instead of
+ * absent — "they skipped this" and "this field did not exist" are different
+ * facts and a reviewer needs to tell them apart.
+ *
+ * Anything left in the bag afterwards is emitted as an orphan. That should be
+ * impossible, since answers are validated against this same version at ingest,
+ * but a hand-repaired row or a future migration can produce one, and silently
+ * dropping stored respondent data from the only screen that displays it is the
+ * worst available response to that.
+ */
+/**
+ * Exported because it appears in `getSubmissionDetail`'s inferred return type,
+ * which the controller re-exports — TypeScript cannot name a type it cannot
+ * reach. Also the contract the frontend's `SubmissionAnswer` mirrors.
+ */
+export interface ResolvedAnswer {
+  questionId: string;
+  key: string | null;
+  label: string;
+  type: string;
+  value: unknown;
+  answered: boolean;
+  orphaned: boolean;
+}
+
+function resolveAnswers(
+  questions: any[],
+  answers: Record<string, unknown>,
+): ResolvedAnswer[] {
+  const seen = new Set<string>();
+
+  const resolved: ResolvedAnswer[] = questions
+    .filter((question) => question && typeof question.id === 'string')
+    .map((question) => {
+      seen.add(question.id);
+      return {
+        questionId: question.id as string,
+        // The stable author-facing name, when the form defines one. Exports and
+        // cross-form references address questions by key, so surfacing it here
+        // is what lets a reviewer match a column in a CSV to a row on screen.
+        key:
+          typeof question.key === 'string' && question.key
+            ? question.key
+            : null,
+        label:
+          typeof question.label === 'string' ? question.label : question.id,
+        type: typeof question.type === 'string' ? question.type : 'UNKNOWN',
+        value: answers[question.id] ?? null,
+        answered:
+          answers[question.id] !== undefined && answers[question.id] !== null,
+        orphaned: false,
+      };
+    });
+
+  for (const [questionId, value] of Object.entries(answers)) {
+    if (seen.has(questionId)) continue;
+    resolved.push({
+      questionId,
+      key: null,
+      label: questionId,
+      type: 'UNKNOWN',
+      value,
+      answered: value !== undefined && value !== null,
+      orphaned: true,
+    });
+  }
+
+  return resolved;
 }
 
 /**
@@ -884,7 +1545,9 @@ function monthKey(): string {
 }
 
 function isUuid(v: string): boolean {
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v);
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+    v,
+  );
 }
 
 /** Never log a full IP — these logs are retained and the raw IP is PII. */

@@ -45,18 +45,26 @@ jobs:
         env:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/placeholder
 
-      # Reporting only, for now. The codebase currently has ~1100 outstanding
-      # eslint errors (mostly prettier formatting and no-unsafe-* on Prisma's
-      # `any`-typed transaction callbacks). A gate that is red on every run is
-      # a gate everyone learns to ignore, which would devalue the checks below
-      # that genuinely must stay green.
+      # BLOCKING as of the 2026-08-13 cleanup. The backlog described by the
+      # previous version of this comment (~1100 errors, "burn it down then make
+      # it blocking") has been burned down: 2210 → 0 errors.
       #
-      # Burn the backlog down, then delete continue-on-error and add
-      # --max-warnings 0. Until then this still surfaces new problems in the
-      # job log without blocking merges.
-      - name: Lint (non-blocking — see comment)
-        continue-on-error: true
-        run: npx eslint "{src,test}/**/*.ts"
+      # How, so the next person does not have to re-derive it:
+      #   • ~1350 were prettier formatting, fixed with `eslint --fix`.
+      #   • 46 no-floating-promises came from ONE unnecessary `async` on
+      #     AuditService.log(), which awaited nothing. Fixing the signature fixed
+      #     all 46 call sites; the rule is now an ERROR because an unhandled
+      #     rejection terminates the process on Node 15+.
+      #   • The ~950 no-unsafe-* findings are WARNINGS, not errors — they come
+      #     from Prisma's JSONB columns and `(tx: any)` transaction callbacks,
+      #     where the honest fix is a cast that adds no safety. See the long
+      #     rationale in eslint.config.mjs.
+      #
+      # --max-warnings is a RATCHET, not a target. It is set to the current
+      # count so the number can only go down; lower it whenever you remove some.
+      # Raising it should require saying why in the PR.
+      - name: Lint
+        run: npx eslint "{src,test}/**/*.ts" --max-warnings 951
 
       # The frontend mirrors this directory so the browser evaluates rules with
       # the same code the server does. A silent divergence would mean the
@@ -191,15 +199,63 @@ jobs:
 
       - run: npm ci
 
-      # --exit-code makes `diff` return 2 when a difference exists, so an
-      # un-migrated schema change fails the job instead of printing quietly.
+      # ── Why this is not a bare `--exit-code` ────────────────────────────────
+      #
+      # It was, and it had been failing since 2026-08-11. Migration
+      # `20260811120000_platform_audit_and_choice_search` creates two pg_trgm GIN
+      # indexes on `choice_items` for type-ahead search. Prisma's datamodel
+      # cannot express a GIN index with `gin_trgm_ops`, so `migrate diff` reports
+      # them as drift on EVERY run — the job could never go green, and a check
+      # that is always red is a check nobody reads.
+      #
+      # The drift that matters — "someone edited schema.prisma and forgot to
+      # generate a migration" — is still caught: we diff, then assert the output
+      # contains ONLY the two known, deliberate trigram entries. Anything else
+      # fails the job.
+      #
+      # If you add another raw-SQL index, add it to EXPECTED below and say why.
       - name: Verify migrations reproduce schema.prisma
         run: |
+          set -o pipefail
           npx prisma migrate diff \
             --from-migrations prisma/migrations \
             --to-schema-datamodel prisma/schema.prisma \
             --shadow-database-url "$DATABASE_URL" \
-            --exit-code
+            > drift.txt 2>&1 || true
+
+          echo "--- migrate diff output ---"
+          cat drift.txt
+          echo "---------------------------"
+
+          # Normalise before filtering. `migrate diff` writes ANSI colour codes
+          # and two banner lines ("Loaded Prisma config…", "Prisma schema
+          # loaded…") to stderr, and 2>&1 above folds them in — without
+          # stripping them they survive every filter and fail the job on a clean
+          # repo. Verified against real output, not assumed.
+          sed -e 's/\x1b\[[0-9;]*m//g' drift.txt > drift.clean
+
+          # What remains after removing: the banner lines, blank lines, the
+          # no-difference line, and the two pg_trgm indexes with the table
+          # header they sit under. Anything left is real, un-migrated drift.
+          UNEXPECTED=$(grep -vE \
+            "^Loaded Prisma config.*$|\
+          ^Prisma schema loaded.*$|\
+          ^Datasource .*$|\
+          ^\[\*\] Changed the \`choice_items\` table$|\
+          ^[[:space:]]*\[-\] Removed index on columns \((label|value)\)$|\
+          ^[[:space:]]*$|\
+          ^No difference detected\.?$" drift.clean || true)
+
+          if [ -n "$UNEXPECTED" ]; then
+            echo "::error::schema.prisma and prisma/migrations have diverged."
+            echo "Unexpected drift:"
+            echo "$UNEXPECTED"
+            echo ""
+            echo "Fix: npx prisma migrate dev --name <describes-the-change>"
+            exit 1
+          fi
+
+          echo "No unexpected drift. (Two pg_trgm indexes are known and expected.)"
 
   # ────────────────────────────────────────────────────────────────────────────
   # Frontend: lint, typecheck, production build.
@@ -223,9 +279,17 @@ jobs:
 
       # Non-blocking for the same reason as the backend job (~134 existing
       # errors). Typecheck and build below are the real gates.
-      - name: Lint (non-blocking — see backend job comment)
-        continue-on-error: true
-        run: npm run lint
+      # BLOCKING, same as the backend job. The 81 errors this used to carry are
+      # gone: 7 were unescaped apostrophes in marketing copy (fixed), and the
+      # rest were `no-explicit-any` and React Compiler findings, now warnings
+      # with the reasoning recorded in frontend/eslint.config.mjs.
+      #
+      # The React Compiler warnings are REAL and deferred, not dismissed — 11
+      # set-state-in-effect, 3 preserve-manual-memoization, and one each of
+      # rules-of-hooks / purity / refs. The ratchet stops them multiplying while
+      # they are worked through.
+      - name: Lint
+        run: npx eslint src --max-warnings 92
 
       - name: Typecheck
         run: npm run typecheck

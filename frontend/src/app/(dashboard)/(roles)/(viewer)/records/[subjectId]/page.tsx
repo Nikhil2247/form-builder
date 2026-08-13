@@ -21,6 +21,7 @@ import {
   StatusBadge,
 } from '@/components/shared';
 import { Can } from '@/components/auth/RoleGuard';
+import { AddEntryMenu } from '@/components/apps/AddEntryMenu';
 import { AttributeList } from '@/components/apps/AttributeList';
 import { DataAppsDisabled } from '@/components/apps/DataAppsGate';
 import { SubmissionDetailsDialog } from '@/components/submissions/SubmissionDetailsDialog';
@@ -139,16 +140,21 @@ export default function RecordDetailPage() {
           ) : undefined
         }
         actions={
-          <Can permission="form:delete">
-            <Button
-              variant="destructive"
-              size="sm"
-              className="gap-2"
-              onClick={() => setConfirmDelete(true)}
-            >
-              <Trash2 className="size-4" /> Delete record
-            </Button>
-          </Can>
+          <>
+            {/* The reason this page exists at all after registration: a record
+                accumulates. Leading with it, ahead of the destructive action. */}
+            <AddEntryMenu subjectId={subjectId} />
+            <Can permission="form:delete">
+              <Button
+                variant="destructive"
+                size="sm"
+                className="gap-2"
+                onClick={() => setConfirmDelete(true)}
+              >
+                <Trash2 className="size-4" /> Delete record
+              </Button>
+            </Can>
+          </>
         }
       />
 
@@ -269,6 +275,19 @@ export default function RecordDetailPage() {
 function TimelineRow({ entry, onOpen }: { entry: TimelineEntry; onOpen: () => void }) {
   const answerCount = Object.keys(entry.answers ?? {}).length;
 
+  // The step's title names what this IS within the programme — "Monthly
+  // Progress Check" — where the form's title repeats for every entry of a
+  // repeatable step. Falls back for standalone forms, which have no step.
+  const label = entry.formAppStep?.title ?? entry.form?.title ?? 'Deleted form';
+
+  // Entered on a different day than it happened. Worth saying, because a
+  // timeline ordered by occurrence looks wrong to anyone expecting entry
+  // order until they see why.
+  const isBackdated =
+    !!entry.occurredAt &&
+    new Date(entry.occurredAt).toDateString() !==
+      new Date(entry.submittedAt).toDateString();
+
   return (
     <li className="relative">
       {/* The node sits on the rail drawn by the parent's left border. */}
@@ -288,12 +307,18 @@ function TimelineRow({ entry, onOpen }: { entry: TimelineEntry; onOpen: () => vo
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div className="min-w-0 flex-1">
               <span className="block truncate text-sm font-medium text-foreground">
-                {entry.form?.title ?? 'Deleted form'}
+                {label}
               </span>
               <p className="mt-0.5 text-xs text-muted-foreground">
-                <RelativeTime value={entry.submittedAt} /> · {answerCount}{' '}
-                {answerCount === 1 ? 'answer' : 'answers'}
+                <RelativeTime value={entry.occurredAt ?? entry.submittedAt} /> ·{' '}
+                {answerCount} {answerCount === 1 ? 'answer' : 'answers'}
+                {entry.period && <> · {entry.period.label}</>}
               </p>
+              {isBackdated && (
+                <p className="mt-0.5 text-xs text-muted-foreground/80">
+                  Entered <FormattedDate value={entry.submittedAt} />
+                </p>
+              )}
             </div>
             <span className="flex shrink-0 items-center gap-2">
               <StatusBadge status={entry.status} dot />
@@ -349,7 +374,7 @@ function EntryDialog({
       submission={submission}
       questions={form.data?.questionsJson}
       isLoadingQuestions={form.isLoading}
-      title={entry.form?.title ?? 'Response'}
+      title={entry.formAppStep?.title ?? entry.form?.title ?? 'Response'}
       positionLabel={`${index! + 1} of ${entries.length}`}
       onPrev={index! > 0 ? () => onIndexChange(index! - 1) : undefined}
       onNext={index! < entries.length - 1 ? () => onIndexChange(index! + 1) : undefined}

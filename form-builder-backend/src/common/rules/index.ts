@@ -12,7 +12,14 @@
  */
 
 export * from './ast';
-export { OPERATORS, isKnownOperator, truthy, toNumber, toText, toDate } from './operators';
+export {
+  OPERATORS,
+  isKnownOperator,
+  truthy,
+  toNumber,
+  toText,
+  toDate,
+} from './operators';
 export type { OpContext, OperatorDef } from './operators';
 export {
   evaluate,
@@ -23,10 +30,25 @@ export {
 } from './interpreter';
 export type { EvalContext, EvalBudget, SafeEvalResult } from './interpreter';
 export { compileRules, COMPILE_LIMITS } from './compiler';
-export type { CompiledPlan, CompileError, CompileResult, CompileOptions } from './compiler';
+export type {
+  CompiledPlan,
+  CompileError,
+  CompileResult,
+  CompileOptions,
+} from './compiler';
 export { applyRules } from './engine';
 export type { ApplyRulesInput, ApplyRulesResult, RuleFailure } from './engine';
 export { planLookupRequests, resolveLookupBag } from './lookup-bag';
 export type { LookupRequest } from './lookup-bag';
-export { runFormRules, readPlan, planIsEmpty, buildKeyMaps, EMPTY_PLAN } from './form-adapter';
-export type { AdapterQuestion, RunFormRulesInput, RunFormRulesResult } from './form-adapter';
+export {
+  runFormRules,
+  readPlan,
+  planIsEmpty,
+  buildKeyMaps,
+  EMPTY_PLAN,
+} from './form-adapter';
+export type {
+  AdapterQuestion,
+  RunFormRulesInput,
+  RunFormRulesResult,
+} from './form-adapter';

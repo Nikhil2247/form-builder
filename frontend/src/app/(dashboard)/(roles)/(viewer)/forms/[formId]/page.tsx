@@ -43,11 +43,13 @@ import {
 } from '@/components/shared';
 import { formatCompact, formatDuration } from '@/components/shared/formatters';
 import { SubmissionDetailsDialog } from '@/components/submissions/SubmissionDetailsDialog';
+import { ExportJobsPanel } from '@/components/exports/ExportJobsPanel';
 import { Can } from '@/components/auth/RoleGuard';
 import { usePagination } from '@/hooks/use-pagination';
 import { useForm } from '@/hooks/use-forms';
 import { useFormTimeseries } from '@/hooks/use-analytics';
 import { useFormSubmissions, useExportSubmissions, type Submission } from '@/hooks/use-submissions';
+import { ASYNC_EXPORT_THRESHOLD_ROWS } from '@/hooks/use-exports';
 import { toFormConfig } from '@/types/form';
 
 export default function FormDetailPage() {
@@ -56,6 +58,9 @@ export default function FormDetailPage() {
 
   const pager = usePagination();
   const [selected, setSelected] = useState<Submission | null>(null);
+  // Controlled so the export dropdown can send the user to the Exports tab when
+  // the form is too big for a direct download to be a good idea.
+  const [tab, setTab] = useState('responses');
 
   const { data: form, isLoading: formLoading, error: formError, refetch } = useForm(formId);
   const submissions = useFormSubmissions(formId, {
@@ -253,7 +258,7 @@ export default function FormDetailPage() {
         />
       </StatGrid>
 
-      <Tabs defaultValue="responses" className="space-y-4">
+      <Tabs value={tab} onValueChange={(value) => setTab(String(value))} className="space-y-4">
         <TabsList>
           <TabsTrigger value="responses" className="gap-1.5">
             <Inbox className="size-3.5" />
@@ -263,6 +268,9 @@ export default function FormDetailPage() {
                 {totalSubmissions.toLocaleString()}
               </span>
             )}
+          </TabsTrigger>
+          <TabsTrigger value="exports" className="gap-1.5">
+            <Download className="size-3.5" /> Exports
           </TabsTrigger>
           <TabsTrigger value="share" className="gap-1.5">
             <ExternalLink className="size-3.5" /> Share
@@ -304,6 +312,21 @@ export default function FormDetailPage() {
                       <DropdownMenuItem onClick={() => handleExport('json')} className="cursor-pointer">
                         Download JSON
                       </DropdownMenuItem>
+                      {/*
+                        Past a few thousand responses a direct download is a
+                        single long-lived request, and a proxy timeout truncates
+                        it into a CSV that opens fine and is quietly incomplete.
+                        Point at the background path rather than removing the
+                        direct one — small exports are still better served by it.
+                      */}
+                      {totalSubmissions > ASYNC_EXPORT_THRESHOLD_ROWS && (
+                        <DropdownMenuItem
+                          onClick={() => setTab('exports')}
+                          className="cursor-pointer"
+                        >
+                          Prepare in background (recommended)
+                        </DropdownMenuItem>
+                      )}
                     </DropdownMenuContent>
                   </DropdownMenu>
                 </Can>
@@ -322,6 +345,16 @@ export default function FormDetailPage() {
               />
             }
           />
+        </TabsContent>
+
+        <TabsContent value="exports">
+          <Can permission="submission:export">
+            <ExportJobsPanel
+              formId={formId}
+              totalSubmissions={totalSubmissions}
+              thresholdRows={ASYNC_EXPORT_THRESHOLD_ROWS}
+            />
+          </Can>
         </TabsContent>
 
         <TabsContent value="share">

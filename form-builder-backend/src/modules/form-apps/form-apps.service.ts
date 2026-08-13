@@ -68,6 +68,16 @@ export interface DashboardCard {
 export const APP_LAYOUT_MODES = ['DOCUMENT', 'GRID', 'INHERIT'] as const;
 export type AppLayoutMode = (typeof APP_LAYOUT_MODES)[number];
 
+/**
+ * The window a step's entry count is measured over. See `step-scope.ts` for
+ * what each one means and why SESSION has to stay the default.
+ */
+export const STEP_SCOPES = [
+  'SESSION',
+  'SUBJECT',
+  'SUBJECT_PERIOD',
+] as const satisfies readonly string[];
+
 /** Read the layout out of a stored `config` blob, defaulting safely. */
 export function appLayoutModeOf(config: unknown): AppLayoutMode {
   const mode = (config as FormAppConfig | null)?.layoutMode;
@@ -95,7 +105,9 @@ export class FormAppsService {
       where: { organizationId: orgId, deletedAt: null },
       orderBy: { name: 'asc' },
       include: {
-        subjectType: { select: { id: true, name: true, slug: true, icon: true } },
+        subjectType: {
+          select: { id: true, name: true, slug: true, icon: true },
+        },
       },
     });
   }
@@ -138,7 +150,9 @@ export class FormAppsService {
       })),
       // Kept for the existing app screen, which lists the forms an app covers.
       forms: app.steps
-        .filter((step) => step.form.status === 'PUBLISHED' && !step.form.deletedAt)
+        .filter(
+          (step) => step.form.status === 'PUBLISHED' && !step.form.deletedAt,
+        )
         .map((step) => step.form),
     };
   }
@@ -168,19 +182,25 @@ export class FormAppsService {
       description?: string;
       icon?: string;
       mode?: 'SINGLE' | 'REPEATABLE';
+      scope?: 'SESSION' | 'SUBJECT' | 'SUBJECT_PERIOD';
       minEntries?: number;
       maxEntries?: number | null;
       isOptional?: boolean;
       uniqueBy?: string[];
+      occurredAtKey?: string | null;
       showWhen?: unknown;
     },
     userId?: string,
   ) {
     const app = await this.assertApp(orgId, appId);
 
-    const count = await this.prisma.reader.formAppStep.count({ where: { appId } });
+    const count = await this.prisma.reader.formAppStep.count({
+      where: { appId },
+    });
     if (count >= APP_LIMITS.MAX_STEPS) {
-      throw new BadRequestException(`An app may have at most ${APP_LIMITS.MAX_STEPS} steps.`);
+      throw new BadRequestException(
+        `An app may have at most ${APP_LIMITS.MAX_STEPS} steps.`,
+      );
     }
 
     const form = await this.prisma.reader.form.findFirst({
@@ -195,7 +215,10 @@ export class FormAppsService {
       );
     }
 
-    const key = await this.uniqueStepKey(appId, dto.key || dto.title || form.title);
+    const key = await this.uniqueStepKey(
+      appId,
+      dto.key || dto.title || form.title,
+    );
     const shape = this.normalizeStepShape(dto);
 
     const step = await this.prisma.writer.formAppStep.create({
@@ -232,10 +255,12 @@ export class FormAppsService {
       description?: string | null;
       icon?: string | null;
       mode?: 'SINGLE' | 'REPEATABLE';
+      scope?: 'SESSION' | 'SUBJECT' | 'SUBJECT_PERIOD';
       minEntries?: number;
       maxEntries?: number | null;
       isOptional?: boolean;
       uniqueBy?: string[];
+      occurredAtKey?: string | null;
       showWhen?: unknown;
     },
     userId?: string,
@@ -273,7 +298,12 @@ export class FormAppsService {
     return updated;
   }
 
-  async deleteStep(orgId: string, appId: string, stepId: string, userId?: string) {
+  async deleteStep(
+    orgId: string,
+    appId: string,
+    stepId: string,
+    userId?: string,
+  ) {
     await this.assertApp(orgId, appId);
 
     await this.prisma.writer.$transaction(async (tx) => {
@@ -309,7 +339,10 @@ export class FormAppsService {
         select: { id: true, order: true },
       });
       for (const other of after) {
-        await tx.formAppStep.update({ where: { id: other.id }, data: { order: other.order - 1 } });
+        await tx.formAppStep.update({
+          where: { id: other.id },
+          data: { order: other.order - 1 },
+        });
       }
     });
 
@@ -333,7 +366,12 @@ export class FormAppsService {
    * range that cannot clash, then writing the final values, avoids needing a
    * deferrable constraint.
    */
-  async reorderSteps(orgId: string, appId: string, stepIds: string[], userId?: string) {
+  async reorderSteps(
+    orgId: string,
+    appId: string,
+    stepIds: string[],
+    userId?: string,
+  ) {
     await this.assertApp(orgId, appId);
 
     const steps = await this.prisma.reader.formAppStep.findMany({
@@ -342,16 +380,26 @@ export class FormAppsService {
     });
     const known = new Set(steps.map((step) => step.id));
 
-    if (stepIds.length !== steps.length || stepIds.some((id) => !known.has(id))) {
-      throw new BadRequestException('The new order must list every step of this app exactly once.');
+    if (
+      stepIds.length !== steps.length ||
+      stepIds.some((id) => !known.has(id))
+    ) {
+      throw new BadRequestException(
+        'The new order must list every step of this app exactly once.',
+      );
     }
     if (new Set(stepIds).size !== stepIds.length) {
-      throw new BadRequestException('The new order lists a step more than once.');
+      throw new BadRequestException(
+        'The new order lists a step more than once.',
+      );
     }
 
     await this.prisma.writer.$transaction(async (tx) => {
       for (const [index, id] of stepIds.entries()) {
-        await tx.formAppStep.update({ where: { id }, data: { order: -(index + 1) } });
+        await tx.formAppStep.update({
+          where: { id },
+          data: { order: -(index + 1) },
+        });
       }
       for (const [index, id] of stepIds.entries()) {
         await tx.formAppStep.update({ where: { id }, data: { order: index } });
@@ -372,17 +420,36 @@ export class FormAppsService {
   /** Shared shape-normalisation for create and update. */
   private normalizeStepShape(dto: {
     mode?: 'SINGLE' | 'REPEATABLE';
+    scope?: 'SESSION' | 'SUBJECT' | 'SUBJECT_PERIOD';
     minEntries?: number;
     maxEntries?: number | null;
     isOptional?: boolean;
     uniqueBy?: string[];
+    occurredAtKey?: string | null;
     showWhen?: unknown;
   }) {
     const out: Record<string, any> = {};
 
+    if (dto.scope !== undefined) {
+      if (!STEP_SCOPES.includes(dto.scope)) {
+        throw new BadRequestException(
+          'A step is counted per sitting, per record, or per record per period.',
+        );
+      }
+      out.scope = dto.scope;
+    }
+
+    if (dto.occurredAtKey !== undefined) {
+      const key =
+        typeof dto.occurredAtKey === 'string' ? dto.occurredAtKey.trim() : '';
+      out.occurredAtKey = key === '' ? null : key.slice(0, 60);
+    }
+
     if (dto.mode !== undefined) {
       if (dto.mode !== 'SINGLE' && dto.mode !== 'REPEATABLE') {
-        throw new BadRequestException('A step is either filled once or repeatable.');
+        throw new BadRequestException(
+          'A step is either filled once or repeatable.',
+        );
       }
       out.mode = dto.mode;
       // A step filled once has exactly one entry; carrying a stale maximum from
@@ -417,20 +484,26 @@ export class FormAppsService {
       out.maxEntries !== null &&
       out.minEntries > out.maxEntries
     ) {
-      throw new BadRequestException('A step cannot require more entries than it allows.');
+      throw new BadRequestException(
+        'A step cannot require more entries than it allows.',
+      );
     }
 
     if (dto.isOptional !== undefined) out.isOptional = !!dto.isOptional;
 
     if (dto.uniqueBy !== undefined) {
       out.uniqueBy = Array.isArray(dto.uniqueBy)
-        ? dto.uniqueBy.filter((key): key is string => typeof key === 'string').slice(0, 10)
+        ? dto.uniqueBy
+            .filter((key): key is string => typeof key === 'string')
+            .slice(0, 10)
         : [];
     }
 
     if (dto.showWhen !== undefined) {
       out.showWhen =
-        dto.showWhen === null || dto.showWhen === undefined ? Prisma.DbNull : (dto.showWhen as any);
+        dto.showWhen === null || dto.showWhen === undefined
+          ? Prisma.DbNull
+          : (dto.showWhen as any);
     }
 
     return out;
@@ -467,20 +540,31 @@ export class FormAppsService {
   async createPeriod(
     orgId: string,
     appId: string,
-    dto: { label: string; startsAt: string; endsAt: string; isActive?: boolean },
+    dto: {
+      label: string;
+      startsAt: string;
+      endsAt: string;
+      isActive?: boolean;
+    },
     userId?: string,
   ) {
     await this.assertApp(orgId, appId);
 
-    const count = await this.prisma.reader.formAppPeriod.count({ where: { appId } });
+    const count = await this.prisma.reader.formAppPeriod.count({
+      where: { appId },
+    });
     if (count >= APP_LIMITS.MAX_PERIODS) {
-      throw new BadRequestException(`An app may have at most ${APP_LIMITS.MAX_PERIODS} periods.`);
+      throw new BadRequestException(
+        `An app may have at most ${APP_LIMITS.MAX_PERIODS} periods.`,
+      );
     }
 
     const startsAt = new Date(dto.startsAt);
     const endsAt = new Date(dto.endsAt);
     if (Number.isNaN(startsAt.getTime()) || Number.isNaN(endsAt.getTime())) {
-      throw new BadRequestException('A period needs a valid start and end date.');
+      throw new BadRequestException(
+        'A period needs a valid start and end date.',
+      );
     }
     if (endsAt <= startsAt) {
       throw new BadRequestException('A period must end after it starts.');
@@ -512,7 +596,12 @@ export class FormAppsService {
     orgId: string,
     appId: string,
     periodId: string,
-    dto: { label?: string; startsAt?: string; endsAt?: string; isActive?: boolean },
+    dto: {
+      label?: string;
+      startsAt?: string;
+      endsAt?: string;
+      isActive?: boolean;
+    },
   ) {
     await this.assertApp(orgId, appId);
     const period = await this.prisma.reader.formAppPeriod.findFirst({
@@ -523,7 +612,11 @@ export class FormAppsService {
 
     const startsAt = dto.startsAt ? new Date(dto.startsAt) : period.startsAt;
     const endsAt = dto.endsAt ? new Date(dto.endsAt) : period.endsAt;
-    if (Number.isNaN(startsAt.getTime()) || Number.isNaN(endsAt.getTime()) || endsAt <= startsAt) {
+    if (
+      Number.isNaN(startsAt.getTime()) ||
+      Number.isNaN(endsAt.getTime()) ||
+      endsAt <= startsAt
+    ) {
       throw new BadRequestException('A period must end after it starts.');
     }
 
@@ -543,7 +636,9 @@ export class FormAppsService {
     // Sessions keep their period via ON DELETE SET NULL rather than blocking
     // the delete — a retired window should not pin an app's configuration
     // forever, and a submitted report's own timestamps still place it.
-    await this.prisma.writer.formAppPeriod.deleteMany({ where: { id: periodId, appId } });
+    await this.prisma.writer.formAppPeriod.deleteMany({
+      where: { id: periodId, appId },
+    });
     return { message: 'Period removed.' };
   }
 
@@ -573,7 +668,8 @@ export class FormAppsService {
 
     let publicSlug: string | null | undefined;
     if (dto.publicSlug !== undefined) {
-      publicSlug = dto.publicSlug === null ? null : normalizeSlug(dto.publicSlug);
+      publicSlug =
+        dto.publicSlug === null ? null : normalizeSlug(dto.publicSlug);
       if (publicSlug === '') publicSlug = null;
     }
 
@@ -584,11 +680,19 @@ export class FormAppsService {
           ...(dto.themeConfig !== undefined && {
             themeConfig: normalizeTheme(dto.themeConfig) as any,
           }),
-          ...(dto.branding !== undefined && { branding: normalizeBranding(dto.branding) as any }),
+          ...(dto.branding !== undefined && {
+            branding: normalizeBranding(dto.branding) as any,
+          }),
           ...(publicSlug !== undefined && { publicSlug }),
-          ...(dto.requireAuth !== undefined && { requireAuth: !!dto.requireAuth }),
-          ...(dto.allowDrafts !== undefined && { allowDrafts: !!dto.allowDrafts }),
-          ...(dto.isPublished !== undefined && { isPublished: !!dto.isPublished }),
+          ...(dto.requireAuth !== undefined && {
+            requireAuth: !!dto.requireAuth,
+          }),
+          ...(dto.allowDrafts !== undefined && {
+            allowDrafts: !!dto.allowDrafts,
+          }),
+          ...(dto.isPublished !== undefined && {
+            isPublished: !!dto.isPublished,
+          }),
           // Merged into the existing config rather than replacing it: the
           // dashboard cards live in the same column and are edited elsewhere,
           // so writing `{ layoutMode }` wholesale would delete them.
@@ -612,7 +716,9 @@ export class FormAppsService {
       return updated;
     } catch (err: any) {
       if (err?.code === 'P2002') {
-        throw new ConflictException('That public link is already taken. Try a different one.');
+        throw new ConflictException(
+          'That public link is already taken. Try a different one.',
+        );
       }
       throw err;
     }
@@ -634,7 +740,9 @@ export class FormAppsService {
     const app = await this.prisma.reader.formApp.findFirst({
       where: { publicSlug, deletedAt: null, isPublished: true },
       include: {
-        organization: { select: { id: true, name: true, logoUrl: true, isActive: true } },
+        organization: {
+          select: { id: true, name: true, logoUrl: true, isActive: true },
+        },
         subjectType: { select: { id: true, name: true, slug: true } },
         periods: { where: { isActive: true }, orderBy: { startsAt: 'desc' } },
       },
@@ -646,7 +754,9 @@ export class FormAppsService {
 
     const now = Date.now();
     const activePeriod =
-      app.periods.find((p) => p.startsAt.getTime() <= now && p.endsAt.getTime() >= now) ?? null;
+      app.periods.find(
+        (p) => p.startsAt.getTime() <= now && p.endsAt.getTime() >= now,
+      ) ?? null;
 
     return {
       id: app.id,
@@ -662,7 +772,10 @@ export class FormAppsService {
       requireAuth: app.requireAuth,
       allowDrafts: app.allowDrafts,
       subjectType: app.subjectType,
-      organization: { name: app.organization.name, logoUrl: app.organization.logoUrl },
+      organization: {
+        name: app.organization.name,
+        logoUrl: app.organization.logoUrl,
+      },
       period: activePeriod,
       /** Configured windows exist but none is open — the app is between cycles. */
       isOutsidePeriod: app.periods.length > 0 && !activePeriod,
@@ -693,7 +806,10 @@ export class FormAppsService {
     const existing = await this.prisma.reader.formApp.findUnique({
       where: { organizationId_slug: { organizationId: orgId, slug } },
     });
-    if (existing) throw new ConflictException(`An app with the id "${slug}" already exists.`);
+    if (existing)
+      throw new ConflictException(
+        `An app with the id "${slug}" already exists.`,
+      );
 
     const app = await this.prisma.writer.formApp.create({
       data: {
@@ -703,7 +819,7 @@ export class FormAppsService {
         slug,
         description: dto.description ?? null,
         icon: dto.icon ?? null,
-        config: (await this.validateConfig(orgId, dto.config ?? {})) as any,
+        config: this.validateConfig(orgId, dto.config ?? {}) as any,
       },
     });
 
@@ -741,7 +857,7 @@ export class FormAppsService {
         ...(dto.icon !== undefined && { icon: dto.icon }),
         ...(dto.isPublished !== undefined && { isPublished: dto.isPublished }),
         ...(dto.config !== undefined && {
-          config: (await this.validateConfig(orgId, dto.config)) as any,
+          config: this.validateConfig(orgId, dto.config) as any,
         }),
       },
     });
@@ -786,7 +902,9 @@ export class FormAppsService {
   async getDashboard(orgId: string, appId: string) {
     const app = await this.assertApp(orgId, appId);
     const config = (app.config ?? {}) as FormAppConfig;
-    const cards = Array.isArray(config.dashboardCards) ? config.dashboardCards : [];
+    const cards = Array.isArray(config.dashboardCards)
+      ? config.dashboardCards
+      : [];
 
     const results = await Promise.all(
       cards.slice(0, 12).map(async (card) => {
@@ -799,6 +917,11 @@ export class FormAppsService {
           const count = await this.prisma.reader.formSubmission.count({
             where: {
               organizationId: orgId,
+              // A dashboard card counts what an operator can go and look at, so
+              // it has to agree with the list the card links through to. Left
+              // out, a card would keep counting responses that no longer appear
+              // anywhere, and the discrepancy is unfindable from the UI.
+              deletedAt: null,
               status: { not: 'DELETED' },
               ...(card.filter?.formId ? { formId: card.filter.formId } : {}),
               ...(since ? { submittedAt: { gte: since } } : {}),
@@ -835,19 +958,33 @@ export class FormAppsService {
    * Only dashboard cards live here now —  moved to FormAppStep, which
    * can express order, cardinality and conditions that a bare list could not.
    */
-  private async validateConfig(_orgId: string, config: FormAppConfig): Promise<FormAppConfig> {
-    const rawCards = Array.isArray(config.dashboardCards) ? config.dashboardCards : [];
+  // Synchronous since the form-id validation it used to await moved to
+  // FormAppStep. Existing `await this.validateConfig(...)` call sites are
+  // unaffected — awaiting a non-promise is a no-op — so the signature is now
+  // honest about doing no I/O rather than implying it might.
+  private validateConfig(_orgId: string, config: FormAppConfig): FormAppConfig {
+    const rawCards = Array.isArray(config.dashboardCards)
+      ? config.dashboardCards
+      : [];
     const dashboardCards: DashboardCard[] = [];
 
     for (const card of rawCards.slice(0, 12)) {
-      if (!card || typeof card.title !== 'string' || !CARD_SOURCES.has(card.source)) continue;
+      if (
+        !card ||
+        typeof card.title !== 'string' ||
+        !CARD_SOURCES.has(card.source)
+      )
+        continue;
 
       const filter: DashboardCard['filter'] = {};
       const days = card.filter?.createdWithinDays;
       // Clamped rather than rejected: an absurd window is a UI slip, and a
       // silently sane value is friendlier than an error on save.
       if (typeof days === 'number' && Number.isFinite(days)) {
-        filter.createdWithinDays = Math.min(Math.max(Math.trunc(days), 1), 3650);
+        filter.createdWithinDays = Math.min(
+          Math.max(Math.trunc(days), 1),
+          3650,
+        );
       }
       if (typeof card.filter?.formId === 'string') {
         filter.formId = card.filter.formId;
@@ -863,7 +1000,9 @@ export class FormAppsService {
     // Allow-listed, like the cards: `validateConfig` returns a freshly built
     // object rather than a spread of the input, so anything not named here is
     // dropped instead of being stored unchecked.
-    const layoutMode = (APP_LAYOUT_MODES as readonly string[]).includes(config.layoutMode ?? '')
+    const layoutMode = (APP_LAYOUT_MODES as readonly string[]).includes(
+      config.layoutMode ?? '',
+    )
       ? (config.layoutMode as AppLayoutMode)
       : 'DOCUMENT';
 
@@ -904,7 +1043,9 @@ function normalizeBranding(input: unknown): Record<string, string> {
   if (!input || typeof input !== 'object' || Array.isArray(input)) return {};
 
   const out: Record<string, string> = {};
-  for (const [key, value] of Object.entries(input as Record<string, unknown>).slice(0, 20)) {
+  for (const [key, value] of Object.entries(
+    input as Record<string, unknown>,
+  ).slice(0, 20)) {
     if (typeof value !== 'string') continue;
     const trimmed = value.trim();
     if (!trimmed) continue;

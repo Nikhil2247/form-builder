@@ -21,5 +21,9 @@ export const defaultJobOptions = {
 export const QUEUE_NAMES = {
   SUBMISSIONS: 'submissions_queue',
   FILE_VERIFY: 'file_verify_queue',
-  WEBHOOKS:    'webhooks_queue',
+  WEBHOOKS: 'webhooks_queue',
+  // Asynchronous submission exports. The string is load-bearing: BullMQ keys
+  // every list, set and scheduler in Redis by the queue name, so renaming it
+  // after a deploy orphans whatever is already enqueued rather than moving it.
+  EXPORTS: 'exports_queue',
 } as const;

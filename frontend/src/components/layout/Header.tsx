@@ -3,7 +3,7 @@
 import React from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { Building2, LogOut, Menu, Search, Settings, User } from 'lucide-react';
+import { Bell, Building2, LogOut, Menu, Search, Settings, User } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
 import {
@@ -20,6 +20,7 @@ import { StatusBadge } from '@/components/shared/status-badge';
 import { useSidebarStore } from '@/store/sidebar-store';
 import { useUser, useLogout, usePermissions } from '@/hooks/use-auth';
 import { useCommandMenuStore } from '@/store/command-menu-store';
+import { useUnreadNotificationCount } from '@/hooks/use-notifications';
 
 /** Human-readable names for URL segments. */
 const SEGMENT_TITLES: Record<string, string> = {
@@ -62,6 +63,10 @@ export function Header() {
   const { data: session } = useUser();
   const { can } = usePermissions();
   const logout = useLogout();
+  // The badge only. The EventSource that keeps it live is mounted once in
+  // DashboardLayout — see the note there.
+  const { data: notificationCount } = useUnreadNotificationCount();
+  const unread = notificationCount?.unreadCount ?? 0;
 
   const user = session?.user;
   const org = session?.activeOrganization;
@@ -136,6 +141,32 @@ export function Header() {
           <span className="hidden lg:inline">Search…</span>
           <Kbd className="hidden lg:inline-flex">⌘K</Kbd>
         </button>
+
+        {/* Unread notifications. The count is announced to screen readers in
+            words — a bare "3" floating next to an icon is meaningless without
+            sight of the icon — and capped at 99+ so a neglected inbox cannot
+            widen the header. */}
+        <Link
+          href="/notifications"
+          aria-label={
+            unread === 0
+              ? 'Notifications'
+              : `Notifications, ${unread} unread`
+          }
+          className="relative flex size-8 items-center justify-center rounded-md text-muted-foreground
+                     transition-colors hover:bg-muted hover:text-foreground"
+        >
+          <Bell className="size-4" strokeWidth={1.5} />
+          {unread > 0 && (
+            <span
+              aria-hidden
+              className="absolute -right-0.5 -top-0.5 flex min-w-4 items-center justify-center rounded-full
+                         bg-primary px-1 text-[10px] font-semibold leading-4 text-primary-foreground"
+            >
+              {unread > 99 ? '99+' : unread}
+            </span>
+          )}
+        </Link>
 
         <ThemeToggle />
 

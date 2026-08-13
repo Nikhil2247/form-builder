@@ -1,4 +1,11 @@
-import { IsString, IsOptional, MaxLength, MinLength, IsInt, Min } from 'class-validator';
+import {
+  IsString,
+  IsOptional,
+  MaxLength,
+  MinLength,
+  IsInt,
+  Min,
+} from 'class-validator';
 
 export class UpdateOrganizationDto {
   @IsOptional() @IsString() @MinLength(2) @MaxLength(255) name?: string;

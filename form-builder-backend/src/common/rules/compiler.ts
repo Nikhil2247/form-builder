@@ -78,8 +78,7 @@ export interface CompiledPlan {
 }
 
 export type CompileResult =
-  | { ok: true; plan: CompiledPlan }
-  | { ok: false; errors: CompileError[] };
+  { ok: true; plan: CompiledPlan } | { ok: false; errors: CompileError[] };
 
 export interface CompileOptions {
   /** Question keys defined on the form version being published. */
@@ -110,11 +109,22 @@ interface WalkState {
   fieldsUsed: Set<string>;
 }
 
-function walk(node: ExprNode, depth: number, state: WalkState, options: CompileOptions): void {
-  if (state.errors.length > 0 && state.nodes > COMPILE_LIMITS.maxNodesPerExpression) return;
+function walk(
+  node: ExprNode,
+  depth: number,
+  state: WalkState,
+  options: CompileOptions,
+): void {
+  if (
+    state.errors.length > 0 &&
+    state.nodes > COMPILE_LIMITS.maxNodesPerExpression
+  )
+    return;
 
   if (depth > COMPILE_LIMITS.maxDepth) {
-    state.errors.push(`Expression is nested deeper than ${COMPILE_LIMITS.maxDepth} levels.`);
+    state.errors.push(
+      `Expression is nested deeper than ${COMPILE_LIMITS.maxDepth} levels.`,
+    );
     return;
   }
 
@@ -135,7 +145,9 @@ function walk(node: ExprNode, depth: number, state: WalkState, options: CompileO
     // objects, which have no meaning in this value system.
     const value = node.lit;
     if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
-      state.errors.push('A fixed value must be text, a number, true/false, or a list.');
+      state.errors.push(
+        'A fixed value must be text, a number, true/false, or a list.',
+      );
     }
     return;
   }
@@ -147,19 +159,27 @@ function walk(node: ExprNode, depth: number, state: WalkState, options: CompileO
     }
     state.fieldsUsed.add(node.field);
     if (!options.knownKeys.includes(node.field)) {
-      state.errors.push(`Rule refers to "${node.field}", which is not a question on this form.`);
+      state.errors.push(
+        `Rule refers to "${node.field}", which is not a question on this form.`,
+      );
     }
     return;
   }
 
   if (isRef(node)) {
     const ref = node.ref;
-    if (!ref || typeof ref.form !== 'string' || typeof ref.question !== 'string') {
+    if (
+      !ref ||
+      typeof ref.form !== 'string' ||
+      typeof ref.question !== 'string'
+    ) {
       state.errors.push('A cross-form reference is incomplete.');
       return;
     }
     if (!REF_WHEN_VALUES.includes(ref.when)) {
-      state.errors.push(`"${String(ref.when)}" is not a valid time period for a cross-form value.`);
+      state.errors.push(
+        `"${String(ref.when)}" is not a valid time period for a cross-form value.`,
+      );
       return;
     }
     if (!options.allowReferences) {
@@ -225,7 +245,11 @@ function walk(node: ExprNode, depth: number, state: WalkState, options: CompileO
  * The outer arguments must be literals for the same reason — a computed list
  * name would not be knowable until evaluation.
  */
-function validateLookup(args: ExprNode[], state: WalkState, options: CompileOptions): void {
+function validateLookup(
+  args: ExprNode[],
+  state: WalkState,
+  options: CompileOptions,
+): void {
   if (args.length !== 3) {
     state.errors.push(
       `Operation "lookup" takes exactly 3 inputs but was given ${args.length}.`,
@@ -235,15 +259,31 @@ function validateLookup(args: ExprNode[], state: WalkState, options: CompileOpti
 
   const [listNode, fieldNode, columnNode] = args;
 
-  if (!isLiteral(listNode) || typeof listNode.lit !== 'string' || !listNode.lit) {
-    state.errors.push('The list a lookup reads from must be chosen, not calculated.');
+  if (
+    !isLiteral(listNode) ||
+    typeof listNode.lit !== 'string' ||
+    !listNode.lit
+  ) {
+    state.errors.push(
+      'The list a lookup reads from must be chosen, not calculated.',
+    );
     return;
   }
-  if (!isLiteral(columnNode) || typeof columnNode.lit !== 'string' || !columnNode.lit) {
-    state.errors.push('The column a lookup reads must be chosen, not calculated.');
+  if (
+    !isLiteral(columnNode) ||
+    typeof columnNode.lit !== 'string' ||
+    !columnNode.lit
+  ) {
+    state.errors.push(
+      'The column a lookup reads must be chosen, not calculated.',
+    );
     return;
   }
-  if (!isField(fieldNode) || typeof fieldNode.field !== 'string' || !fieldNode.field) {
+  if (
+    !isField(fieldNode) ||
+    typeof fieldNode.field !== 'string' ||
+    !fieldNode.field
+  ) {
     state.errors.push(
       'A lookup must read the answer to a question directly — it cannot look up a calculated value.',
     );
@@ -256,7 +296,9 @@ function validateLookup(args: ExprNode[], state: WalkState, options: CompileOpti
 
   state.fieldsUsed.add(field);
   if (!options.knownKeys.includes(field)) {
-    state.errors.push(`Rule refers to "${field}", which is not a question on this form.`);
+    state.errors.push(
+      `Rule refers to "${field}", which is not a question on this form.`,
+    );
     return;
   }
 
@@ -319,7 +361,9 @@ function orderCalculations(
   }
 
   if (ordered.length !== calculations.length) {
-    const cycle = [...byTarget.keys()].filter((t) => !ordered.some((r) => r.target === t)).sort();
+    const cycle = [...byTarget.keys()]
+      .filter((t) => !ordered.some((r) => r.target === t))
+      .sort();
     return { ordered: [], cycle };
   }
 
@@ -328,11 +372,17 @@ function orderCalculations(
 
 // ── Entry point ─────────────────────────────────────────────────────────────
 
-export function compileRules(rules: FormRule[], options: CompileOptions): CompileResult {
+export function compileRules(
+  rules: FormRule[],
+  options: CompileOptions,
+): CompileResult {
   const errors: CompileError[] = [];
 
   if (!Array.isArray(rules)) {
-    return { ok: false, errors: [{ ruleId: null, message: 'Rules must be a list.' }] };
+    return {
+      ok: false,
+      errors: [{ ruleId: null, message: 'Rules must be a list.' }],
+    };
   }
   if (rules.length > COMPILE_LIMITS.maxRulesPerForm) {
     return {
@@ -378,11 +428,19 @@ export function compileRules(rules: FormRule[], options: CompileOptions): Compil
       push(`"${String(rule.kind)}" is not a valid rule type.`);
       continue;
     }
-    if (typeof rule.target !== 'string' || !options.knownKeys.includes(rule.target)) {
-      push(`Rule targets "${String(rule.target)}", which is not a question on this form.`);
+    if (
+      typeof rule.target !== 'string' ||
+      !options.knownKeys.includes(rule.target)
+    ) {
+      push(
+        `Rule targets "${String(rule.target)}", which is not a question on this form.`,
+      );
       continue;
     }
-    if (rule.kind === 'VALIDATE' && (typeof rule.message !== 'string' || rule.message.trim() === '')) {
+    if (
+      rule.kind === 'VALIDATE' &&
+      (typeof rule.message !== 'string' || rule.message.trim() === '')
+    ) {
       // Without a message the respondent is told only that something is wrong.
       push('A validation rule needs a message to show the respondent.');
       continue;

@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
+import { SessionCacheService } from '../../common/session/session-cache.service';
 
 /**
  * Platform-level user administration.
@@ -26,6 +27,7 @@ export class AdminUsersService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
+    private readonly sessions: SessionCacheService,
   ) {}
 
   /** Full profile: memberships with roles, session count, security posture. */
@@ -67,13 +69,18 @@ export class AdminUsersService {
 
     if (!user) throw new NotFoundException('User not found.');
 
-    const [activeSessions, recoveryCodesRemaining, formsCreated] = await Promise.all([
-      this.prisma.reader.refreshToken.count({
-        where: { userId, revokedAt: null, expiresAt: { gt: new Date() } },
-      }),
-      this.prisma.reader.mfaRecoveryCode.count({ where: { userId, usedAt: null } }),
-      this.prisma.reader.form.count({ where: { createdById: userId, deletedAt: null } }),
-    ]);
+    const [activeSessions, recoveryCodesRemaining, formsCreated] =
+      await Promise.all([
+        this.prisma.reader.refreshToken.count({
+          where: { userId, revokedAt: null, expiresAt: { gt: new Date() } },
+        }),
+        this.prisma.reader.mfaRecoveryCode.count({
+          where: { userId, usedAt: null },
+        }),
+        this.prisma.reader.form.count({
+          where: { createdById: userId, deletedAt: null },
+        }),
+      ]);
 
     return {
       ...user,
@@ -94,7 +101,11 @@ export class AdminUsersService {
    * demoting themselves, and removing the last super-admin. Both are
    * unrecoverable through the UI — the only fix is a manual database edit.
    */
-  async setSystemRole(userId: string, systemRole: 'USER' | 'SUPER_ADMIN', actingUserId: string) {
+  async setSystemRole(
+    userId: string,
+    systemRole: 'USER' | 'SUPER_ADMIN',
+    actingUserId: string,
+  ) {
     if (userId === actingUserId && systemRole !== 'SUPER_ADMIN') {
       throw new ForbiddenException(
         'You cannot remove your own platform admin access. Ask another super admin to do it.',
@@ -109,7 +120,11 @@ export class AdminUsersService {
 
     if (user.systemRole === 'SUPER_ADMIN' && systemRole === 'USER') {
       const remaining = await this.prisma.reader.user.count({
-        where: { systemRole: 'SUPER_ADMIN', deletedAt: null, id: { not: userId } },
+        where: {
+          systemRole: 'SUPER_ADMIN',
+          deletedAt: null,
+          id: { not: userId },
+        },
       });
       if (remaining === 0) {
         throw new BadRequestException(
@@ -124,10 +139,19 @@ export class AdminUsersService {
       select: { id: true, email: true, systemRole: true },
     });
 
+    // `systemRole` is cached, and it is what OrgMemberGuard's SUPER_ADMIN bypass
+    // keys off. A demotion that does not reach the cache leaves platform-wide
+    // access to every tenant standing — the single most consequential entry on
+    // the invalidation list.
+    await this.sessions.invalidate(userId);
+
     this.audit.log({
-      organizationId: null as any,
+      organizationId: null,
       userId: actingUserId,
-      action: systemRole === 'SUPER_ADMIN' ? 'user.promoted_super_admin' : 'user.demoted_to_user',
+      action:
+        systemRole === 'SUPER_ADMIN'
+          ? 'user.promoted_super_admin'
+          : 'user.demoted_to_user',
       resource: 'user',
       resourceId: userId,
       metadata: { email: user.email, from: user.systemRole, to: systemRole },
@@ -152,7 +176,10 @@ export class AdminUsersService {
       where: { organizationId_userId: { organizationId, userId } },
       select: { id: true, role: true },
     });
-    if (!membership) throw new NotFoundException('This user is not a member of that organization.');
+    if (!membership)
+      throw new NotFoundException(
+        'This user is not a member of that organization.',
+      );
 
     if (membership.role === 'ADMIN' && role !== 'ADMIN') {
       const otherAdmins = await this.prisma.reader.organizationMember.count({
@@ -171,13 +198,22 @@ export class AdminUsersService {
       select: { id: true, role: true, organizationId: true, userId: true },
     });
 
+    // Same cached field OrganizationsService.updateMemberRole invalidates; this
+    // is the platform-admin route to the identical change.
+    await this.sessions.invalidate(userId);
+
     this.audit.log({
       organizationId,
       userId: actingUserId,
       action: 'member.role_changed',
       resource: 'member',
       resourceId: membership.id,
-      metadata: { targetUserId: userId, from: membership.role, to: role, via: 'platform-admin' },
+      metadata: {
+        targetUserId: userId,
+        from: membership.role,
+        to: role,
+        via: 'platform-admin',
+      },
     });
 
     return updated;
@@ -198,13 +234,17 @@ export class AdminUsersService {
     });
     if (!user) throw new NotFoundException('User not found.');
 
+    // ADMIN_REVOKED, not a bare revocation: when this user next presents one of
+    // these tokens the refresh path treats it as a replay and burns the family,
+    // and the audit trail needs to show that the family was already dead by an
+    // operator's hand rather than that a credential leaked.
     const { count } = await this.prisma.writer.refreshToken.updateMany({
       where: { userId, revokedAt: null },
-      data: { revokedAt: new Date() },
+      data: { revokedAt: new Date(), revokedReason: 'ADMIN_REVOKED' },
     });
 
     this.audit.log({
-      organizationId: null as any,
+      organizationId: null,
       userId: actingUserId,
       action: 'user.sessions_revoked',
       resource: 'user',
@@ -228,7 +268,11 @@ export class AdminUsersService {
    * deleted user) while every form they authored and every audit entry naming
    * them survives. A hard delete would rewrite history.
    */
-  async setUserSuspended(userId: string, suspended: boolean, actingUserId: string) {
+  async setUserSuspended(
+    userId: string,
+    suspended: boolean,
+    actingUserId: string,
+  ) {
     if (userId === actingUserId && suspended) {
       throw new ForbiddenException('You cannot suspend your own account.');
     }
@@ -241,10 +285,16 @@ export class AdminUsersService {
 
     if (suspended && user.systemRole === 'SUPER_ADMIN') {
       const remaining = await this.prisma.reader.user.count({
-        where: { systemRole: 'SUPER_ADMIN', deletedAt: null, id: { not: userId } },
+        where: {
+          systemRole: 'SUPER_ADMIN',
+          deletedAt: null,
+          id: { not: userId },
+        },
       });
       if (remaining === 0) {
-        throw new BadRequestException('This is the only active platform admin.');
+        throw new BadRequestException(
+          'This is the only active platform admin.',
+        );
       }
     }
 
@@ -259,12 +309,17 @@ export class AdminUsersService {
     if (suspended) {
       await this.prisma.writer.refreshToken.updateMany({
         where: { userId, revokedAt: null },
-        data: { revokedAt: new Date() },
+        data: { revokedAt: new Date(), revokedReason: 'ADMIN_REVOKED' },
       });
     }
 
+    // `deletedAt` is the field JwtStrategy rejects on, and it is cached. Both
+    // directions need this: without it a suspension does not bite until the TTL
+    // expires, and a reinstatement leaves the user locked out just as long.
+    await this.sessions.invalidate(userId);
+
     this.audit.log({
-      organizationId: null as any,
+      organizationId: null,
       userId: actingUserId,
       action: suspended ? 'user.suspended' : 'user.reinstated',
       resource: 'user',
@@ -288,7 +343,8 @@ export class AdminUsersService {
       select: { id: true, email: true, mfaEnabled: true },
     });
     if (!user) throw new NotFoundException('User not found.');
-    if (!user.mfaEnabled) throw new BadRequestException('This account does not have MFA enabled.');
+    if (!user.mfaEnabled)
+      throw new BadRequestException('This account does not have MFA enabled.');
 
     await this.prisma.writer.$transaction(async (tx: any) => {
       await tx.user.update({
@@ -301,7 +357,7 @@ export class AdminUsersService {
     });
 
     this.audit.log({
-      organizationId: null as any,
+      organizationId: null,
       userId: actingUserId,
       action: 'user.mfa_reset',
       resource: 'user',
@@ -309,6 +365,9 @@ export class AdminUsersService {
       metadata: { email: user.email },
     });
 
-    return { message: 'Two-factor authentication has been removed. The user can enrol again.' };
+    return {
+      message:
+        'Two-factor authentication has been removed. The user can enrol again.',
+    };
   }
 }

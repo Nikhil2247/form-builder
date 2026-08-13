@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { AlertTriangle, Home, RefreshCw, ChevronDown, ChevronUp } from "lucide-react";
+import { captureSegmentError } from "@/lib/report-error";
 
 export default function DashboardError({
   error,
@@ -14,8 +15,11 @@ export default function DashboardError({
   const [showDetails, setShowDetails] = useState(false);
 
   useEffect(() => {
-    // Log the error to an error reporting service like Sentry
     console.error("Dashboard error boundary caught:", error);
+    // No-op unless NEXT_PUBLIC_SENTRY_DSN is set — see lib/report-error.ts.
+    // Keyed on the error object, so a reset that throws again reports again
+    // while a re-render of the same failure does not.
+    captureSegmentError(error);
   }, [error]);
 
   return (

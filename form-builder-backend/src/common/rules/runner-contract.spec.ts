@@ -31,7 +31,8 @@ describe('rules engine — runner contract', () => {
 
   const compile = (rules: FormRule[]) => {
     const result = compileRules(rules, { knownKeys, allowReferences: false });
-    if (!result.ok) throw new Error(result.errors.map((e) => e.message).join('; '));
+    if (!result.ok)
+      throw new Error(result.errors.map((e) => e.message).join('; '));
     return result.plan;
   };
 
@@ -41,7 +42,10 @@ describe('rules engine — runner contract', () => {
         id: 'r1',
         kind: 'CALCULATE',
         target: 'age',
-        expr: { op: 'yearsBetween', args: [{ field: 'date_of_birth' }, { op: 'today', args: [] }] },
+        expr: {
+          op: 'yearsBetween',
+          args: [{ field: 'date_of_birth' }, { op: 'today', args: [] }],
+        },
       },
     ]);
 
@@ -62,7 +66,10 @@ describe('rules engine — runner contract', () => {
         id: 'r1',
         kind: 'CALCULATE',
         target: 'age',
-        expr: { op: 'yearsBetween', args: [{ field: 'date_of_birth' }, { op: 'today', args: [] }] },
+        expr: {
+          op: 'yearsBetween',
+          args: [{ field: 'date_of_birth' }, { op: 'today', args: [] }],
+        },
       },
     ]);
 
@@ -76,7 +83,10 @@ describe('rules engine — runner contract', () => {
         id: 'r1',
         kind: 'CALCULATE',
         target: 'total',
-        expr: { op: 'add', args: [{ field: 'amount_a' }, { field: 'amount_b' }] },
+        expr: {
+          op: 'add',
+          args: [{ field: 'amount_a' }, { field: 'amount_b' }],
+        },
       },
     ]);
 
@@ -96,7 +106,10 @@ describe('rules engine — runner contract', () => {
         id: 'r_total',
         kind: 'CALCULATE',
         target: 'total',
-        expr: { op: 'add', args: [{ field: 'amount_a' }, { field: 'amount_b' }] },
+        expr: {
+          op: 'add',
+          args: [{ field: 'amount_a' }, { field: 'amount_b' }],
+        },
       },
       {
         id: 'r_age',
@@ -107,7 +120,11 @@ describe('rules engine — runner contract', () => {
       },
     ]);
 
-    const out = runFormRules({ questions, plan, answersById: { q_a: 1, q_b: 2 } });
+    const out = runFormRules({
+      questions,
+      plan,
+      answersById: { q_a: 1, q_b: 2 },
+    });
     expect(out.answersById.q_total).toBe(3);
     expect(out.answersById.q_age).toBe(6);
   });
@@ -131,18 +148,32 @@ describe('rules engine — runner contract', () => {
         kind: 'VALIDATE',
         target: 'amount_b',
         message: 'Amount B cannot exceed Amount A.',
-        expr: { op: 'gt', args: [{ field: 'amount_b' }, { field: 'amount_a' }] },
+        expr: {
+          op: 'gt',
+          args: [{ field: 'amount_b' }, { field: 'amount_a' }],
+        },
       },
     ]);
 
-    const low = runFormRules({ questions, plan, answersById: { q_a: 3, q_b: 9 } });
+    const low = runFormRules({
+      questions,
+      plan,
+      answersById: { q_a: 3, q_b: 9 },
+    });
     expect(low.hiddenQuestionIds.has('q_why')).toBe(false);
     expect(low.requiredQuestionIds.has('q_why')).toBe(true);
     expect(low.violations).toEqual([
-      expect.objectContaining({ questionId: 'q_b', message: 'Amount B cannot exceed Amount A.' }),
+      expect.objectContaining({
+        questionId: 'q_b',
+        message: 'Amount B cannot exceed Amount A.',
+      }),
     ]);
 
-    const high = runFormRules({ questions, plan, answersById: { q_a: 9, q_b: 3 } });
+    const high = runFormRules({
+      questions,
+      plan,
+      answersById: { q_a: 9, q_b: 3 },
+    });
     expect(high.hiddenQuestionIds.has('q_why')).toBe(true);
     // Hidden wins: a question the respondent cannot see must not be mandatory.
     expect(high.requiredQuestionIds.has('q_why')).toBe(false);
@@ -164,7 +195,10 @@ describe('rules engine — runner contract', () => {
   it('falls back to the question id when a version predates keys', () => {
     // Older versions have no `key` on their questions; the adapter uses the id
     // as the key so a rule authored against such a version still resolves.
-    const legacy = [{ id: 'amount_a', type: 'NUMBER' }, { id: 'total', type: 'NUMBER' }];
+    const legacy = [
+      { id: 'amount_a', type: 'NUMBER' },
+      { id: 'total', type: 'NUMBER' },
+    ];
     const plan = compileRules(
       [
         {
@@ -178,7 +212,11 @@ describe('rules engine — runner contract', () => {
     );
     if (!plan.ok) throw new Error('expected the plan to compile');
 
-    const out = runFormRules({ questions: legacy, plan: plan.plan, answersById: { amount_a: 4 } });
+    const out = runFormRules({
+      questions: legacy,
+      plan: plan.plan,
+      answersById: { amount_a: 4 },
+    });
     expect(out.answersById.total).toBe(12);
   });
 });

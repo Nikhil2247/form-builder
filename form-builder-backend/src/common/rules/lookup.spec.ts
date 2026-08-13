@@ -28,7 +28,11 @@ describe('lookup()', () => {
     target: 'udise_code',
     expr: {
       op: 'lookup',
-      args: [{ lit: 'ng-schools' }, { field: 'school_name' }, { lit: 'udise_code' }],
+      args: [
+        { lit: 'ng-schools' },
+        { field: 'school_name' },
+        { lit: 'udise_code' },
+      ],
     },
   };
 
@@ -62,7 +66,9 @@ describe('lookup()', () => {
       if (!result.ok) return;
 
       const order = result.plan.calculations.map((r) => r.target);
-      expect(order.indexOf('school_name')).toBeLessThan(order.indexOf('udise_code'));
+      expect(order.indexOf('school_name')).toBeLessThan(
+        order.indexOf('udise_code'),
+      );
     });
 
     // The restriction that keeps the interpreter pure. Without it, one lookup's
@@ -85,7 +91,9 @@ describe('lookup()', () => {
       ]);
       expect(result.ok).toBe(false);
       if (result.ok) return;
-      expect(result.errors[0].message).toMatch(/read the answer to a question directly/i);
+      expect(result.errors[0].message).toMatch(
+        /read the answer to a question directly/i,
+      );
     });
 
     it('rejects a computed list name', () => {
@@ -96,13 +104,19 @@ describe('lookup()', () => {
           target: 'udise_code',
           expr: {
             op: 'lookup',
-            args: [{ field: 'district' }, { field: 'school_name' }, { lit: 'udise_code' }],
+            args: [
+              { field: 'district' },
+              { field: 'school_name' },
+              { lit: 'udise_code' },
+            ],
           },
         },
       ]);
       expect(result.ok).toBe(false);
       if (result.ok) return;
-      expect(result.errors[0].message).toMatch(/must be chosen, not calculated/i);
+      expect(result.errors[0].message).toMatch(
+        /must be chosen, not calculated/i,
+      );
     });
 
     it('rejects a question that is not on the form', () => {
@@ -113,7 +127,11 @@ describe('lookup()', () => {
           target: 'udise_code',
           expr: {
             op: 'lookup',
-            args: [{ lit: 'ng-schools' }, { field: 'nope' }, { lit: 'udise_code' }],
+            args: [
+              { lit: 'ng-schools' },
+              { field: 'nope' },
+              { lit: 'udise_code' },
+            ],
           },
         },
       ]);
@@ -121,10 +139,14 @@ describe('lookup()', () => {
     });
 
     it('rejects a list the organization cannot use', () => {
-      const result = compile([udiseRule], { knownChoiceLists: ['in-districts'] });
+      const result = compile([udiseRule], {
+        knownChoiceLists: ['in-districts'],
+      });
       expect(result.ok).toBe(false);
       if (result.ok) return;
-      expect(result.errors[0].message).toMatch(/not a list this organization can use/i);
+      expect(result.errors[0].message).toMatch(
+        /not a list this organization can use/i,
+      );
     });
 
     it('skips the catalogue check when no catalogue is supplied', () => {
@@ -138,7 +160,10 @@ describe('lookup()', () => {
           id: 'r1',
           kind: 'CALCULATE',
           target: 'udise_code',
-          expr: { op: 'lookup', args: [{ lit: 'ng-schools' }, { field: 'school_name' }] },
+          expr: {
+            op: 'lookup',
+            args: [{ lit: 'ng-schools' }, { field: 'school_name' }],
+          },
         },
       ]);
       expect(result.ok).toBe(false);
@@ -146,7 +171,9 @@ describe('lookup()', () => {
   });
 
   describe('request planning', () => {
-    const specs = [{ list: 'ng-schools', field: 'school_name', column: 'udise_code' }];
+    const specs = [
+      { list: 'ng-schools', field: 'school_name', column: 'udise_code' },
+    ];
 
     it('pairs the spec with the answer', () => {
       expect(planLookupRequests(specs, { school_name: 'GHS Botsa' })).toEqual([
@@ -167,12 +194,18 @@ describe('lookup()', () => {
 
     it('asks for nothing for a multi-value answer', () => {
       // No single item to look up.
-      expect(planLookupRequests(specs, { school_name: ['a', 'b'] })).toEqual([]);
+      expect(planLookupRequests(specs, { school_name: ['a', 'b'] })).toEqual(
+        [],
+      );
     });
 
     it('de-duplicates two rules reading the same column', () => {
       const requests = planLookupRequests(
-        [...specs, ...specs, { list: 'ng-schools', field: 'school_name', column: 'block_code' }],
+        [
+          ...specs,
+          ...specs,
+          { list: 'ng-schools', field: 'school_name', column: 'block_code' },
+        ],
         { school_name: 'GHS Botsa' },
       );
       expect(requests).toHaveLength(2);
@@ -191,20 +224,30 @@ describe('lookup()', () => {
     );
 
     it('files the found value under the interpreter key', () => {
-      const items = new Map([['ng-schools::GHS Botsa', { udise_code: '13070300802' }]]);
+      const items = new Map([
+        ['ng-schools::GHS Botsa', { udise_code: '13070300802' }],
+      ]);
       const bag = resolveLookupBag(requests, items);
-      expect(bag[lookupKey('ng-schools', 'GHS Botsa', 'udise_code')]).toBe('13070300802');
+      expect(bag[lookupKey('ng-schools', 'GHS Botsa', 'udise_code')]).toBe(
+        '13070300802',
+      );
     });
 
     it('files a miss as null rather than leaving a hole', () => {
       const bag = resolveLookupBag(requests, new Map());
-      expect(bag[lookupKey('ng-schools', 'GHS Botsa', 'udise_code')]).toBeNull();
+      expect(
+        bag[lookupKey('ng-schools', 'GHS Botsa', 'udise_code')],
+      ).toBeNull();
     });
 
     it('treats a structured column value as absent', () => {
-      const items = new Map([['ng-schools::GHS Botsa', { udise_code: { nested: true } }]]);
+      const items = new Map([
+        ['ng-schools::GHS Botsa', { udise_code: { nested: true } }],
+      ]);
       const bag = resolveLookupBag(requests, items);
-      expect(bag[lookupKey('ng-schools', 'GHS Botsa', 'udise_code')]).toBeNull();
+      expect(
+        bag[lookupKey('ng-schools', 'GHS Botsa', 'udise_code')],
+      ).toBeNull();
     });
   });
 
@@ -244,7 +287,12 @@ describe('lookup()', () => {
     });
 
     it('is null — not an error — before a school is picked', () => {
-      const out = runFormRules({ questions, plan, answersById: {}, lookups: {} });
+      const out = runFormRules({
+        questions,
+        plan,
+        answersById: {},
+        lookups: {},
+      });
       expect(out.answersById.q_udise).toBeNull();
       expect(out.errors).toHaveLength(0);
     });

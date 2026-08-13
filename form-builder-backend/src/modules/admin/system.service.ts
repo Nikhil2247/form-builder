@@ -36,11 +36,17 @@ const DEGRADED_MS = 500;
 const PROBE_TIMEOUT_MS = 5_000;
 
 /** Bound every probe, so one hung socket cannot hang the whole page. */
-async function withTimeout<T>(operation: Promise<T>, label: string): Promise<T> {
+async function withTimeout<T>(
+  operation: Promise<T>,
+  label: string,
+): Promise<T> {
   let timer: NodeJS.Timeout;
   const timeout = new Promise<never>((_, reject) => {
     timer = setTimeout(
-      () => reject(new Error(`${label} did not respond within ${PROBE_TIMEOUT_MS}ms`)),
+      () =>
+        reject(
+          new Error(`${label} did not respond within ${PROBE_TIMEOUT_MS}ms`),
+        ),
       PROBE_TIMEOUT_MS,
     );
   });
@@ -51,7 +57,10 @@ async function withTimeout<T>(operation: Promise<T>, label: string): Promise<T> 
   }
 }
 
-async function probe(name: string, run: () => Promise<string | undefined>): Promise<DependencyProbe> {
+async function probe(
+  name: string,
+  run: () => Promise<string | undefined>,
+): Promise<DependencyProbe> {
   const startedAt = Date.now();
   try {
     const detail = await withTimeout(run(), name);
@@ -79,9 +88,11 @@ export class SystemService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly redis: RedisService,
-    @InjectQueue(QUEUE_NAMES.SUBMISSIONS) private readonly submissionsQueue: Queue,
+    @InjectQueue(QUEUE_NAMES.SUBMISSIONS)
+    private readonly submissionsQueue: Queue,
     @InjectQueue(QUEUE_NAMES.WEBHOOKS) private readonly webhooksQueue: Queue,
-    @InjectQueue(QUEUE_NAMES.FILE_VERIFY) private readonly fileVerifyQueue: Queue,
+    @InjectQueue(QUEUE_NAMES.FILE_VERIFY)
+    private readonly fileVerifyQueue: Queue,
   ) {}
 
   /** Live dependency probes, run in parallel. */
@@ -97,11 +108,15 @@ export class SystemService {
         >`SELECT pg_is_in_recovery() AS replica`;
         // Reader and writer share a connection unless DATABASE_REPLICA_URL is
         // set, so say which it is rather than implying a replica exists.
-        return rows[0]?.replica ? 'Streaming replica' : 'Same server as primary';
+        return rows[0]?.replica
+          ? 'Streaming replica'
+          : 'Same server as primary';
       }),
       probe('Redis', async () => {
         const pong = await this.redis.ping();
-        return pong === 'PONG' ? 'Responding to PING' : `Unexpected reply: ${pong}`;
+        return pong === 'PONG'
+          ? 'Responding to PING'
+          : `Unexpected reply: ${pong}`;
       }),
       probe('Object storage', async () => {
         const storageClient = createStorageClient();
@@ -114,8 +129,11 @@ export class SystemService {
           );
           return `S3 bucket "${storageClient.bucket}"`;
         }
-        const exists = await storageClient.client.bucketExists(storageClient.bucket);
-        if (!exists) throw new Error(`Bucket "${storageClient.bucket}" does not exist`);
+        const exists = await storageClient.client.bucketExists(
+          storageClient.bucket,
+        );
+        if (!exists)
+          throw new Error(`Bucket "${storageClient.bucket}" does not exist`);
         return `MinIO bucket "${storageClient.bucket}"`;
       }),
     ]);
@@ -130,7 +148,11 @@ export class SystemService {
         ? 'degraded'
         : 'up';
 
-    return { status: overall, checkedAt: new Date().toISOString(), dependencies };
+    return {
+      status: overall,
+      checkedAt: new Date().toISOString(),
+      dependencies,
+    };
   }
 
   /** Process and runtime facts about the pod serving this request. */
@@ -176,7 +198,13 @@ export class SystemService {
           // comes from isPaused() rather than the counts.
           const [counts, isPaused] = await withTimeout(
             Promise.all([
-              queue.getJobCounts('waiting', 'active', 'completed', 'failed', 'delayed'),
+              queue.getJobCounts(
+                'waiting',
+                'active',
+                'completed',
+                'failed',
+                'delayed',
+              ),
               queue.isPaused(),
             ]),
             `${name} queue`,
@@ -194,7 +222,7 @@ export class SystemService {
         } catch (error) {
           // Queue counts live in Redis. If Redis is down this is the second
           // place it shows, and reporting zeroes would look like an idle queue.
-          this.logger.warn(`Could not read ${name} queue counts`, error as any);
+          this.logger.warn(`Could not read ${name} queue counts`, error);
           return {
             name,
             reachable: false,
@@ -227,7 +255,11 @@ export class SystemService {
                  pg_database_size(current_database()) AS bytes
         `,
         this.prisma.reader.$queryRaw<
-          Array<{ table_name: string; estimated_rows: bigint; total_size: string }>
+          Array<{
+            table_name: string;
+            estimated_rows: bigint;
+            total_size: string;
+          }>
         >`
           SELECT c.relname AS table_name,
                  GREATEST(c.reltuples, 0)::bigint AS estimated_rows,
@@ -238,7 +270,9 @@ export class SystemService {
           ORDER BY pg_total_relation_size(c.oid) DESC
           LIMIT 12
         `,
-        this.prisma.reader.$queryRaw<Array<{ total: bigint; active: bigint; idle: bigint }>>`
+        this.prisma.reader.$queryRaw<
+          Array<{ total: bigint; active: bigint; idle: bigint }>
+        >`
           SELECT count(*)::bigint AS total,
                  count(*) FILTER (WHERE state = 'active')::bigint AS active,
                  count(*) FILTER (WHERE state = 'idle')::bigint AS idle
@@ -265,13 +299,17 @@ export class SystemService {
         })),
       };
     } catch (error) {
-      this.logger.warn('Could not read database statistics', error as any);
+      this.logger.warn('Could not read database statistics', error);
       return {
         reachable: false,
         size: 'unknown',
         sizeBytes: 0,
         connections: { total: 0, active: 0, idle: 0 },
-        tables: [] as Array<{ name: string; estimatedRows: number; size: string }>,
+        tables: [] as Array<{
+          name: string;
+          estimatedRows: number;
+          size: string;
+        }>,
       };
     }
   }
@@ -279,7 +317,10 @@ export class SystemService {
   /** Redis memory, clients and hit rate, parsed out of INFO. */
   async getRedisStats() {
     try {
-      const raw = await withTimeout(this.redis.getClient().info(), 'Redis INFO');
+      const raw = await withTimeout(
+        this.redis.getClient().info(),
+        'Redis INFO',
+      );
       const info = parseRedisInfo(raw);
 
       const hits = Number(info.keyspace_hits ?? 0);
@@ -299,7 +340,7 @@ export class SystemService {
         hitRate: lookups > 0 ? Math.round((hits / lookups) * 1000) / 10 : null,
       };
     } catch (error) {
-      this.logger.warn('Could not read Redis statistics', error as any);
+      this.logger.warn('Could not read Redis statistics', error);
       return {
         reachable: false,
         version: 'unknown',

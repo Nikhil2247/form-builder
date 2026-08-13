@@ -25,12 +25,23 @@ import {
   Duration,
   type DataTableColumn,
 } from '@/components/shared';
-import { SubmissionDetailsDialog } from '@/components/submissions/SubmissionDetailsDialog';
+import { SubmissionDetailPanel } from '@/components/submissions/SubmissionDetailPanel';
+import { SubmissionBulkActions } from '@/components/submissions/SubmissionBulkActions';
 import { Can } from '@/components/auth/RoleGuard';
 import { usePagination } from '@/hooks/use-pagination';
+import { usePermissions } from '@/hooks/use-auth';
 import { useForm } from '@/hooks/use-forms';
 import { useFormSubmissions, useExportSubmissions, type Submission } from '@/hooks/use-submissions';
 import { toFormConfig, type FormQuestion } from '@/types/form';
+
+/**
+ * Virtualization viewport for the grid. Kept a little shorter than the org-wide
+ * list because this page also carries a header, an export control, and the
+ * "showing the first 12 questions" note above the table.
+ */
+const TABLE_VIEWPORT = 'min(34rem, calc(100vh - 24rem))';
+/** px. One line of value plus the respondent line under the timestamp. */
+const ROW_HEIGHT = 53;
 
 /**
  * Spreadsheet view: one column per question.
@@ -47,7 +58,12 @@ export default function FormSubmissionsPage() {
   const formId = params.formId as string;
 
   const pager = usePagination();
-  const [selected, setSelected] = useState<Submission | null>(null);
+  const { atLeast } = usePermissions();
+  const [detailId, setDetailId] = useState<string | null>(null);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+
+  // Mirrors the API's @RequiredRole('EDITOR') on annotate / delete / bulk.
+  const canModerate = atLeast('EDITOR');
 
   const form = useForm(formId);
   const submissions = useFormSubmissions(formId, { page: pager.page, limit: pager.pageSize });
@@ -92,8 +108,14 @@ export default function FormSubmissionsPage() {
       .map<DataTableColumn<Submission>>((question) => ({
         id: question.id,
         header: question.label,
-        headerClassName: 'max-w-56 truncate',
-        className: 'max-w-64',
+        // An explicit width is required now that this table is virtualized:
+        // virtual mode uses `table-layout: fixed`, which sizes columns once
+        // from the header row instead of re-measuring every time a new window
+        // of rows mounts. Without a width the answer columns would each be
+        // given an equal share of whatever is left, which is not what a
+        // question label needs.
+        width: 'w-48',
+        headerClassName: 'truncate',
         cell: (submission) => (
           <span className="block truncate" title={preview(submission.answers?.[question.id])}>
             {preview(submission.answers?.[question.id]) || (
@@ -189,8 +211,25 @@ export default function FormSubmissionsPage() {
         isLoading={submissions.isLoading || submissions.isFetching}
         error={submissions.error}
         onRetry={() => submissions.refetch()}
-        onRowClick={setSelected}
+        onRowClick={(submission) => setDetailId(submission.id)}
         pagination={pager.paginationProps(total, 'responses')}
+        selection={
+          canModerate
+            ? {
+                selectedIds,
+                onChange: setSelectedIds,
+                selectAllLabel: 'Select all responses on this page',
+                rowLabel: (submission) =>
+                  `Select response from ${submission.respondent?.email ?? 'anonymous respondent'}`,
+              }
+            : undefined
+        }
+        virtual={{ height: TABLE_VIEWPORT, estimateRowHeight: ROW_HEIGHT }}
+        toolbar={
+          selectedIds.length > 0 ? (
+            <SubmissionBulkActions selectedIds={selectedIds} onClear={() => setSelectedIds([])} />
+          ) : undefined
+        }
         empty={
           <EmptyState
             variant="inline"
@@ -206,11 +245,12 @@ export default function FormSubmissionsPage() {
         }
       />
 
-      <SubmissionDetailsDialog
-        submission={selected}
-        questions={questions}
-        open={!!selected}
-        onOpenChange={(open) => !open && setSelected(null)}
+      <SubmissionDetailPanel
+        submissionId={detailId}
+        open={!!detailId}
+        onOpenChange={(open) => !open && setDetailId(null)}
+        canModerate={canModerate}
+        onDeleted={(id) => setSelectedIds((ids) => ids.filter((value) => value !== id))}
       />
     </PageShell>
   );

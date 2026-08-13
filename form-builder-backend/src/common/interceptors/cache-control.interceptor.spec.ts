@@ -1,4 +1,10 @@
-import { Controller, Get, Header, INestApplication, NotFoundException } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Header,
+  INestApplication,
+  NotFoundException,
+} from '@nestjs/common';
 import { APP_INTERCEPTOR } from '@nestjs/core';
 import { Test } from '@nestjs/testing';
 import request from 'supertest';
@@ -39,7 +45,9 @@ describe('CacheControlInterceptor', () => {
   beforeAll(async () => {
     const moduleRef = await Test.createTestingModule({
       controllers: [ProbeController],
-      providers: [{ provide: APP_INTERCEPTOR, useClass: CacheControlInterceptor }],
+      providers: [
+        { provide: APP_INTERCEPTOR, useClass: CacheControlInterceptor },
+      ],
     }).compile();
 
     app = moduleRef.createNestApplication();
@@ -51,7 +59,9 @@ describe('CacheControlInterceptor', () => {
   });
 
   it('defaults an undeclared route to no-store', async () => {
-    const res = await request(app.getHttpServer()).get('/t/private').expect(200);
+    const res = await request(app.getHttpServer())
+      .get('/t/private')
+      .expect(200);
     expect(res.headers['cache-control']).toBe('no-store');
   });
 

@@ -1,4 +1,9 @@
-import { Injectable, CanActivate, ExecutionContext, ForbiddenException } from '@nestjs/common';
+import {
+  Injectable,
+  CanActivate,
+  ExecutionContext,
+  ForbiddenException,
+} from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { AppLogger } from '../logger/app-logger.service';
 import { ROLES_KEY } from '../decorators/roles.decorator';
@@ -38,10 +43,10 @@ export class RoleGuard implements CanActivate {
 
   canActivate(context: ExecutionContext): boolean {
     // Get the required role from the @RequiredRole() decorator
-    const requiredRole = this.reflector.getAllAndOverride<string | undefined>(ROLES_KEY, [
-      context.getHandler(),
-      context.getClass(),
-    ]);
+    const requiredRole = this.reflector.getAllAndOverride<string | undefined>(
+      ROLES_KEY,
+      [context.getHandler(), context.getClass()],
+    );
 
     // No role requirement specified — allow any authenticated org member
     if (!requiredRole) {
@@ -58,7 +63,9 @@ export class RoleGuard implements CanActivate {
     }
 
     if (!membership) {
-      this.logger.warn('RoleGuard: No org membership found on request. Was OrgMemberGuard used?');
+      this.logger.warn(
+        'RoleGuard: No org membership found on request. Was OrgMemberGuard used?',
+      );
       throw new ForbiddenException('Organization membership required.');
     }
 

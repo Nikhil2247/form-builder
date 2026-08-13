@@ -9,7 +9,10 @@ import { isWorkerMode } from '../../config/runtime.config';
 @Module({
   imports: [BullModule.registerQueue({ name: QUEUE_NAMES.FILE_VERIFY })],
   controllers: [StorageController],
-  providers: [StorageService, ...(isWorkerMode() ? [FileVerifierProcessor] : [])],
+  providers: [
+    StorageService,
+    ...(isWorkerMode() ? [FileVerifierProcessor] : []),
+  ],
   exports: [StorageService],
 })
 export class StorageModule {}

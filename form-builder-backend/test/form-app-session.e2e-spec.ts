@@ -69,7 +69,9 @@ describe('Form app sessions (e2e)', () => {
     // Mirrors main.ts. Without the prefix every request 404s and the failure
     // looks like a missing app rather than a missing bootstrap step.
     app.setGlobalPrefix('v1');
-    app.useGlobalPipes(new ValidationPipe({ transform: true, whitelist: true }));
+    app.useGlobalPipes(
+      new ValidationPipe({ transform: true, whitelist: true }),
+    );
     await app.init();
 
     prisma = app.get(PrismaService);
@@ -84,16 +86,23 @@ describe('Form app sessions (e2e)', () => {
     if (prisma && openedSessionIds.length > 0) {
       const submissionIds = (
         await prisma.reader.formAppSessionEntry.findMany({
-          where: { sessionId: { in: openedSessionIds }, submissionId: { not: null } },
+          where: {
+            sessionId: { in: openedSessionIds },
+            submissionId: { not: null },
+          },
           select: { submissionId: true },
         })
       ).map((entry) => entry.submissionId!);
 
       // Sessions first: an entry's submission is referenced by the entry, and
       // deleting the submission out from under it would violate that link.
-      await prisma.writer.formAppSession.deleteMany({ where: { id: { in: openedSessionIds } } });
+      await prisma.writer.formAppSession.deleteMany({
+        where: { id: { in: openedSessionIds } },
+      });
       if (submissionIds.length > 0) {
-        await prisma.writer.formSubmission.deleteMany({ where: { id: { in: submissionIds } } });
+        await prisma.writer.formSubmission.deleteMany({
+          where: { id: { in: submissionIds } },
+        });
       }
       await prisma.writer.subject.deleteMany({
         where: { displayName: { startsWith: 'E2E Test Respondent' } },
@@ -124,7 +133,9 @@ describe('Form app sessions (e2e)', () => {
     answers: Record<string, unknown>,
   ) {
     return http()
-      .put(`/v1/public-apps/${PUBLIC_SLUG}/sessions/${sessionId}/entries/${stepKey}/${index}`)
+      .put(
+        `/v1/public-apps/${PUBLIC_SLUG}/sessions/${sessionId}/entries/${stepKey}/${index}`,
+      )
       .send({ answers, fingerprint });
   }
 
@@ -158,7 +169,8 @@ describe('Form app sessions (e2e)', () => {
 
     // The checklist is a matrix: one column choice per row, keyed by row label.
     const checklistQuestion = visits.form.questions.find(
-      (question) => (question as { key?: string }).key === 'monitoring_checklist',
+      (question) =>
+        (question as { key?: string }).key === 'monitoring_checklist',
     ) as { matrixRows?: string[] } | undefined;
     const checklist = Object.fromEntries(
       (checklistQuestion?.matrixRows ?? []).map((row) => [row, 'Yes']),
@@ -185,7 +197,9 @@ describe('Form app sessions (e2e)', () => {
   it('the seeded app is reachable at its public slug', async () => {
     if (!appId) return pending();
 
-    const response = await http().get(`/v1/public-apps/${PUBLIC_SLUG}`).expect(200);
+    const response = await http()
+      .get(`/v1/public-apps/${PUBLIC_SLUG}`)
+      .expect(200);
     const body = response.body?.data ?? response.body;
 
     expect(body.publicSlug).toBe(PUBLIC_SLUG);
@@ -215,14 +229,20 @@ describe('Form app sessions (e2e)', () => {
     const { respondentAnswers } = fixtures(session.steps);
 
     // Respondent block only: school_visits has a minimum of one entry.
-    await stage(session.id, fingerprint, 'respondent_details', 0, respondentAnswers(
-      'E2E Test Respondent Incomplete',
-    )).expect(200);
+    await stage(
+      session.id,
+      fingerprint,
+      'respondent_details',
+      0,
+      respondentAnswers('E2E Test Respondent Incomplete'),
+    ).expect(200);
 
     const response = await submit(session.id, fingerprint).expect(422);
     const issues = response.body?.error?.issues ?? response.body?.issues ?? [];
 
-    expect(issues.some((issue: any) => issue.stepKey === 'school_visits')).toBe(true);
+    expect(issues.some((issue: any) => issue.stepKey === 'school_visits')).toBe(
+      true,
+    );
 
     const created = await prisma.reader.formAppSessionEntry.count({
       where: { sessionId: session.id, submissionId: { not: null } },
@@ -238,18 +258,36 @@ describe('Form app sessions (e2e)', () => {
     const { respondentAnswers, visitAnswers } = fixtures(session.steps);
     const school = 'NL-kohima-kohima-sadar-government-high-school-kohima';
 
-    await stage(session.id, fingerprint, 'respondent_details', 0, respondentAnswers(
-      'E2E Test Respondent Duplicate',
-    )).expect(200);
-    await stage(session.id, fingerprint, 'school_visits', 0, visitAnswers(school)).expect(200);
-    await stage(session.id, fingerprint, 'school_visits', 1, visitAnswers(school)).expect(200);
+    await stage(
+      session.id,
+      fingerprint,
+      'respondent_details',
+      0,
+      respondentAnswers('E2E Test Respondent Duplicate'),
+    ).expect(200);
+    await stage(
+      session.id,
+      fingerprint,
+      'school_visits',
+      0,
+      visitAnswers(school),
+    ).expect(200);
+    await stage(
+      session.id,
+      fingerprint,
+      'school_visits',
+      1,
+      visitAnswers(school),
+    ).expect(200);
 
     const response = await submit(session.id, fingerprint).expect(422);
     const issues = response.body?.error?.issues ?? response.body?.issues ?? [];
 
     expect(
       issues.some(
-        (issue: any) => issue.stepKey === 'school_visits' && /duplicates entry/i.test(issue.message),
+        (issue: any) =>
+          issue.stepKey === 'school_visits' &&
+          /duplicates entry/i.test(issue.message),
       ),
     ).toBe(true);
   }, 30_000);
@@ -261,9 +299,13 @@ describe('Form app sessions (e2e)', () => {
     const session = await openSession(fingerprint);
     const { respondentAnswers, visitAnswers } = fixtures(session.steps);
 
-    await stage(session.id, fingerprint, 'respondent_details', 0, respondentAnswers(
-      'E2E Test Respondent Complete',
-    )).expect(200);
+    await stage(
+      session.id,
+      fingerprint,
+      'respondent_details',
+      0,
+      respondentAnswers('E2E Test Respondent Complete'),
+    ).expect(200);
     await stage(
       session.id,
       fingerprint,
@@ -304,7 +346,13 @@ describe('Form app sessions (e2e)', () => {
     expect(attached).toBe(3);
 
     // A submitted session is closed: staging into it must not be possible.
-    await stage(session.id, fingerprint, 'school_visits', 2, visitAnswers('anything')).expect(403);
+    await stage(
+      session.id,
+      fingerprint,
+      'school_visits',
+      2,
+      visitAnswers('anything'),
+    ).expect(403);
   }, 60_000);
 });
 

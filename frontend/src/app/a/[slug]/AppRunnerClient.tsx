@@ -1,6 +1,7 @@
 'use client';
 
 import React from 'react';
+import { useSearchParams } from 'next/navigation';
 import { CalendarDays, LogIn } from 'lucide-react';
 
 import { AppRunner, type AppSummary } from '@/components/apps/AppRunner';
@@ -24,6 +25,48 @@ import { formFontVariables } from '../../f/[id]/fonts';
  * same everywhere and there is no second implementation to drift.
  */
 export function AppRunnerClient({ slug, app }: { slug: string; app: AppSummary & { theme?: FormTheme } }) {
+  return (
+    // useSearchParams needs a boundary. The fallback is the same shell without
+    // a runner rather than a blank page, so the app's identity is on screen
+    // while the session opens.
+    <React.Suspense fallback={<AppShell slug={slug} app={app} />}>
+      <AppShellWithRunner slug={slug} app={app} />
+    </React.Suspense>
+  );
+}
+
+function AppShellWithRunner({
+  slug,
+  app,
+}: {
+  slug: string;
+  app: AppSummary & { theme?: FormTheme };
+}) {
+  const searchParams = useSearchParams();
+
+  // Set when the respondent arrived from a record's "Add entry" menu. The
+  // server re-checks both — a stale link must not be able to open a second
+  // registration for somebody already registered — so these are a request, not
+  // an instruction.
+  const subjectId = searchParams.get('subject') ?? undefined;
+  const step = searchParams.get('step');
+
+  return (
+    <AppShell slug={slug} app={app} subjectId={subjectId} stepKeys={step ? [step] : undefined} />
+  );
+}
+
+function AppShell({
+  slug,
+  app,
+  subjectId,
+  stepKeys,
+}: {
+  slug: string;
+  app: AppSummary & { theme?: FormTheme };
+  subjectId?: string;
+  stepKeys?: string[];
+}) {
   const theme: FormTheme = (app.theme ?? {}) as FormTheme;
   const branding = app.branding ?? {};
 
@@ -96,7 +139,13 @@ export function AppRunnerClient({ slug, app }: { slug: string; app: AppSummary &
             </p>
           </div>
         ) : (
-          <AppRunner publicSlug={slug} app={app} appearance={appearance} />
+          <AppRunner
+            publicSlug={slug}
+            app={app}
+            appearance={appearance}
+            subjectId={subjectId}
+            stepKeys={stepKeys}
+          />
         )}
 
         <footer className="mt-10 border-t border-border pt-5 text-center">

@@ -1,5 +1,11 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
-import { createCipheriv, createDecipheriv, randomBytes, scryptSync, timingSafeEqual } from 'crypto';
+import {
+  createCipheriv,
+  createDecipheriv,
+  randomBytes,
+  scryptSync,
+  timingSafeEqual,
+} from 'crypto';
 
 /**
  * CryptoService — application-level encryption for secrets at rest.
@@ -40,7 +46,11 @@ export class CryptoService implements OnModuleInit {
         'ENCRYPTION_KEY not set — deriving a development key from JWT_SECRET. ' +
           'Set ENCRYPTION_KEY before deploying; encrypted values are NOT portable across secrets.',
       );
-      this.key = scryptSync(process.env.JWT_SECRET ?? 'dev-only-fallback', 'formbuilder-enc', 32);
+      this.key = scryptSync(
+        process.env.JWT_SECRET ?? 'dev-only-fallback',
+        'formbuilder-enc',
+        32,
+      );
       return;
     }
 
@@ -60,7 +70,10 @@ export class CryptoService implements OnModuleInit {
 
     const iv = randomBytes(12);
     const cipher = createCipheriv('aes-256-gcm', this.key, iv);
-    const ciphertext = Buffer.concat([cipher.update(plaintext, 'utf8'), cipher.final()]);
+    const ciphertext = Buffer.concat([
+      cipher.update(plaintext, 'utf8'),
+      cipher.final(),
+    ]);
     const tag = cipher.getAuthTag();
 
     return [
@@ -99,8 +112,14 @@ export class CryptoService implements OnModuleInit {
         decipher.final(),
       ]).toString('utf8');
     } catch (err) {
-      this.logger.error('Failed to decrypt value — wrong ENCRYPTION_KEY or tampered ciphertext.');
-      throw new Error('Unable to decrypt stored secret.');
+      this.logger.error(
+        'Failed to decrypt value — wrong ENCRYPTION_KEY or tampered ciphertext.',
+      );
+      // `cause` carries the underlying crypto error for the logs without
+      // putting it in the message: the thrown text reaches callers, and an
+      // OpenSSL error string can distinguish "wrong key" from "corrupt data",
+      // which is a padding-oracle-shaped hint to anyone who can trigger it.
+      throw new Error('Unable to decrypt stored secret.', { cause: err });
     }
   }
 

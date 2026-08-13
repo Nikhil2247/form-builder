@@ -51,12 +51,36 @@ export interface AppSessionStep {
   entries: Array<{ index: number; answers: Record<string, unknown> }>;
 }
 
+/** The record a follow-up session is recording against. */
+export interface AppSessionSubject {
+  id: string;
+  displayName: string;
+  externalId: string | null;
+  attributes: Record<string, unknown>;
+}
+
 export interface AppSession {
   id: string;
   appId: string;
   status: 'DRAFT' | 'SUBMITTED' | 'ABANDONED';
+  /**
+   * REGISTER creates a record; FOLLOW_UP adds to one that already exists.
+   * Optional so an API older than follow-ups is read as REGISTER rather than
+   * as a session with no mode at all.
+   */
+  mode?: 'REGISTER' | 'FOLLOW_UP';
   period: { id: string; label: string; startsAt: string; endsAt: string } | null;
+  subjectId: string | null;
+  subject: AppSessionSubject | null;
   steps: AppSessionStep[];
+}
+
+/** How a session is opened. Absent fields mean "a plain new registration". */
+export interface OpenSessionOptions {
+  /** Record this session attaches to. Requires a signed-in caller. */
+  subjectId?: string;
+  /** Narrow the session to these steps, so "add one visit" is one form. */
+  stepKeys?: string[];
 }
 
 export interface SessionIssue {
@@ -127,7 +151,7 @@ async function call<T>(path: string, init?: RequestInit): Promise<T> {
   return (body?.data ?? body) as T;
 }
 
-export function useAppSession(publicSlug: string) {
+export function useAppSession(publicSlug: string, options: OpenSessionOptions = {}) {
   const [session, setSession] = useState<AppSession | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [isReady, setIsReady] = useState(false);
@@ -158,13 +182,25 @@ export function useAppSession(publicSlug: string) {
   const entryKey = (stepKey: string, index: number) => `${stepKey}#${index}`;
 
   // ── Open or resume ────────────────────────────────────────────────────────
+  //
+  // `subjectId` and `stepKeys` are read out of `options` into locals so the
+  // effect can depend on the two values rather than on the object. An inline
+  // `{}` default would be a fresh object every render and would reopen the
+  // session on each one.
+  const subjectId = options.subjectId;
+  const stepKeysParam = options.stepKeys?.join(',');
+
   useEffect(() => {
     let cancelled = false;
     fp.current = fingerprint();
 
     call<AppSession>(`/public-apps/${encodeURIComponent(publicSlug)}/sessions`, {
       method: 'POST',
-      body: JSON.stringify({ fingerprint: fp.current }),
+      body: JSON.stringify({
+        fingerprint: fp.current,
+        subjectId,
+        stepKeys: stepKeysParam ? stepKeysParam.split(',') : undefined,
+      }),
     })
       .then((opened) => {
         if (cancelled) return;
@@ -189,7 +225,7 @@ export function useAppSession(publicSlug: string) {
     return () => {
       cancelled = true;
     };
-  }, [publicSlug, applyDrafts]);
+  }, [publicSlug, applyDrafts, subjectId, stepKeysParam]);
 
   // Clear pending saves on unmount so a debounce cannot fire into a dead component.
   useEffect(() => {

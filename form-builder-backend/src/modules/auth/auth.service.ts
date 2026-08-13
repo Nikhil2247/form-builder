@@ -1,4 +1,9 @@
-import { Injectable, Logger, UnauthorizedException, ConflictException } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  UnauthorizedException,
+  ConflictException,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import { PrismaService } from '../../common/prisma/prisma.service';
@@ -10,8 +15,13 @@ import * as crypto from 'crypto';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
 import { MailService } from '../mail/mail.service';
+import { AuditService } from '../audit/audit.service';
 import { TotpService } from '../../common/crypto/totp.service';
 import { CryptoService } from '../../common/crypto/crypto.service';
+import {
+  decideRefreshAction,
+  interpretRotationClaim,
+} from './refresh-token-family';
 import * as qrcode from 'qrcode';
 
 /**
@@ -27,6 +37,93 @@ export function frontendUrl(): string {
   );
 }
 
+/**
+ * Where a token exchange came from.
+ *
+ * Carried purely so a security event can be attributed to something. A token
+ * reuse entry that says only "a refresh token was replayed" tells an incident
+ * responder nothing they can act on; the same entry with an address and a user
+ * agent tells them whether the replay came from the victim's own browser or
+ * from somewhere else entirely, which is the whole question.
+ *
+ * Never an authorization input — both fields are attacker-controlled.
+ */
+export interface SessionContext {
+  ipAddress?: string;
+  userAgent?: string;
+}
+
+/** What every successful authentication hands back. */
+export interface IssuedTokenPair {
+  accessToken: string;
+  refreshToken: string;
+  /** When the whole session ends. The controller sizes the cookie to it. */
+  sessionExpiresAt: Date;
+  user: {
+    id: string;
+    email: string;
+    systemRole: string;
+    organizationId: string | null;
+    orgRole: string | null;
+  };
+}
+
+/**
+ * Outcome of the rotation transaction. A discriminated union rather than a
+ * thrown exception because two of the three arms must COMMIT before they fail
+ * the request: the predecessor has already been revoked at that point, and
+ * throwing from inside `$transaction` would roll that revocation back and hand
+ * a spent token back its validity.
+ */
+type RotationOutcome =
+  | { outcome: 'rotated'; tokens: IssuedTokenPair }
+  | { outcome: 'replay' }
+  | { outcome: 'user-invalid' };
+
+/** Column widths from the schema; values here are client-supplied. */
+const IP_ADDRESS_MAX = 45;
+const USER_AGENT_MAX = 512;
+
+/**
+ * The user fields needed to mint a token pair.
+ *
+ * Declared alongside its own interface because it is read through a transaction
+ * client, and this codebase types those `any` (Prisma's `$transaction` callback
+ * parameter carries no useful type through the pagination extension). Without
+ * the annotation, `resolveActiveOrganization` infers its generic from `any` and
+ * degrades to the bare `MembershipLike` constraint — which has no `role`, so the
+ * org role silently stops reaching the token.
+ */
+interface TokenSubject {
+  id: string;
+  email: string;
+  systemRole: string;
+  deletedAt: Date | null;
+  lastActiveOrganizationId: string | null;
+  memberships: Array<{
+    organizationId: string;
+    role: string;
+    joinedAt: Date;
+    organization: { isActive: boolean; suspendedAt: Date | null };
+  }>;
+}
+
+const tokenSubjectSelect = {
+  id: true,
+  email: true,
+  systemRole: true,
+  deletedAt: true,
+  lastActiveOrganizationId: true,
+  memberships: {
+    select: {
+      organizationId: true,
+      role: true,
+      joinedAt: true,
+      organization: { select: { isActive: true, suspendedAt: true } },
+    },
+  },
+} as const;
+
 @Injectable()
 export class AuthService {
   private readonly logger = new Logger(AuthService.name);
@@ -39,6 +136,8 @@ export class AuthService {
     private crypto: CryptoService,
     private featureFlags: FeatureFlagsService,
     private config: ConfigService,
+    // AuditModule is @Global, so no import is needed in AuthModule.
+    private audit: AuditService,
   ) {}
 
   private async hashPassword(password: string): Promise<string> {
@@ -50,9 +149,15 @@ export class AuthService {
     });
   }
 
-  private generateRefreshToken(): { plainTextToken: string; hashedToken: string } {
+  private generateRefreshToken(): {
+    plainTextToken: string;
+    hashedToken: string;
+  } {
     const plainTextToken = crypto.randomBytes(32).toString('hex');
-    const hashedToken = crypto.createHash('sha256').update(plainTextToken).digest('hex');
+    const hashedToken = crypto
+      .createHash('sha256')
+      .update(plainTextToken)
+      .digest('hex');
     return { plainTextToken, hashedToken };
   }
 
@@ -71,7 +176,7 @@ export class AuthService {
     return `${baseSlug}-${suffix}`;
   }
 
-  async register(dto: RegisterDto) {
+  async register(dto: RegisterDto, context: SessionContext = {}) {
     const existing = await this.prisma.reader.user.findUnique({
       where: { email: dto.email.toLowerCase() },
     });
@@ -82,14 +187,15 @@ export class AuthService {
     const passwordHash = await this.hashPassword(dto.password);
 
     // Check if there's a pending invitation for this email
-    const pendingInvitation = await this.prisma.reader.organizationInvitation.findFirst({
-      where: {
-        email: dto.email.toLowerCase(),
-        status: 'PENDING',
-        expiresAt: { gt: new Date() },
-      },
-      orderBy: { createdAt: 'desc' },
-    });
+    const pendingInvitation =
+      await this.prisma.reader.organizationInvitation.findFirst({
+        where: {
+          email: dto.email.toLowerCase(),
+          status: 'PENDING',
+          expiresAt: { gt: new Date() },
+        },
+        orderBy: { createdAt: 'desc' },
+      });
 
     // Use a transaction to atomically create user + org + membership
     const result = await this.prisma.writer.$transaction(async (tx: any) => {
@@ -127,7 +233,8 @@ export class AuthService {
         orgRole = pendingInvitation.role;
       } else {
         // No invitation — create a new organization for this user
-        const orgName = dto.organizationName || `${dto.firstName}'s Organization`;
+        const orgName =
+          dto.organizationName || `${dto.firstName}'s Organization`;
         const org = await tx.organization.create({
           data: {
             name: orgName,
@@ -153,7 +260,10 @@ export class AuthService {
 
     // ── Generate and send email verification token ──
     const rawToken = crypto.randomBytes(32).toString('hex');
-    const tokenHash = crypto.createHash('sha256').update(rawToken).digest('hex');
+    const tokenHash = crypto
+      .createHash('sha256')
+      .update(rawToken)
+      .digest('hex');
     const expiresAt = new Date();
     expiresAt.setHours(expiresAt.getHours() + 24); // 24 hour expiry
 
@@ -168,24 +278,34 @@ export class AuthService {
     const verifyUrl = `${frontendUrl()}/verify-email?token=${rawToken}`;
     // Fire and forget — a mail outage must not block account creation.
     this.mailService
-      .sendVerificationEmail(result.user.email, verifyUrl, result.user.firstName)
-      .catch((err) => this.logger.error('Failed to send verification email', err));
+      .sendVerificationEmail(
+        result.user.email,
+        verifyUrl,
+        result.user.firstName,
+      )
+      .catch((err) =>
+        this.logger.error('Failed to send verification email', err),
+      );
 
+    // No familyId: this is a root token, so it founds its own family.
     return this.generateTokens(
       result.user.id,
       result.user.email,
       result.user.systemRole,
       result.organizationId,
       result.orgRole,
+      undefined,
+      { context },
     );
   }
 
   async verifyEmail(token: string) {
     const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
 
-    const verifyToken = await this.prisma.reader.emailVerificationToken.findUnique({
-      where: { tokenHash },
-    });
+    const verifyToken =
+      await this.prisma.reader.emailVerificationToken.findUnique({
+        where: { tokenHash },
+      });
 
     if (!verifyToken || verifyToken.expiresAt < new Date()) {
       throw new UnauthorizedException('Invalid or expired verification token');
@@ -207,7 +327,7 @@ export class AuthService {
     return { message: 'Email has been verified successfully' };
   }
 
-  async login(dto: LoginDto) {
+  async login(dto: LoginDto, context: SessionContext = {}) {
     const user = await this.prisma.reader.user.findUnique({
       where: { email: dto.email.toLowerCase() },
       // Explicit projection. `include` pulled every user column — including
@@ -234,7 +354,7 @@ export class AuthService {
       throw new UnauthorizedException('Invalid credentials');
     }
 
-    if (!await argon2.verify(user.passwordHash, dto.password)) {
+    if (!(await argon2.verify(user.passwordHash, dto.password))) {
       throw new UnauthorizedException('Invalid credentials');
     }
 
@@ -246,32 +366,43 @@ export class AuthService {
     // Only refuse the login when every org is suspended — a user with one
     // suspended workspace and one healthy one still has somewhere to land.
     if (allSuspended) {
-      throw new UnauthorizedException('Your organization has been suspended. Contact support.');
+      throw new UnauthorizedException(
+        'Your organization has been suspended. Contact support.',
+      );
     }
 
     if (user.mfaEnabled) {
       // Issue a temporary token for MFA verification
       const mfaToken = this.jwtService.sign(
         { sub: user.id, email: user.email, isMfaPending: true },
-        { expiresIn: '5m' }
+        { expiresIn: '5m' },
       );
       return { mfaRequired: true, mfaToken };
     }
 
+    // Root token — a fresh sign-in starts a fresh family.
     return this.generateTokens(
       user.id,
       user.email,
       user.systemRole,
       membership?.organizationId,
       membership?.role,
+      undefined,
+      { context },
     );
   }
 
-  async verifyMfaLogin(mfaToken: string, code: string) {
+  async verifyMfaLogin(
+    mfaToken: string,
+    code: string,
+    context: SessionContext = {},
+  ) {
     let payload: any;
     try {
       payload = this.jwtService.verify(mfaToken);
-    } catch (e) {
+    } catch {
+      // The verify failure is deliberately not surfaced or attached: expired,
+      // malformed and wrong-signature must be indistinguishable to the caller.
       throw new UnauthorizedException('Invalid or expired MFA token');
     }
 
@@ -313,77 +444,236 @@ export class AuthService {
       user.memberships,
       user.lastActiveOrganizationId,
     );
+
+    // Root token — completing an MFA challenge is the second half of a sign-in,
+    // not a continuation of anything, so it founds its own family too.
     return this.generateTokens(
       user.id,
       user.email,
       user.systemRole,
       membership?.organizationId,
       membership?.role,
+      undefined,
+      { context },
     );
   }
 
-  async refresh(oldRefreshToken: string) {
-    const hashedToken = crypto.createHash('sha256').update(oldRefreshToken).digest('hex');
+  /**
+   * Exchange a refresh token for its successor, with replay detection.
+   * ═════════════════════════════════════════════════════════════════════════
+   *
+   * The shape of this method is dictated by two failure modes it has to close.
+   *
+   * ── 1. A replayed token is not an expired token ───────────────────────────
+   * The old implementation rejected "revoked" and "expired" with the same
+   * generic 401, so a stolen-and-already-spent token was indistinguishable from
+   * a session that had simply run out — see `refresh-token-family.ts` for the
+   * full threat model. `decideRefreshAction` now separates them, and a replay
+   * takes the whole family down.
+   *
+   * ── 2. Two concurrent refreshes must not both succeed ─────────────────────
+   * Read-then-write is not enough: two requests carrying the same valid token
+   * both read `revokedAt: null`, both revoke, and both mint a successor,
+   * leaving two live tokens in one family. The revoke is therefore a
+   * conditional UPDATE (`updateMany` with `revokedAt: null` in the WHERE),
+   * which Postgres resolves as a compare-and-swap — exactly one caller can see
+   * one row change. See `interpretRotationClaim`.
+   *
+   * The claim and the successor's INSERT share one transaction so they commit
+   * or fail together; without that, a crash between them would revoke a token
+   * and issue nothing, silently ending a session.
+   */
+  async refresh(
+    oldRefreshToken: string,
+    context: SessionContext = {},
+  ): Promise<IssuedTokenPair> {
+    const hashedToken = crypto
+      .createHash('sha256')
+      .update(oldRefreshToken)
+      .digest('hex');
 
-    const tokenRecord = await this.prisma.reader.refreshToken.findUnique({
+    // Deliberately the WRITER, not the reader. Every refresh reads a row that
+    // was written seconds earlier by the previous refresh, so a replica behind
+    // by even a moment reports the successor as missing and 401s a session that
+    // is perfectly valid. (The stale-replica read in the other direction — a
+    // spent token still showing as live — is harmless here, because the
+    // conditional UPDATE below re-checks on the primary. The missing-row
+    // direction has no such backstop.)
+    const tokenRecord = await this.prisma.writer.refreshToken.findUnique({
       where: { tokenHash: hashedToken },
-    });
-
-    if (!tokenRecord || tokenRecord.revokedAt || tokenRecord.expiresAt < new Date()) {
-      throw new UnauthorizedException('Invalid or expired refresh token');
-    }
-
-    // Revoke old token
-    await this.prisma.writer.refreshToken.update({
-      where: { id: tokenRecord.id },
-      data: { revokedAt: new Date() },
-    });
-
-    const user = await this.prisma.reader.user.findUnique({
-      where: { id: tokenRecord.userId },
-      include: {
-        memberships: {
-          select: {
-            organizationId: true,
-            role: true,
-            joinedAt: true,
-            organization: { select: { isActive: true, suspendedAt: true } },
-          },
-        },
+      select: {
+        id: true,
+        userId: true,
+        familyId: true,
+        expiresAt: true,
+        revokedAt: true,
+        revokedReason: true,
       },
     });
 
-    if (!user || user.deletedAt) {
+    const decision = decideRefreshAction(tokenRecord);
+
+    if (decision.action === 'reject') {
+      // One message for both reasons: telling the caller WHICH token they hold
+      // would let anyone probe the token table by trying values and reading the
+      // difference between "no such token" and "that one is finished".
+      throw new UnauthorizedException('Invalid or expired refresh token');
+    }
+
+    // `decision` is no longer 'reject', so the row exists.
+    const token = tokenRecord!;
+
+    if (decision.action === 'burn-family') {
+      await this.burnTokenFamily(token, context);
+      throw new UnauthorizedException(
+        'This session was ended for security reasons. Please sign in again.',
+      );
+    }
+
+    const result: RotationOutcome = await this.prisma.writer.$transaction(
+      async (tx: any): Promise<RotationOutcome> => {
+        // The compare-and-swap. `revokedAt: null` in the WHERE is the whole
+        // mechanism — drop it and this becomes a plain update that every
+        // concurrent caller wins.
+        const claim = await tx.refreshToken.updateMany({
+          where: { id: token.id, revokedAt: null },
+          data: { revokedAt: new Date(), revokedReason: 'ROTATED' },
+        });
+
+        if (interpretRotationClaim(claim.count).action === 'burn-family') {
+          // Lost the race. Return rather than throw: the family burn has to run
+          // on its own after this transaction settles, not inside it.
+          return { outcome: 'replay' };
+        }
+
+        const user: TokenSubject | null = await tx.user.findUnique({
+          where: { id: token.userId },
+          select: tokenSubjectSelect,
+        });
+
+        if (!user || user.deletedAt) {
+          // Commit the revocation anyway. A deleted user's token has no business
+          // staying live, and rolling back here would hand it back its validity.
+          return { outcome: 'user-invalid' };
+        }
+
+        const { active: membership } = resolveActiveOrganization(
+          user.memberships,
+          user.lastActiveOrganizationId,
+        );
+
+        // The SAME session, continued — not a new one. `token.expiresAt` is
+        // the deadline set when this user signed in, and passing it through is
+        // what stops an exchange from extending anything: the replacement pair
+        // expires at the same instant the one it replaced would have.
+        //
+        // `familyId` is inherited for the same reason: the successor belongs to
+        // the login that started the chain, so a replay anywhere in it burns
+        // every descendant including this one.
+        const tokens = await this.generateTokens(
+          user.id,
+          user.email,
+          user.systemRole,
+          membership?.organizationId,
+          membership?.role,
+          token.expiresAt,
+          { familyId: token.familyId, client: tx, context },
+        );
+
+        return { outcome: 'rotated', tokens };
+      },
+    );
+
+    if (result.outcome === 'replay') {
+      await this.burnTokenFamily(token, context);
+      throw new UnauthorizedException(
+        'This session was ended for security reasons. Please sign in again.',
+      );
+    }
+
+    if (result.outcome === 'user-invalid') {
       throw new UnauthorizedException('User not found');
     }
 
-    const { active: membership } = resolveActiveOrganization(
-      user.memberships,
-      user.lastActiveOrganizationId,
+    return result.tokens;
+  }
+
+  /**
+   * Cascade-revoke every live token descended from one login, because one of
+   * them was replayed.
+   *
+   * A single UPDATE, so it needs no transaction of its own: the set of rows it
+   * touches is decided by the database at execution time, and a concurrent
+   * rotation either commits before it (and is then revoked by it) or blocks on
+   * the row lock and finds its own predicate no longer satisfiable. Either
+   * ordering ends with no live token in the family, which is the only property
+   * that matters.
+   *
+   * Frequently updates ZERO rows — a family burned by logout or by an admin is
+   * already fully revoked, and a stale tab replaying its dead cookie lands
+   * here. That is why `previousReason` goes into the audit entry: it separates
+   * "a credential leaked" from "a browser retried something harmless", which
+   * anyone triaging these needs and cannot otherwise recover.
+   */
+  private async burnTokenFamily(
+    token: {
+      id: string;
+      userId: string;
+      familyId: string;
+      revokedReason: string | null;
+    },
+    context: SessionContext,
+  ): Promise<void> {
+    const { count } = await this.prisma.writer.refreshToken.updateMany({
+      where: { familyId: token.familyId, revokedAt: null },
+      data: { revokedAt: new Date(), revokedReason: 'REUSE_DETECTED' },
+    });
+
+    this.logger.warn(
+      `Refresh token reuse detected for user ${token.userId} — revoked ${count} live token(s) in family ${token.familyId}.`,
     );
 
-    // The SAME session, continued — not a new one. `tokenRecord.expiresAt` is
-    // the deadline set when this user signed in, and passing it through is what
-    // stops an exchange from extending anything: the replacement pair expires
-    // at the same instant the one it replaced would have.
-    return this.generateTokens(
-      user.id,
-      user.email,
-      user.systemRole,
-      membership?.organizationId,
-      membership?.role,
-      tokenRecord.expiresAt,
-    );
+    // Attributable by construction: the account whose credential was replayed,
+    // the family that was burned, and where the replay came from. `resource:
+    // 'session'` rather than 'user' so these can be pulled out of the audit log
+    // as a class. organizationId is null — this is a platform-level security
+    // event, and at the point of detection there is no reliable tenant to
+    // attribute it to (the presenter has not been authenticated as anyone).
+    this.audit.log({
+      organizationId: null,
+      userId: token.userId,
+      action: 'auth.refresh_token_reuse_detected',
+      resource: 'session',
+      resourceId: token.familyId,
+      metadata: {
+        tokenId: token.id,
+        familyId: token.familyId,
+        // NULL here means the token was live and we lost a rotation race;
+        // anything else names how the family had already ended.
+        previousReason: token.revokedReason,
+        liveTokensRevoked: count,
+        userAgent: context.userAgent ?? null,
+      },
+      ipAddress: context.ipAddress,
+    });
   }
 
   async logout(refreshToken: string) {
     if (!refreshToken) return;
 
-    const hashedToken = crypto.createHash('sha256').update(refreshToken).digest('hex');
+    const hashedToken = crypto
+      .createHash('sha256')
+      .update(refreshToken)
+      .digest('hex');
 
+    // Scoped to the presented token rather than its family, and the two are the
+    // same set in practice: rotation revokes each predecessor as it issues the
+    // successor, so a family has at most one live token at any moment. Scoping
+    // it here keeps logout doing exactly what it says — ending THIS session —
+    // instead of quietly acquiring the power to end others.
     await this.prisma.writer.refreshToken.updateMany({
       where: { tokenHash: hashedToken, revokedAt: null },
-      data: { revokedAt: new Date() },
+      data: { revokedAt: new Date(), revokedReason: 'LOGOUT' },
     });
   }
 
@@ -464,7 +754,9 @@ export class AuthService {
       ///
       /// UI gating only — never authorization. Every endpoint keeps its own
       /// guards, so flipping a flag in devtools reveals menus, not data.
-      features: await this.featureFlags.getForOrganization(active?.organizationId),
+      features: await this.featureFlags.getForOrganization(
+        active?.organizationId,
+      ),
     };
   }
 
@@ -484,7 +776,10 @@ export class AuthService {
 
     // Generate token
     const rawToken = crypto.randomBytes(32).toString('hex');
-    const tokenHash = crypto.createHash('sha256').update(rawToken).digest('hex');
+    const tokenHash = crypto
+      .createHash('sha256')
+      .update(rawToken)
+      .digest('hex');
 
     // 1 hour expiration
     const expiresAt = new Date();
@@ -528,11 +823,15 @@ export class AuthService {
       await tx.passwordResetToken.deleteMany({
         where: { userId: resetToken.userId },
       });
-      
-      // Revoke all refresh tokens so all devices are logged out
+
+      // Revoke all refresh tokens so all devices are logged out. Reason matters:
+      // the whole point of a password reset is that the old credential may be in
+      // someone else's hands, so these revocations are evidence, not routine —
+      // and without the label they are indistinguishable in the token table from
+      // ordinary rotations.
       await tx.refreshToken.updateMany({
         where: { userId: resetToken.userId, revokedAt: null },
-        data: { revokedAt: new Date() },
+        data: { revokedAt: new Date(), revokedReason: 'PASSWORD_RESET' },
       });
     });
 
@@ -544,7 +843,9 @@ export class AuthService {
   // ════════════════════════════════════════════════════════════════════════════
 
   async setupMfa(userId: string) {
-    const user = await this.prisma.reader.user.findUnique({ where: { id: userId } });
+    const user = await this.prisma.reader.user.findUnique({
+      where: { id: userId },
+    });
     if (!user) throw new UnauthorizedException('User not found');
 
     // Always generate a new secret during setup
@@ -566,7 +867,9 @@ export class AuthService {
   }
 
   async verifyMfaSetup(userId: string, code: string) {
-    const user = await this.prisma.reader.user.findUnique({ where: { id: userId } });
+    const user = await this.prisma.reader.user.findUnique({
+      where: { id: userId },
+    });
     if (!user || !user.mfaSecret) {
       throw new UnauthorizedException('MFA setup not initiated');
     }
@@ -595,7 +898,9 @@ export class AuthService {
   async disableMfa(userId: string, currentPassword: string) {
     // Disabling a second factor is a security-sensitive action; require the
     // password so a hijacked session cannot silently strip MFA.
-    const user = await this.prisma.reader.user.findUnique({ where: { id: userId } });
+    const user = await this.prisma.reader.user.findUnique({
+      where: { id: userId },
+    });
     if (!user) throw new UnauthorizedException('User not found');
 
     if (!(await argon2.verify(user.passwordHash, currentPassword))) {
@@ -629,7 +934,9 @@ export class AuthService {
         .replace(/^(.{5})(.{5})$/, '$1-$2'),
     );
 
-    const hashes = await Promise.all(codes.map((c) => argon2.hash(c, { type: argon2.argon2id })));
+    const hashes = await Promise.all(
+      codes.map((c) => argon2.hash(c, { type: argon2.argon2id })),
+    );
 
     await this.prisma.writer.$transaction(async (tx: any) => {
       await tx.mfaRecoveryCode.deleteMany({ where: { userId } });
@@ -645,7 +952,10 @@ export class AuthService {
    * Consume a recovery code in place of a TOTP token.
    * Each code works exactly once.
    */
-  private async consumeRecoveryCode(userId: string, candidate: string): Promise<boolean> {
+  private async consumeRecoveryCode(
+    userId: string,
+    candidate: string,
+  ): Promise<boolean> {
     const normalized = candidate.trim().toUpperCase();
     const codes = await this.prisma.reader.mfaRecoveryCode.findMany({
       where: { userId, usedAt: null },
@@ -686,6 +996,20 @@ export class AuthService {
    * session: near the end of the day the last token issued is a short one,
    * and the client's expiry timer fires at the real deadline rather than a
    * day past it.
+   *
+   * ── This is the ONLY place a RefreshToken row is created ──────────────────
+   * Which is what makes family seeding safe to reason about: register, login,
+   * MFA login and refresh all funnel through here, so there is exactly one line
+   * that decides what `familyId` a token carries. Omit `opts.familyId` and the
+   * row founds a new family pointing at itself; pass one and the row joins its
+   * predecessor's chain. A family is therefore never empty and never orphaned.
+   *
+   * @param opts.familyId Inherited from the predecessor during rotation. Absent
+   *   for a root token (a real sign-in), which seeds the family to its own id.
+   * @param opts.client   Prisma transaction client, so the caller can commit the
+   *   INSERT together with whatever else it is doing. Defaults to the writer.
+   * @param opts.context  Caller IP / user agent, recorded on the row for the
+   *   "active sessions" admin view. Display only — never an auth input.
    */
   private async generateTokens(
     userId: string,
@@ -694,18 +1018,22 @@ export class AuthService {
     organizationId?: string,
     orgRole?: string,
     sessionExpiresAt?: Date,
-  ) {
+    opts: { familyId?: string; client?: any; context?: SessionContext } = {},
+  ): Promise<IssuedTokenPair> {
     const payload: Record<string, any> = { sub: userId, email, systemRole };
     if (organizationId) payload.organizationId = organizationId;
     if (orgRole) payload.orgRole = orgRole;
 
     const refreshTtlDays = this.config.get<number>('jwt.refreshTtlDays', 1);
     const sessionEnd =
-      sessionExpiresAt ?? new Date(Date.now() + refreshTtlDays * 24 * 60 * 60 * 1000);
+      sessionExpiresAt ??
+      new Date(Date.now() + refreshTtlDays * 24 * 60 * 60 * 1000);
 
     const secondsLeft = Math.floor((sessionEnd.getTime() - Date.now()) / 1000);
     if (secondsLeft <= 0) {
-      throw new UnauthorizedException('Your session has expired. Please sign in again.');
+      throw new UnauthorizedException(
+        'Your session has expired. Please sign in again.',
+      );
     }
 
     // Previously hardcoded to '15m' here regardless of JWT_ACCESS_TTL_SECONDS —
@@ -714,9 +1042,14 @@ export class AuthService {
     // same env var) only applies when `sign()` is called without an explicit
     // `expiresIn`, so the two never conflicted; the configured value just
     // silently never took effect.
-    const configuredAccessTtl = this.config.get<number>('jwt.accessTtl', 86_400);
+    const configuredAccessTtl = this.config.get<number>(
+      'jwt.accessTtl',
+      86_400,
+    );
     const accessTtlSeconds = Math.min(configuredAccessTtl, secondsLeft);
-    const accessToken = this.jwtService.sign(payload, { expiresIn: accessTtlSeconds });
+    const accessToken = this.jwtService.sign(payload, {
+      expiresIn: accessTtlSeconds,
+    });
 
     // Opaque refresh token, expiring with the session rather than a fresh day
     // from now. It exists so that reloading the tab does not sign the user
@@ -725,18 +1058,33 @@ export class AuthService {
     // never on a timer or a 401.
     const { plainTextToken, hashedToken } = this.generateRefreshToken();
 
-    await this.prisma.writer.refreshToken.create({
+    // The id is generated here rather than left to the column default because a
+    // root token has to store its OWN id in `familyId`, and the default is
+    // computed inside the INSERT where nothing can read it back in time.
+    const id = crypto.randomUUID();
+    const db = opts.client ?? this.prisma.writer;
+
+    await db.refreshToken.create({
       data: {
+        id,
         userId,
         tokenHash: hashedToken,
+        // Root of a new family, or a link in an existing chain. Never null: an
+        // unattributable token could not be cascade-revoked, which would make it
+        // the one token a compromise could not clean up.
+        familyId: opts.familyId ?? id,
         expiresAt: sessionEnd,
+        // Truncated because both are client-supplied and `ip_address` is a
+        // VarChar(45); an oversized header should not fail a login with a
+        // database error.
+        userAgent: opts.context?.userAgent?.slice(0, USER_AGENT_MAX) ?? null,
+        ipAddress: opts.context?.ipAddress?.slice(0, IP_ADDRESS_MAX) ?? null,
       },
     });
 
     return {
       accessToken,
       refreshToken: plainTextToken,
-      /** When the whole session ends. The controller sizes the cookie to it. */
       sessionExpiresAt: sessionEnd,
       user: {
         id: userId,

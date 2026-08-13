@@ -170,10 +170,18 @@ interface ScenarioStep {
   description: string;
   icon: string;
   mode: 'SINGLE' | 'REPEATABLE';
+  /**
+   * Where the entry count is measured. Omitted means SESSION — one sitting —
+   * which is the platform default and what every scenario written before
+   * longitudinal recording assumed.
+   */
+  scope?: 'SESSION' | 'SUBJECT' | 'SUBJECT_PERIOD';
   minEntries: number;
   maxEntries: number | null;
   isOptional: boolean;
   uniqueBy: string[];
+  /** Question key holding the real-world date of an entry. */
+  occurredAtKey?: string;
   /** ExprNode over EARLIER steps, addressed `stepKey.questionKey`. */
   showWhen?: ExprNode;
 }
@@ -3550,7 +3558,2017 @@ const GRIEVANCE: Scenario = {
   ],
 };
 
-const SCENARIOS: Scenario[] = [ANTENATAL, KHARIF, CAMPUS, COLD_CHAIN, GRIEVANCE];
+// ═════════════════════════════════════════════════════════════════════════════
+// SCENARIO 6 — ALAMB Vocational Training Programme
+//
+// Longitudinal training lifecycle. A student is registered once, enrolled in a
+// 6-month vocational course, tracked monthly for attendance and progress,
+// assessed at mid-term and final, then followed up for employment outcomes.
+//
+// The interesting parts:
+//   • The progress form reads the enrollment's `course_selected` via a cross-
+//     form `ref` to decide which skill multi-choice to show — a Computer
+//     student never sees the Beautician checklist.
+//   • Attendance percentage and assessment grades are both CALCULATED, so the
+//     field worker types only the raw numbers and the derived fields fill in.
+//   • Total family members is calculated from siblings + 3 (student + parents).
+//   • Guardian details are a two-level conditional: show the group only when
+//     `has_guardian` is Yes, then inside it, show `guardian_other_occupation`
+//     only when `guardian_occupation` is Other.
+// ═════════════════════════════════════════════════════════════════════════════
+
+const ALAMB_AREAS = [
+  'Shiv Vihar',
+  'Om Vihar Phase-1',
+  'Om Vihar Phase-2',
+  'Om Vihar Phase-3',
+  'Om Vihar Phase-4',
+  'Om Vihar Phase-5',
+  'Mohan Garden',
+  'Vijay Nagar',
+  'Vikas Nagar',
+  'Maharani Enclave',
+  'Hastsal',
+  'Other',
+];
+
+const ALAMB_COURSE_DATA: Array<{
+  value: string;
+  label: string;
+  code: string;
+  duration: number;
+}> = [
+  { value: 'computer', label: 'Computer', code: 'Comp', duration: 6 },
+  { value: 'beautician', label: 'Beautician', code: 'B & C', duration: 6 },
+  { value: 'cutting_tailoring', label: 'Cutting & Tailoring', code: 'C & T', duration: 6 },
+];
+
+const ALAMB_OCCUPATIONS = [
+  'Driver',
+  'Labour',
+  'Mason',
+  'Carpenter',
+  'Electrician',
+  'Plumber',
+  'Painter',
+  'Factory Worker',
+  'Shop Owner',
+  'Vegetable Vendor',
+  'Food Vendor',
+  'Security Guard',
+  'Office Job',
+  'Self Employed',
+  'Not Working',
+  'Deceased',
+  'Other',
+];
+
+const ALAMB_MOTHER_OCCUPATIONS = [
+  'Homemaker',
+  'Tailor',
+  'Domestic Worker',
+  'Labour',
+  'Shop Worker',
+  'Self Employed',
+  'Other',
+];
+
+const ALAMB: Scenario = {
+  key: 'alamb',
+  headline: 'ALAMB vocational training — longitudinal programme with course-conditional skills',
+  subjectType: {
+    slug: 'alamb-student',
+    name: 'Student',
+    icon: '👩‍🎓',
+    identityConfig: {
+      displayName: ['full_name'],
+      attributes: ['age', 'gender', 'area', 'course_selected'],
+      externalId: 'registration_number',
+    },
+  },
+  app: {
+    slug: 'alamb-vocational',
+    publicSlug: 'alamb-vocational',
+    name: 'ALAMB Vocational Training Programme',
+    description:
+      'Register a student, enroll in a vocational course, track monthly progress and attendance, conduct skill assessments, and follow up on employment outcomes after completion.',
+    icon: '👩‍🎓',
+    theme: {
+      preset: 'teal',
+      primaryColor: '#0d9488',
+      backgroundColor: '#f0fdfa',
+      cardColor: '#ffffff',
+      textColor: '#134e4a',
+      fontFamily: 'Inter',
+      borderRadius: 'lg',
+      cardVariant: 'elevated',
+      // A field worker walks through the programme once per student —
+      // registration, enrollment, progress checks, assessments, exit,
+      // follow-ups — so it is paged as a wizard with timeline markers.
+      appShell: 'wizard',
+      appMasthead: 'gradient',
+      appStepStyle: 'timeline',
+      appDensity: 'comfortable',
+      appTexture: 'none',
+    },
+    branding: {
+      headerTitle: 'ALAMB Vocational Training Programme',
+      footerText: 'ALAMB · Supported by Vibha · Delhi',
+    },
+    // Public: the link is shared openly so coordinators and field workers can
+    // reach it from any device without signing in first.
+    requireAuth: false,
+    // Field workers doing home visits are interrupted constantly.
+    allowDrafts: true,
+    isPublished: true,
+    // Each form has its own layout: registration is GRID (paired fields),
+    // progress and assessment are stacked DOCUMENT.
+    layoutMode: 'INHERIT',
+    dashboardCards: (formId) => [
+      { title: 'Students registered', source: 'subjects' },
+      { title: 'Enrolled this batch', source: 'subjects', filter: { createdWithinDays: 180 } },
+      {
+        title: 'Progress checks (30 days)',
+        source: 'submissions',
+        filter: { formId: formId('alamb-monthly-progress'), createdWithinDays: 30 },
+      },
+      {
+        title: 'Assessments completed',
+        source: 'submissions',
+        filter: { formId: formId('alamb-skill-assessment') },
+      },
+      {
+        title: 'Placements tracked',
+        source: 'submissions',
+        filter: { formId: formId('alamb-placement-followup') },
+      },
+    ],
+  },
+
+  // ── Choice lists ──────────────────────────────────────────────────────────
+  choiceLists: [
+    {
+      slug: 'alamb-areas',
+      name: 'ALAMB Areas — Delhi',
+      description:
+        'Neighbourhoods around the ALAMB training centre in West Delhi. Used as a dropdown in the registration form.',
+      metadataSchema: [
+        { key: 'pin_code', label: 'PIN Code', type: 'text' },
+      ],
+      items: ALAMB_AREAS.map((area) => ({
+        value: area.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, ''),
+        label: area,
+        metadata: { pin_code: '110059' },
+      })),
+    },
+    {
+      slug: 'alamb-courses',
+      name: 'ALAMB Courses',
+      description:
+        'The three vocational courses offered. `lookup()` reads the course code and duration for batch ID generation.',
+      metadataSchema: [
+        { key: 'course_code', label: 'Course Code', type: 'text' },
+        { key: 'duration_months', label: 'Duration (months)', type: 'number' },
+      ],
+      items: ALAMB_COURSE_DATA.map((course) => ({
+        value: course.value,
+        label: course.label,
+        metadata: { course_code: course.code, duration_months: course.duration },
+      })),
+    },
+  ],
+  knownChoiceLists: ['alamb-areas', 'alamb-courses'],
+
+  // ── Forms ─────────────────────────────────────────────────────────────────
+  forms: [
+    // ─── Form 1: Student Registration ───────────────────────────────────────
+    {
+      slug: 'alamb-registration',
+      title: 'Student Registration',
+      description:
+        'Completed once when the student enrols at the centre. Age and total family members are calculated; guardian details appear only when a guardian exists.',
+      role: 'REGISTERS',
+      settings: { requireAuth: false, allowMultiple: true, layoutMode: 'GRID' },
+      pages: [
+        { pageNumber: 1, title: 'Personal Details', description: 'Identity and contact information.' },
+        { pageNumber: 2, title: 'Education' },
+        { pageNumber: 3, title: 'Family Details' },
+        { pageNumber: 4, title: 'Guardian Details', description: 'Only if someone other than the parents is the guardian.' },
+      ],
+      questions: [
+        // ── Page 1: Personal Details ──
+        {
+          id: 'alm_r_regnum',
+          key: 'registration_number',
+          type: 'SHORT_TEXT',
+          label: 'Registration Number',
+          description: 'Format: ALAMB/YYYY/XXXX. This is the student\'s unique identifier.',
+          placeholder: 'ALAMB/2026/0001',
+          pageNumber: 1,
+          width: 'HALF',
+          validation: { required: true, pattern: '^ALAMB/[0-9]{4}/[0-9]{4}$' },
+        },
+        {
+          id: 'alm_r_name',
+          key: 'full_name',
+          type: 'SHORT_TEXT',
+          label: 'Full Name',
+          pageNumber: 1,
+          width: 'HALF',
+          validation: { required: true, minLength: 3, maxLength: 120 },
+        },
+        {
+          id: 'alm_r_dob',
+          key: 'date_of_birth',
+          type: 'DATE',
+          label: 'Date of Birth',
+          pageNumber: 1,
+          width: 'HALF',
+          validation: { required: true },
+        },
+        {
+          id: 'alm_r_age',
+          key: 'age',
+          type: 'NUMBER',
+          label: 'Age (years)',
+          description: 'Calculated from date of birth.',
+          pageNumber: 1,
+          width: 'HALF',
+          validation: {},
+        },
+        {
+          id: 'alm_r_gender',
+          key: 'gender',
+          type: 'SINGLE_CHOICE',
+          label: 'Gender',
+          pageNumber: 1,
+          width: 'HALF',
+          options: choices(['Female', 'Male', 'Other']),
+          validation: { required: true },
+        },
+        {
+          id: 'alm_r_phone',
+          key: 'contact_number',
+          type: 'PHONE',
+          label: 'Contact Number',
+          pageNumber: 1,
+          width: 'HALF',
+          validation: { required: true, pattern: '^[6-9][0-9]{9}$' },
+        },
+        {
+          id: 'alm_r_altphone',
+          key: 'alternate_contact',
+          type: 'PHONE',
+          label: 'Alternate Contact Number',
+          pageNumber: 1,
+          width: 'HALF',
+          validation: { pattern: '^[6-9][0-9]{9}$' },
+        },
+        {
+          id: 'alm_r_address',
+          key: 'address',
+          type: 'LONG_TEXT',
+          label: 'Address',
+          pageNumber: 1,
+          width: 'FULL',
+          validation: { required: true, maxLength: 500 },
+        },
+        {
+          id: 'alm_r_area',
+          key: 'area',
+          type: 'DROPDOWN',
+          label: 'Area',
+          pageNumber: 1,
+          width: 'HALF',
+          validation: { required: true },
+          optionsSource: { kind: 'CHOICE_LIST', listSlug: 'alamb-areas', searchable: true },
+        },
+        {
+          id: 'alm_r_otherarea',
+          key: 'other_area',
+          type: 'SHORT_TEXT',
+          label: 'Other Area (specify)',
+          pageNumber: 1,
+          width: 'HALF',
+          validation: { maxLength: 120 },
+        },
+        {
+          id: 'alm_r_idtype',
+          key: 'id_proof_type',
+          type: 'SINGLE_CHOICE',
+          label: 'ID Proof Type',
+          pageNumber: 1,
+          width: 'HALF',
+          options: choices(['Aadhar Card', 'Voter ID', 'Ration Card', 'Other']),
+          validation: { required: true },
+        },
+        {
+          id: 'alm_r_idnum',
+          key: 'id_proof_number',
+          type: 'SHORT_TEXT',
+          label: 'ID Proof Number',
+          pageNumber: 1,
+          width: 'HALF',
+          validation: { required: true, maxLength: 40 },
+        },
+
+        // ── Page 2: Education ──
+        {
+          id: 'alm_r_qual',
+          key: 'highest_qualification',
+          type: 'SINGLE_CHOICE',
+          label: 'Highest Qualification',
+          pageNumber: 2,
+          options: choices([
+            'Illiterate', '5th', '8th', '9th', '10th', '11th', '12th',
+            'ITI/Diploma', 'Graduation', 'Post Graduation',
+          ]),
+          validation: { required: true },
+        },
+        {
+          id: 'alm_r_studying',
+          key: 'currently_studying',
+          type: 'SINGLE_CHOICE',
+          label: 'Currently Pursuing Studies',
+          pageNumber: 2,
+          options: YES_NO(),
+          validation: {},
+        },
+        {
+          id: 'alm_r_studydetail',
+          key: 'current_study_details',
+          type: 'SHORT_TEXT',
+          label: 'Current Study Details',
+          description: 'Asked only when the student is currently studying.',
+          pageNumber: 2,
+          validation: { maxLength: 200 },
+        },
+
+        // ── Page 3: Family Details ──
+        {
+          id: 'alm_r_reltype',
+          key: 'relationship_type',
+          type: 'SINGLE_CHOICE',
+          label: 'Relationship Type',
+          pageNumber: 3,
+          width: 'HALF',
+          options: choices(['D/O (Daughter of Father)', 'W/O (Wife of Husband)']),
+          validation: { required: true },
+        },
+        {
+          id: 'alm_r_fathname',
+          key: 'father_husband_name',
+          type: 'SHORT_TEXT',
+          label: 'Father / Husband Name',
+          pageNumber: 3,
+          width: 'HALF',
+          validation: { required: true, maxLength: 120 },
+        },
+        {
+          id: 'alm_r_fathocc',
+          key: 'father_husband_occupation',
+          type: 'SINGLE_CHOICE',
+          label: 'Father / Husband Occupation',
+          pageNumber: 3,
+          width: 'HALF',
+          options: choices(ALAMB_OCCUPATIONS),
+          validation: { required: true },
+        },
+        {
+          id: 'alm_r_fathocc_other',
+          key: 'father_husband_occupation_other',
+          type: 'SHORT_TEXT',
+          label: 'Other Occupation (specify)',
+          pageNumber: 3,
+          width: 'HALF',
+          validation: { maxLength: 120 },
+        },
+        {
+          id: 'alm_r_fathphone',
+          key: 'father_husband_contact',
+          type: 'PHONE',
+          label: 'Father / Husband Contact',
+          pageNumber: 3,
+          width: 'HALF',
+          validation: { pattern: '^[6-9][0-9]{9}$' },
+        },
+        {
+          id: 'alm_r_mothname',
+          key: 'mother_name',
+          type: 'SHORT_TEXT',
+          label: 'Mother Name',
+          pageNumber: 3,
+          width: 'HALF',
+          validation: { required: true, maxLength: 120 },
+        },
+        {
+          id: 'alm_r_mothocc',
+          key: 'mother_occupation',
+          type: 'SINGLE_CHOICE',
+          label: 'Mother Occupation',
+          pageNumber: 3,
+          width: 'HALF',
+          options: choices(ALAMB_MOTHER_OCCUPATIONS),
+          validation: {},
+        },
+        {
+          id: 'alm_r_mothphone',
+          key: 'mother_contact',
+          type: 'PHONE',
+          label: 'Mother Contact',
+          pageNumber: 3,
+          width: 'HALF',
+          validation: { pattern: '^[6-9][0-9]{9}$' },
+        },
+        {
+          id: 'alm_r_income',
+          key: 'monthly_family_income',
+          type: 'SINGLE_CHOICE',
+          label: 'Monthly Family Income',
+          pageNumber: 3,
+          width: 'HALF',
+          options: choices([
+            'Less than ₹5,000',
+            '₹5,000-8,000',
+            '₹8,000-10,000',
+            '₹10,000-15,000',
+            '₹15,000-25,000',
+            'Above ₹25,000',
+          ]),
+          validation: { required: true },
+        },
+        {
+          id: 'alm_r_brothers',
+          key: 'number_of_brothers',
+          type: 'NUMBER',
+          label: 'Number of Brothers',
+          pageNumber: 3,
+          width: 'HALF',
+          validation: { required: true, min: 0, max: 10 },
+        },
+        {
+          id: 'alm_r_sisters',
+          key: 'number_of_sisters',
+          type: 'NUMBER',
+          label: 'Number of Sisters',
+          pageNumber: 3,
+          width: 'HALF',
+          validation: { required: true, min: 0, max: 10 },
+        },
+        {
+          id: 'alm_r_totalfam',
+          key: 'total_family_members',
+          type: 'NUMBER',
+          label: 'Total Family Members',
+          description: 'Calculated: brothers + sisters + 3 (student + parents).',
+          pageNumber: 3,
+          width: 'HALF',
+          validation: {},
+        },
+
+        // ── Page 4: Guardian Details ──
+        {
+          id: 'alm_r_hasguardian',
+          key: 'has_guardian',
+          type: 'SINGLE_CHOICE',
+          label: 'Has a guardian (other than parents)?',
+          pageNumber: 4,
+          options: YES_NO(),
+          validation: {},
+        },
+        {
+          id: 'alm_r_guardname',
+          key: 'guardian_name',
+          type: 'SHORT_TEXT',
+          label: 'Guardian Name',
+          pageNumber: 4,
+          width: 'HALF',
+          validation: { maxLength: 120 },
+        },
+        {
+          id: 'alm_r_guardrel',
+          key: 'guardian_relationship',
+          type: 'SINGLE_CHOICE',
+          label: 'Guardian Relationship',
+          pageNumber: 4,
+          width: 'HALF',
+          options: choices(['Elder Brother', 'Uncle', 'Aunt', 'Grandparent', 'Other']),
+          validation: {},
+        },
+        {
+          id: 'alm_r_guardphone',
+          key: 'guardian_contact',
+          type: 'PHONE',
+          label: 'Guardian Contact',
+          pageNumber: 4,
+          width: 'HALF',
+          validation: { pattern: '^[6-9][0-9]{9}$' },
+        },
+      ],
+      rules: [
+        // Age from DOB
+        {
+          id: 'alm_r_calc_age',
+          kind: 'CALCULATE',
+          target: 'age',
+          expr: { op: 'yearsBetween', args: [{ field: 'date_of_birth' }, { op: 'today', args: [] }] },
+        },
+        // Total family members = brothers + sisters + 3
+        {
+          id: 'alm_r_calc_family',
+          kind: 'CALCULATE',
+          target: 'total_family_members',
+          expr: {
+            op: 'add',
+            args: [
+              { field: 'number_of_brothers' },
+              { field: 'number_of_sisters' },
+              { lit: 3 },
+            ],
+          },
+        },
+        // Validate age 15–60
+        {
+          id: 'alm_r_val_age',
+          kind: 'VALIDATE',
+          target: 'date_of_birth',
+          message: 'The date of birth gives an age outside 15–60. ALAMB serves young women aged 15–35, check the year.',
+          expr: {
+            op: 'not',
+            args: [{ op: 'between', args: [{ field: 'age' }, { lit: 15 }, { lit: 60 }] }],
+          },
+        },
+        // Validate DOB not in the future
+        {
+          id: 'alm_r_val_dob',
+          kind: 'VALIDATE',
+          target: 'date_of_birth',
+          message: 'Date of birth cannot be in the future.',
+          expr: { op: 'gt', args: [{ field: 'date_of_birth' }, { op: 'today', args: [] }] },
+        },
+        // Show other_area when area = 'other'
+        {
+          id: 'alm_r_show_otherarea',
+          kind: 'SHOW',
+          target: 'other_area',
+          expr: { op: 'eq', args: [{ field: 'area' }, { lit: 'other' }] },
+        },
+        {
+          id: 'alm_r_require_otherarea',
+          kind: 'REQUIRE',
+          target: 'other_area',
+          expr: { op: 'eq', args: [{ field: 'area' }, { lit: 'other' }] },
+        },
+        // Show father/husband other occupation
+        {
+          id: 'alm_r_show_fathocc',
+          kind: 'SHOW',
+          target: 'father_husband_occupation_other',
+          expr: { op: 'eq', args: [{ field: 'father_husband_occupation' }, { lit: 'Other' }] },
+        },
+        {
+          id: 'alm_r_require_fathocc',
+          kind: 'REQUIRE',
+          target: 'father_husband_occupation_other',
+          expr: { op: 'eq', args: [{ field: 'father_husband_occupation' }, { lit: 'Other' }] },
+        },
+        // Show current study details when currently_studying = Yes
+        {
+          id: 'alm_r_show_study',
+          kind: 'SHOW',
+          target: 'current_study_details',
+          expr: { op: 'eq', args: [{ field: 'currently_studying' }, { lit: 'Yes' }] },
+        },
+        // Show/require guardian fields when has_guardian = Yes
+        {
+          id: 'alm_r_show_guardname',
+          kind: 'SHOW',
+          target: 'guardian_name',
+          expr: { op: 'eq', args: [{ field: 'has_guardian' }, { lit: 'Yes' }] },
+        },
+        {
+          id: 'alm_r_require_guardname',
+          kind: 'REQUIRE',
+          target: 'guardian_name',
+          expr: { op: 'eq', args: [{ field: 'has_guardian' }, { lit: 'Yes' }] },
+        },
+        {
+          id: 'alm_r_show_guardrel',
+          kind: 'SHOW',
+          target: 'guardian_relationship',
+          expr: { op: 'eq', args: [{ field: 'has_guardian' }, { lit: 'Yes' }] },
+        },
+        {
+          id: 'alm_r_require_guardrel',
+          kind: 'REQUIRE',
+          target: 'guardian_relationship',
+          expr: { op: 'eq', args: [{ field: 'has_guardian' }, { lit: 'Yes' }] },
+        },
+        {
+          id: 'alm_r_show_guardphone',
+          kind: 'SHOW',
+          target: 'guardian_contact',
+          expr: { op: 'eq', args: [{ field: 'has_guardian' }, { lit: 'Yes' }] },
+        },
+        {
+          id: 'alm_r_require_guardphone',
+          kind: 'REQUIRE',
+          target: 'guardian_contact',
+          expr: { op: 'eq', args: [{ field: 'has_guardian' }, { lit: 'Yes' }] },
+        },
+      ],
+    },
+
+    // ─── Form 2: Course Enrollment ──────────────────────────────────────────
+    {
+      slug: 'alamb-enrollment',
+      title: 'Course Enrollment',
+      description:
+        'Enroll the student in a vocational course. The course code is derived from the course list. Preferred job type appears only when the student is interested in employment.',
+      role: 'ATTACHES',
+      settings: { requireAuth: false },
+      pages: [
+        { pageNumber: 1, title: 'Course Selection' },
+        { pageNumber: 2, title: 'Job Interest & Referral' },
+      ],
+      questions: [
+        {
+          id: 'alm_e_course',
+          key: 'course_selected',
+          type: 'DROPDOWN',
+          label: 'Course Selected',
+          pageNumber: 1,
+          validation: { required: true },
+          optionsSource: { kind: 'CHOICE_LIST', listSlug: 'alamb-courses', searchable: false },
+        },
+        {
+          id: 'alm_e_batch',
+          key: 'batch',
+          type: 'SINGLE_CHOICE',
+          label: 'Batch',
+          pageNumber: 1,
+          options: choices([
+            'January-June 2025',
+            'July-December 2025',
+            'January-June 2026',
+            'July-December 2026',
+          ]),
+          validation: { required: true },
+        },
+        {
+          id: 'alm_e_admission',
+          key: 'date_of_admission',
+          type: 'DATE',
+          label: 'Date of Admission',
+          defaultValue: TODAY,
+          pageNumber: 1,
+          validation: { required: true },
+        },
+        {
+          id: 'alm_e_batchid',
+          key: 'batch_id',
+          type: 'SHORT_TEXT',
+          label: 'Batch ID',
+          description: 'Derived from the course code and batch period.',
+          pageNumber: 1,
+          validation: {},
+        },
+        {
+          id: 'alm_e_course_code',
+          key: 'course_code',
+          type: 'SHORT_TEXT',
+          label: 'Course Code',
+          description: 'Looked up from the course list.',
+          pageNumber: 1,
+          validation: {},
+        },
+        // ── Page 2: Job Interest ──
+        {
+          id: 'alm_e_jobint',
+          key: 'interested_in_job',
+          type: 'SINGLE_CHOICE',
+          label: 'Interested in Job after Course',
+          pageNumber: 2,
+          options: choices([
+            'Yes - Immediate',
+            'Yes - After some time',
+            'No - Will continue studies',
+            'No - Home responsibilities',
+            'Undecided',
+          ]),
+          validation: { required: true },
+        },
+        {
+          id: 'alm_e_jobtype',
+          key: 'preferred_job_type',
+          type: 'MULTI_CHOICE',
+          label: 'Preferred Job Type',
+          description: 'Shown only when the student is interested in employment.',
+          pageNumber: 2,
+          options: choices([
+            'Beauty Parlour',
+            'Boutique/Tailor Shop',
+            'Office/Company',
+            'Home-based work',
+            'Teaching/Training',
+            'Self-employment',
+          ]),
+          validation: {},
+        },
+        {
+          id: 'alm_e_referral',
+          key: 'referral_source',
+          type: 'SINGLE_CHOICE',
+          label: 'How did you learn about ALAMB?',
+          pageNumber: 2,
+          options: choices([
+            'Friend/Family',
+            'Community meeting',
+            'Social media',
+            'Banner/Poster',
+            'School/College',
+            'Other',
+          ]),
+          validation: {},
+        },
+      ],
+      rules: [
+        // Lookup the course code from the courses list
+        {
+          id: 'alm_e_calc_code',
+          kind: 'CALCULATE',
+          target: 'course_code',
+          expr: {
+            op: 'lookup',
+            args: [{ lit: 'alamb-courses' }, { field: 'course_selected' }, { lit: 'course_code' }],
+          },
+        },
+        // Validate admission date not in the future
+        {
+          id: 'alm_e_val_admission',
+          kind: 'VALIDATE',
+          target: 'date_of_admission',
+          message: 'Admission date cannot be in the future.',
+          expr: { op: 'gt', args: [{ field: 'date_of_admission' }, { op: 'today', args: [] }] },
+        },
+        // Show preferred job type when interested in employment
+        {
+          id: 'alm_e_show_jobtype',
+          kind: 'SHOW',
+          target: 'preferred_job_type',
+          expr: {
+            op: 'or',
+            args: [
+              { op: 'eq', args: [{ field: 'interested_in_job' }, { lit: 'Yes - Immediate' }] },
+              { op: 'eq', args: [{ field: 'interested_in_job' }, { lit: 'Yes - After some time' }] },
+            ],
+          },
+        },
+      ],
+    },
+
+    // ─── Form 3: Monthly Progress Check ─────────────────────────────────────
+    {
+      slug: 'alamb-monthly-progress',
+      title: 'Monthly Progress Check',
+      description:
+        'One entry per month. Attendance percentage is calculated from the two numbers. The skills checklist changes based on the enrolled course — a Computer student sees Computer skills, not Beautician skills.',
+      role: 'ATTACHES',
+      settings: { requireAuth: false },
+      pages: [
+        { pageNumber: 1, title: 'Attendance' },
+        { pageNumber: 2, title: 'Progress Assessment' },
+        { pageNumber: 3, title: 'Student Engagement' },
+      ],
+      questions: [
+        // ── Page 1: Attendance ──
+        {
+          id: 'alm_p_month',
+          key: 'month_number',
+          type: 'SINGLE_CHOICE',
+          label: 'Month',
+          pageNumber: 1,
+          options: choices(['Month 1', 'Month 2', 'Month 3', 'Month 4', 'Month 5', 'Month 6']),
+          validation: { required: true },
+        },
+        {
+          id: 'alm_p_attended',
+          key: 'days_attended',
+          type: 'NUMBER',
+          label: 'Days Attended',
+          pageNumber: 1,
+          validation: { required: true, min: 0, max: 31 },
+        },
+        {
+          id: 'alm_p_workdays',
+          key: 'total_working_days',
+          type: 'NUMBER',
+          label: 'Total Working Days',
+          defaultValue: 26,
+          pageNumber: 1,
+          validation: { required: true, min: 1, max: 31 },
+        },
+        {
+          id: 'alm_p_attpct',
+          key: 'attendance_percentage',
+          type: 'NUMBER',
+          label: 'Attendance Percentage',
+          description: 'Calculated: (days attended ÷ total working days) × 100.',
+          pageNumber: 1,
+          validation: {},
+        },
+
+        // ── Page 2: Progress ──
+        {
+          id: 'alm_p_progress',
+          key: 'overall_progress',
+          type: 'SINGLE_CHOICE',
+          label: 'Overall Progress',
+          pageNumber: 2,
+          options: choices(['Excellent', 'Good', 'Average', 'Needs Improvement', 'Poor']),
+          validation: { required: true },
+        },
+        {
+          id: 'alm_p_skills_comp',
+          key: 'skills_computer',
+          type: 'MULTI_CHOICE',
+          label: 'Skills Practiced (Computer)',
+          description: 'Shown only for students enrolled in the Computer course.',
+          pageNumber: 2,
+          options: choices(['Typing', 'MS Word', 'MS Excel', 'MS PowerPoint', 'Internet', 'Email']),
+          validation: {},
+        },
+        {
+          id: 'alm_p_skills_beauty',
+          key: 'skills_beautician',
+          type: 'MULTI_CHOICE',
+          label: 'Skills Practiced (Beautician)',
+          description: 'Shown only for students enrolled in the Beautician course.',
+          pageNumber: 2,
+          options: choices(['Facial', 'Makeup', 'Hair Styling', 'Mehendi', 'Manicure/Pedicure', 'Waxing']),
+          validation: {},
+        },
+        {
+          id: 'alm_p_skills_ct',
+          key: 'skills_cutting_tailoring',
+          type: 'MULTI_CHOICE',
+          label: 'Skills Practiced (Cutting & Tailoring)',
+          description: 'Shown only for students enrolled in the C&T course.',
+          pageNumber: 2,
+          options: choices(['Basic Stitching', 'Measurement', 'Cutting', 'Blouse Making', 'Suit Making', 'Dress Designing']),
+          validation: {},
+        },
+
+        // ── Page 3: Engagement ──
+        {
+          id: 'alm_p_participation',
+          key: 'participation_level',
+          type: 'SINGLE_CHOICE',
+          label: 'Participation Level',
+          pageNumber: 3,
+          options: choices(['Very Active', 'Active', 'Moderate', 'Passive', 'Absent frequently']),
+          validation: { required: true },
+        },
+        {
+          id: 'alm_p_issues',
+          key: 'issues_concerns',
+          type: 'MULTI_CHOICE',
+          label: 'Any Issues / Concerns',
+          pageNumber: 3,
+          options: choices([
+            'Health issues',
+            'Family problems',
+            'Transportation',
+            'Financial',
+            'Peer issues',
+            'Learning difficulties',
+            'None',
+          ]),
+          validation: {},
+        },
+        {
+          id: 'alm_p_followup',
+          key: 'follow_up_required',
+          type: 'SINGLE_CHOICE',
+          label: 'Follow-up Required',
+          pageNumber: 3,
+          options: YES_NO(),
+          validation: {},
+        },
+        {
+          id: 'alm_p_followupnotes',
+          key: 'follow_up_notes',
+          type: 'LONG_TEXT',
+          label: 'Follow-up Notes',
+          description: 'Appears when follow-up is required.',
+          pageNumber: 3,
+          validation: { maxLength: 1000 },
+        },
+      ],
+      rules: [
+        // Attendance percentage = round((attended / working) * 100)
+        {
+          id: 'alm_p_calc_att',
+          kind: 'CALCULATE',
+          target: 'attendance_percentage',
+          expr: {
+            op: 'round',
+            args: [
+              {
+                op: 'mul',
+                args: [
+                  { op: 'div', args: [{ field: 'days_attended' }, { field: 'total_working_days' }] },
+                  { lit: 100 },
+                ],
+              },
+              { lit: 0 },
+            ],
+          },
+        },
+        // Validate days attended ≤ total working days
+        {
+          id: 'alm_p_val_att',
+          kind: 'VALIDATE',
+          target: 'days_attended',
+          message: 'Days attended cannot exceed total working days.',
+          expr: { op: 'gt', args: [{ field: 'days_attended' }, { field: 'total_working_days' }] },
+        },
+        // Show Computer skills when enrollment course = computer
+        {
+          id: 'alm_p_show_comp',
+          kind: 'SHOW',
+          target: 'skills_computer',
+          expr: {
+            op: 'eq',
+            args: [
+              { ref: { form: '@alamb-enrollment', question: 'course_selected', when: 'LATEST' } },
+              { lit: 'computer' },
+            ],
+          },
+        },
+        // Show Beautician skills when enrollment course = beautician
+        {
+          id: 'alm_p_show_beauty',
+          kind: 'SHOW',
+          target: 'skills_beautician',
+          expr: {
+            op: 'eq',
+            args: [
+              { ref: { form: '@alamb-enrollment', question: 'course_selected', when: 'LATEST' } },
+              { lit: 'beautician' },
+            ],
+          },
+        },
+        // Show C&T skills when enrollment course = cutting_tailoring
+        {
+          id: 'alm_p_show_ct',
+          kind: 'SHOW',
+          target: 'skills_cutting_tailoring',
+          expr: {
+            op: 'eq',
+            args: [
+              { ref: { form: '@alamb-enrollment', question: 'course_selected', when: 'LATEST' } },
+              { lit: 'cutting_tailoring' },
+            ],
+          },
+        },
+        // Show follow-up notes when follow-up = Yes
+        {
+          id: 'alm_p_show_notes',
+          kind: 'SHOW',
+          target: 'follow_up_notes',
+          expr: { op: 'eq', args: [{ field: 'follow_up_required' }, { lit: 'Yes' }] },
+        },
+        {
+          id: 'alm_p_require_notes',
+          kind: 'REQUIRE',
+          target: 'follow_up_notes',
+          expr: { op: 'eq', args: [{ field: 'follow_up_required' }, { lit: 'Yes' }] },
+        },
+      ],
+    },
+
+    // ─── Form 4: Skill Assessment ───────────────────────────────────────────
+    {
+      slug: 'alamb-skill-assessment',
+      title: 'Skill Assessment',
+      description:
+        'Mid-term and final assessments. Total score and grade are calculated — the assessor types only the practical and theory scores.',
+      role: 'ATTACHES',
+      settings: { requireAuth: false, notifyEmails: ['alamb-assessments@acme.test'] },
+      pages: [
+        { pageNumber: 1, title: 'Assessment Type' },
+        { pageNumber: 2, title: 'Practical & Theory' },
+        { pageNumber: 3, title: 'Overall Assessment' },
+      ],
+      questions: [
+        // ── Page 1 ──
+        {
+          id: 'alm_a_type',
+          key: 'assessment_type',
+          type: 'SINGLE_CHOICE',
+          label: 'Assessment Type',
+          pageNumber: 1,
+          options: choices(['Mid-Term (Month 3)', 'Final (Month 6)']),
+          validation: { required: true },
+        },
+        {
+          id: 'alm_a_date',
+          key: 'assessment_date',
+          type: 'DATE',
+          label: 'Assessment Date',
+          defaultValue: TODAY,
+          pageNumber: 1,
+          validation: { required: true },
+        },
+
+        // ── Page 2: Practical & Theory ──
+        {
+          id: 'alm_a_practest',
+          key: 'practical_test_conducted',
+          type: 'SINGLE_CHOICE',
+          label: 'Practical Test Conducted',
+          pageNumber: 2,
+          options: YES_NO(),
+          validation: { required: true },
+        },
+        {
+          id: 'alm_a_pracscore',
+          key: 'practical_score',
+          type: 'NUMBER',
+          label: 'Practical Score (out of 100)',
+          description: 'Asked only when the practical test was conducted.',
+          pageNumber: 2,
+          validation: { min: 0, max: 100 },
+        },
+        {
+          id: 'alm_a_pracperf',
+          key: 'practical_performance',
+          type: 'SINGLE_CHOICE',
+          label: 'Practical Performance',
+          description: 'Asked only when the practical test was conducted.',
+          pageNumber: 2,
+          options: choices(['Excellent', 'Good', 'Average', 'Below Average', 'Poor']),
+          validation: {},
+        },
+        {
+          id: 'alm_a_theorytest',
+          key: 'theory_test_conducted',
+          type: 'SINGLE_CHOICE',
+          label: 'Theory Test Conducted',
+          pageNumber: 2,
+          options: YES_NO(),
+          validation: { required: true },
+        },
+        {
+          id: 'alm_a_theoryscore',
+          key: 'theory_score',
+          type: 'NUMBER',
+          label: 'Theory Score (out of 100)',
+          description: 'Asked only when the theory test was conducted.',
+          pageNumber: 2,
+          validation: { min: 0, max: 100 },
+        },
+
+        // ── Page 3: Overall ──
+        {
+          id: 'alm_a_total',
+          key: 'total_score',
+          type: 'NUMBER',
+          label: 'Total Score (out of 100)',
+          description: 'Calculated: average of practical and theory scores.',
+          pageNumber: 3,
+          validation: {},
+        },
+        {
+          id: 'alm_a_grade',
+          key: 'grade',
+          type: 'SINGLE_CHOICE',
+          label: 'Grade',
+          description: 'Derived: A (80+), B (60–79), C (40–59), D (below 40).',
+          pageNumber: 3,
+          options: choices(['A (80+)', 'B (60-79)', 'C (40-59)', 'D (Below 40)']),
+          validation: {},
+        },
+        {
+          id: 'alm_a_certready',
+          key: 'ready_for_certification',
+          type: 'SINGLE_CHOICE',
+          label: 'Ready for Certification',
+          pageNumber: 3,
+          options: choices(['Yes', 'Needs More Practice', 'No']),
+          validation: { required: true },
+        },
+        {
+          id: 'alm_a_remarks',
+          key: 'assessor_remarks',
+          type: 'LONG_TEXT',
+          label: 'Assessor Remarks',
+          pageNumber: 3,
+          validation: { maxLength: 1000 },
+        },
+      ],
+      rules: [
+        // Show practical score and performance when test = Yes
+        {
+          id: 'alm_a_show_pracscore',
+          kind: 'SHOW',
+          target: 'practical_score',
+          expr: { op: 'eq', args: [{ field: 'practical_test_conducted' }, { lit: 'Yes' }] },
+        },
+        {
+          id: 'alm_a_require_pracscore',
+          kind: 'REQUIRE',
+          target: 'practical_score',
+          expr: { op: 'eq', args: [{ field: 'practical_test_conducted' }, { lit: 'Yes' }] },
+        },
+        {
+          id: 'alm_a_show_pracperf',
+          kind: 'SHOW',
+          target: 'practical_performance',
+          expr: { op: 'eq', args: [{ field: 'practical_test_conducted' }, { lit: 'Yes' }] },
+        },
+        {
+          id: 'alm_a_require_pracperf',
+          kind: 'REQUIRE',
+          target: 'practical_performance',
+          expr: { op: 'eq', args: [{ field: 'practical_test_conducted' }, { lit: 'Yes' }] },
+        },
+        // Show theory score when test = Yes
+        {
+          id: 'alm_a_show_theory',
+          kind: 'SHOW',
+          target: 'theory_score',
+          expr: { op: 'eq', args: [{ field: 'theory_test_conducted' }, { lit: 'Yes' }] },
+        },
+        {
+          id: 'alm_a_require_theory',
+          kind: 'REQUIRE',
+          target: 'theory_score',
+          expr: { op: 'eq', args: [{ field: 'theory_test_conducted' }, { lit: 'Yes' }] },
+        },
+        // Total score = round((practical + theory) / 2)
+        {
+          id: 'alm_a_calc_total',
+          kind: 'CALCULATE',
+          target: 'total_score',
+          expr: {
+            op: 'round',
+            args: [
+              {
+                op: 'div',
+                args: [
+                  {
+                    op: 'add',
+                    args: [{ field: 'practical_score' }, { field: 'theory_score' }],
+                  },
+                  { lit: 2 },
+                ],
+              },
+              { lit: 0 },
+            ],
+          },
+        },
+        // Grade from total score — nested if
+        {
+          id: 'alm_a_calc_grade',
+          kind: 'CALCULATE',
+          target: 'grade',
+          expr: {
+            op: 'if',
+            args: [
+              { op: 'gte', args: [{ field: 'total_score' }, { lit: 80 }] },
+              { lit: 'A (80+)' },
+              {
+                op: 'if',
+                args: [
+                  { op: 'gte', args: [{ field: 'total_score' }, { lit: 60 }] },
+                  { lit: 'B (60-79)' },
+                  {
+                    op: 'if',
+                    args: [
+                      { op: 'gte', args: [{ field: 'total_score' }, { lit: 40 }] },
+                      { lit: 'C (40-59)' },
+                      { lit: 'D (Below 40)' },
+                    ],
+                  },
+                ],
+              },
+            ],
+          },
+        },
+        // Assessment date not in the future
+        {
+          id: 'alm_a_val_date',
+          kind: 'VALIDATE',
+          target: 'assessment_date',
+          message: 'Assessment date cannot be in the future.',
+          expr: { op: 'gt', args: [{ field: 'assessment_date' }, { op: 'today', args: [] }] },
+        },
+      ],
+    },
+
+    // ─── Form 5: Course Exit ────────────────────────────────────────────────
+    {
+      slug: 'alamb-course-exit',
+      title: 'Course Exit',
+      description:
+        'Marks course completion or dropout. Certificate fields appear only on successful completion. Other reason appears only when exit reason is "Other".',
+      role: 'ATTACHES',
+      settings: { requireAuth: false, notifyEmails: ['alamb-coordinator@acme.test'] },
+      pages: [
+        { pageNumber: 1, title: 'Exit Details' },
+        { pageNumber: 2, title: 'Completion Status' },
+        { pageNumber: 3, title: 'Future Plans' },
+      ],
+      questions: [
+        // ── Page 1: Exit Details ──
+        {
+          id: 'alm_x_date',
+          key: 'exit_date',
+          type: 'DATE',
+          label: 'Exit Date',
+          defaultValue: TODAY,
+          pageNumber: 1,
+          validation: { required: true },
+        },
+        {
+          id: 'alm_x_reason',
+          key: 'exit_reason',
+          type: 'SINGLE_CHOICE',
+          label: 'Exit Reason',
+          pageNumber: 1,
+          options: choices([
+            'Course Completed',
+            'Dropped Out - Personal reasons',
+            'Dropped Out - Family reasons',
+            'Dropped Out - Got Job',
+            'Dropped Out - Health issues',
+            'Dropped Out - Migration',
+            'Other',
+          ]),
+          validation: { required: true },
+        },
+        {
+          id: 'alm_x_otherreason',
+          key: 'other_exit_reason',
+          type: 'SHORT_TEXT',
+          label: 'Other Exit Reason (specify)',
+          pageNumber: 1,
+          validation: { maxLength: 200 },
+        },
+
+        // ── Page 2: Completion ──
+        {
+          id: 'alm_x_completed',
+          key: 'course_completed',
+          type: 'SINGLE_CHOICE',
+          label: 'Course Completed Successfully',
+          pageNumber: 2,
+          options: YES_NO(),
+          validation: { required: true },
+        },
+        {
+          id: 'alm_x_certissued',
+          key: 'certificate_issued',
+          type: 'SINGLE_CHOICE',
+          label: 'Certificate Issued',
+          description: 'Asked only when the course was completed.',
+          pageNumber: 2,
+          options: choices(['Yes', 'No', 'Pending']),
+          validation: {},
+        },
+        {
+          id: 'alm_x_certnum',
+          key: 'certificate_number',
+          type: 'SHORT_TEXT',
+          label: 'Certificate Number',
+          description: 'Asked only when a certificate was issued.',
+          pageNumber: 2,
+          validation: { maxLength: 40 },
+        },
+
+        // ── Page 3: Future Plans ──
+        {
+          id: 'alm_x_plan',
+          key: 'immediate_plan',
+          type: 'SINGLE_CHOICE',
+          label: 'Immediate Plan',
+          pageNumber: 3,
+          options: choices([
+            'Looking for Job',
+            'Self-employment',
+            'Further Studies',
+            'Home responsibilities',
+            'Undecided',
+          ]),
+          validation: { required: true },
+        },
+        {
+          id: 'alm_x_support',
+          key: 'support_needed',
+          type: 'MULTI_CHOICE',
+          label: 'Support Needed from ALAMB',
+          pageNumber: 3,
+          options: choices([
+            'Job placement',
+            'Reference letter',
+            'Skill enhancement',
+            'Business guidance',
+            'None',
+          ]),
+          validation: {},
+        },
+        {
+          id: 'alm_x_willing',
+          key: 'willing_to_be_contacted',
+          type: 'SINGLE_CHOICE',
+          label: 'Willing to be Contacted for Follow-up',
+          pageNumber: 3,
+          options: YES_NO(),
+          validation: { required: true },
+        },
+      ],
+      rules: [
+        // Show other exit reason when reason = Other
+        {
+          id: 'alm_x_show_other',
+          kind: 'SHOW',
+          target: 'other_exit_reason',
+          expr: { op: 'eq', args: [{ field: 'exit_reason' }, { lit: 'Other' }] },
+        },
+        {
+          id: 'alm_x_require_other',
+          kind: 'REQUIRE',
+          target: 'other_exit_reason',
+          expr: { op: 'eq', args: [{ field: 'exit_reason' }, { lit: 'Other' }] },
+        },
+        // Show certificate issued when completed = Yes
+        {
+          id: 'alm_x_show_cert',
+          kind: 'SHOW',
+          target: 'certificate_issued',
+          expr: { op: 'eq', args: [{ field: 'course_completed' }, { lit: 'Yes' }] },
+        },
+        {
+          id: 'alm_x_require_cert',
+          kind: 'REQUIRE',
+          target: 'certificate_issued',
+          expr: { op: 'eq', args: [{ field: 'course_completed' }, { lit: 'Yes' }] },
+        },
+        // Show certificate number when certificate_issued = Yes
+        {
+          id: 'alm_x_show_certnum',
+          kind: 'SHOW',
+          target: 'certificate_number',
+          expr: { op: 'eq', args: [{ field: 'certificate_issued' }, { lit: 'Yes' }] },
+        },
+        {
+          id: 'alm_x_require_certnum',
+          kind: 'REQUIRE',
+          target: 'certificate_number',
+          expr: { op: 'eq', args: [{ field: 'certificate_issued' }, { lit: 'Yes' }] },
+        },
+        // Exit date not in the future
+        {
+          id: 'alm_x_val_date',
+          kind: 'VALIDATE',
+          target: 'exit_date',
+          message: 'Exit date cannot be in the future.',
+          expr: { op: 'gt', args: [{ field: 'exit_date' }, { op: 'today', args: [] }] },
+        },
+      ],
+    },
+
+    // ─── Form 6: Placement Follow-up ────────────────────────────────────────
+    {
+      slug: 'alamb-placement-followup',
+      title: 'Placement Follow-up',
+      description:
+        'Post-completion employment tracking. Contact status gates the employment fields, and each employment type shows its own detail fields.',
+      role: 'ATTACHES',
+      settings: { requireAuth: false },
+      pages: [
+        { pageNumber: 1, title: 'Follow-up Details' },
+        { pageNumber: 2, title: 'Employment Status' },
+        { pageNumber: 3, title: 'Feedback' },
+      ],
+      questions: [
+        // ── Page 1: Follow-up Details ──
+        {
+          id: 'alm_f_number',
+          key: 'followup_number',
+          type: 'SINGLE_CHOICE',
+          label: 'Follow-up Number',
+          pageNumber: 1,
+          options: choices(['1st (1 Month)', '2nd (3 Months)', '3rd (6 Months)', 'Additional']),
+          validation: { required: true },
+        },
+        {
+          id: 'alm_f_date',
+          key: 'followup_date',
+          type: 'DATE',
+          label: 'Follow-up Date',
+          defaultValue: TODAY,
+          pageNumber: 1,
+          validation: { required: true },
+        },
+        {
+          id: 'alm_f_contact',
+          key: 'contact_made',
+          type: 'SINGLE_CHOICE',
+          label: 'Contact Made',
+          pageNumber: 1,
+          options: choices([
+            'Yes - Phone',
+            'Yes - In-person',
+            'No - Not reachable',
+            'No - Number changed',
+          ]),
+          validation: { required: true },
+        },
+
+        // ── Page 2: Employment ──
+        {
+          id: 'alm_f_empstatus',
+          key: 'current_employment_status',
+          type: 'SINGLE_CHOICE',
+          label: 'Current Employment Status',
+          description: 'Asked only when contact was made.',
+          pageNumber: 2,
+          options: choices([
+            'Employed - Formal Job',
+            'Self Employed',
+            'Continuing Studies',
+            'Homemaker',
+            'Job Seeking',
+            'Not Working',
+          ]),
+          validation: {},
+        },
+        {
+          id: 'alm_f_emprelated',
+          key: 'employment_related_to_course',
+          type: 'SINGLE_CHOICE',
+          label: 'Employment Related to Course',
+          description: 'Asked only when employed.',
+          pageNumber: 2,
+          options: choices(['Yes - Directly related', 'Yes - Partially related', 'No']),
+          validation: {},
+        },
+        {
+          id: 'alm_f_emptype',
+          key: 'employment_type',
+          type: 'SINGLE_CHOICE',
+          label: 'Type of Employment',
+          description: 'Asked only when employed.',
+          pageNumber: 2,
+          options: choices([
+            'Beauty Parlour',
+            'Boutique/Tailor Shop',
+            'Office Job',
+            'Factory',
+            'Home-based work',
+            'Own business',
+            'Other',
+          ]),
+          validation: {},
+        },
+        {
+          id: 'alm_f_employer',
+          key: 'employer_name',
+          type: 'SHORT_TEXT',
+          label: 'Employer Name',
+          description: 'Asked only for formal employment.',
+          pageNumber: 2,
+          validation: { maxLength: 200 },
+        },
+        {
+          id: 'alm_f_empaddr',
+          key: 'employer_address',
+          type: 'SHORT_TEXT',
+          label: 'Employer Address',
+          description: 'Asked only for formal employment.',
+          pageNumber: 2,
+          validation: { maxLength: 300 },
+        },
+        {
+          id: 'alm_f_salary',
+          key: 'monthly_salary',
+          type: 'SINGLE_CHOICE',
+          label: 'Monthly Salary / Income',
+          description: 'Asked only when employed.',
+          pageNumber: 2,
+          options: choices([
+            'Less than ₹3,000',
+            '₹3,000-5,000',
+            '₹5,000-8,000',
+            '₹8,000-10,000',
+            '₹10,000-15,000',
+            'Above ₹15,000',
+          ]),
+          validation: {},
+        },
+        {
+          id: 'alm_f_satisfaction',
+          key: 'job_satisfaction',
+          type: 'SINGLE_CHOICE',
+          label: 'Job Satisfaction',
+          description: 'Asked only when employed.',
+          pageNumber: 2,
+          options: choices(['Very Satisfied', 'Satisfied', 'Neutral', 'Dissatisfied']),
+          validation: {},
+        },
+        {
+          id: 'alm_f_studydetails',
+          key: 'study_details',
+          type: 'SHORT_TEXT',
+          label: 'Study Details',
+          description: 'Asked when continuing studies.',
+          pageNumber: 2,
+          validation: { maxLength: 200 },
+        },
+
+        // ── Page 3: Feedback ──
+        {
+          id: 'alm_f_helpful',
+          key: 'course_helpfulness',
+          type: 'SINGLE_CHOICE',
+          label: 'Course Helpfulness Rating',
+          pageNumber: 3,
+          options: choices(['Very Helpful', 'Helpful', 'Somewhat Helpful', 'Not Helpful']),
+          validation: {},
+        },
+        {
+          id: 'alm_f_recommend',
+          key: 'would_recommend',
+          type: 'SINGLE_CHOICE',
+          label: 'Would Recommend ALAMB',
+          pageNumber: 3,
+          options: choices(['Yes', 'Maybe', 'No']),
+          validation: {},
+        },
+        {
+          id: 'alm_f_needssupport',
+          key: 'needs_further_support',
+          type: 'SINGLE_CHOICE',
+          label: 'Needs Further Support',
+          pageNumber: 3,
+          options: YES_NO(),
+          validation: {},
+        },
+        {
+          id: 'alm_f_supporttype',
+          key: 'support_type_needed',
+          type: 'MULTI_CHOICE',
+          label: 'Support Type Needed',
+          description: 'Asked when the student needs further support.',
+          pageNumber: 3,
+          options: choices(['Job placement', 'Skill upgrade', 'Reference letter', 'Guidance', 'Other']),
+          validation: {},
+        },
+      ],
+      rules: [
+        // Show employment status when contact was made (phone or in-person)
+        {
+          id: 'alm_f_show_empstatus',
+          kind: 'SHOW',
+          target: 'current_employment_status',
+          expr: {
+            op: 'or',
+            args: [
+              { op: 'eq', args: [{ field: 'contact_made' }, { lit: 'Yes - Phone' }] },
+              { op: 'eq', args: [{ field: 'contact_made' }, { lit: 'Yes - In-person' }] },
+            ],
+          },
+        },
+        {
+          id: 'alm_f_require_empstatus',
+          kind: 'REQUIRE',
+          target: 'current_employment_status',
+          expr: {
+            op: 'or',
+            args: [
+              { op: 'eq', args: [{ field: 'contact_made' }, { lit: 'Yes - Phone' }] },
+              { op: 'eq', args: [{ field: 'contact_made' }, { lit: 'Yes - In-person' }] },
+            ],
+          },
+        },
+        // Show employment-related fields when employed
+        {
+          id: 'alm_f_show_emprelated',
+          kind: 'SHOW',
+          target: 'employment_related_to_course',
+          expr: {
+            op: 'or',
+            args: [
+              { op: 'eq', args: [{ field: 'current_employment_status' }, { lit: 'Employed - Formal Job' }] },
+              { op: 'eq', args: [{ field: 'current_employment_status' }, { lit: 'Self Employed' }] },
+            ],
+          },
+        },
+        {
+          id: 'alm_f_show_emptype',
+          kind: 'SHOW',
+          target: 'employment_type',
+          expr: {
+            op: 'or',
+            args: [
+              { op: 'eq', args: [{ field: 'current_employment_status' }, { lit: 'Employed - Formal Job' }] },
+              { op: 'eq', args: [{ field: 'current_employment_status' }, { lit: 'Self Employed' }] },
+            ],
+          },
+        },
+        {
+          id: 'alm_f_show_salary',
+          kind: 'SHOW',
+          target: 'monthly_salary',
+          expr: {
+            op: 'or',
+            args: [
+              { op: 'eq', args: [{ field: 'current_employment_status' }, { lit: 'Employed - Formal Job' }] },
+              { op: 'eq', args: [{ field: 'current_employment_status' }, { lit: 'Self Employed' }] },
+            ],
+          },
+        },
+        {
+          id: 'alm_f_show_satisfaction',
+          kind: 'SHOW',
+          target: 'job_satisfaction',
+          expr: {
+            op: 'or',
+            args: [
+              { op: 'eq', args: [{ field: 'current_employment_status' }, { lit: 'Employed - Formal Job' }] },
+              { op: 'eq', args: [{ field: 'current_employment_status' }, { lit: 'Self Employed' }] },
+            ],
+          },
+        },
+        // Show employer details only for formal job
+        {
+          id: 'alm_f_show_employer',
+          kind: 'SHOW',
+          target: 'employer_name',
+          expr: { op: 'eq', args: [{ field: 'current_employment_status' }, { lit: 'Employed - Formal Job' }] },
+        },
+        {
+          id: 'alm_f_show_empaddr',
+          kind: 'SHOW',
+          target: 'employer_address',
+          expr: { op: 'eq', args: [{ field: 'current_employment_status' }, { lit: 'Employed - Formal Job' }] },
+        },
+        // Show study details when continuing studies
+        {
+          id: 'alm_f_show_study',
+          kind: 'SHOW',
+          target: 'study_details',
+          expr: { op: 'eq', args: [{ field: 'current_employment_status' }, { lit: 'Continuing Studies' }] },
+        },
+        // Show support type when needs support = Yes
+        {
+          id: 'alm_f_show_support',
+          kind: 'SHOW',
+          target: 'support_type_needed',
+          expr: { op: 'eq', args: [{ field: 'needs_further_support' }, { lit: 'Yes' }] },
+        },
+        // Follow-up date not in the future
+        {
+          id: 'alm_f_val_date',
+          kind: 'VALIDATE',
+          target: 'followup_date',
+          message: 'Follow-up date cannot be in the future.',
+          expr: { op: 'gt', args: [{ field: 'followup_date' }, { op: 'today', args: [] }] },
+        },
+      ],
+    },
+  ],
+
+  // ── Steps ───────────────────────────────────────────────────────────────────
+  steps: [
+    // ── Scopes ────────────────────────────────────────────────────────────
+    // This is the scenario that motivated step scope, so it is the one that
+    // has to demonstrate it. A student is registered ONCE and then returned to
+    // month after month; every step below is therefore counted against the
+    // STUDENT, not against whichever sitting a field worker happens to be in.
+    //
+    // Left at the default SESSION, `maxEntries: 6` on the progress check would
+    // mean six per sitting, `uniqueBy: ['month_number']` would not stop month 3
+    // being entered twice in two visits, and adding March would demand the
+    // student's whole registration be re-typed first.
+    {
+      key: 'registration',
+      formSlug: 'alamb-registration',
+      title: 'Student Registration',
+      description: 'Personal, education, and family details. Filled once.',
+      icon: '📝',
+      mode: 'SINGLE',
+      // Once in the student's lifetime — not once per sitting, and not once
+      // per cycle. With no uniqueBy and a ceiling of one, the step is its own
+      // occurrence, so the partial unique index enforces this in the database.
+      scope: 'SUBJECT',
+      minEntries: 1,
+      maxEntries: 1,
+      isOptional: false,
+      uniqueBy: [],
+    },
+    {
+      key: 'enrollment',
+      formSlug: 'alamb-enrollment',
+      title: 'Course Enrollment',
+      description: 'Select course, batch, and job interest.',
+      icon: '🎓',
+      mode: 'SINGLE',
+      scope: 'SUBJECT',
+      minEntries: 1,
+      maxEntries: 1,
+      isOptional: false,
+      uniqueBy: [],
+    },
+    {
+      key: 'progress_checks',
+      formSlug: 'alamb-monthly-progress',
+      title: 'Monthly Progress Checks',
+      description: 'One entry per month. Attendance and skills are tracked.',
+      icon: '📊',
+      mode: 'REPEATABLE',
+      // Per student PER CYCLE. The six months are a cohort's course, so the
+      // count has to reset when the next batch starts — under plain SUBJECT
+      // scope a student repeating the course could never be tracked again.
+      scope: 'SUBJECT_PERIOD',
+      minEntries: 1,
+      maxEntries: 6,
+      isOptional: false,
+      uniqueBy: ['month_number'],
+    },
+    {
+      key: 'assessments',
+      formSlug: 'alamb-skill-assessment',
+      title: 'Skill Assessments',
+      description: 'Mid-term and final assessments with scores and grading.',
+      icon: '✅',
+      mode: 'REPEATABLE',
+      scope: 'SUBJECT',
+      minEntries: 0,
+      maxEntries: 2,
+      isOptional: true,
+      uniqueBy: ['assessment_type'],
+      occurredAtKey: 'assessment_date',
+    },
+    {
+      key: 'exit',
+      formSlug: 'alamb-course-exit',
+      title: 'Course Exit',
+      description: 'Completion or dropout. Certificate details for completions.',
+      icon: '🚪',
+      mode: 'SINGLE',
+      scope: 'SUBJECT',
+      minEntries: 0,
+      maxEntries: 1,
+      isOptional: true,
+      uniqueBy: [],
+      occurredAtKey: 'exit_date',
+    },
+    {
+      key: 'followups',
+      formSlug: 'alamb-placement-followup',
+      title: 'Placement Follow-ups',
+      description: 'Post-exit employment tracking at 1, 3, and 6 months.',
+      icon: '📞',
+      mode: 'REPEATABLE',
+      scope: 'SUBJECT',
+      minEntries: 0,
+      maxEntries: 3,
+      isOptional: true,
+      uniqueBy: ['followup_number'],
+      // Months apart from the sitting they are typed in, which is the whole
+      // reason a follow-up needs its own date.
+      occurredAtKey: 'followup_date',
+    },
+  ],
+
+  // ── Periods ─────────────────────────────────────────────────────────────────
+  periods: [
+    {
+      label: 'July–December 2025',
+      startsAt: monthStart(-7),
+      endsAt: monthStart(-1),
+      isActive: false,
+    },
+    {
+      label: 'January–June 2026',
+      startsAt: monthStart(-1),
+      endsAt: monthStart(5),
+      isActive: true,
+    },
+  ],
+
+  // ── Sessions ────────────────────────────────────────────────────────────────
+  sessions: [
+    // Session 1: Priya Sharma — complete journey through Computer course.
+    // Registered, enrolled, three progress checks, mid-term assessment,
+    // course exit (completed), and one placement follow-up (employed).
+    {
+      fingerprint: 'alamb-demo-1',
+      daysAgo: 140,
+      entries: [
+        {
+          stepKey: 'registration',
+          answers: {
+            registration_number: 'ALAMB/2026/0001',
+            full_name: 'Priya Sharma',
+            date_of_birth: '2003-06-15',
+            gender: 'Female',
+            contact_number: '9876543210',
+            address: 'House No. 45, Gali 3, Shiv Vihar, West Delhi',
+            area: 'shiv-vihar',
+            id_proof_type: 'Aadhar Card',
+            id_proof_number: '1234-5678-9012',
+            highest_qualification: '12th',
+            relationship_type: 'D/O (Daughter of Father)',
+            father_husband_name: 'Rajesh Sharma',
+            father_husband_occupation: 'Shop Owner',
+            mother_name: 'Sunita Sharma',
+            mother_occupation: 'Homemaker',
+            monthly_family_income: '₹10,000-15,000',
+            number_of_brothers: 1,
+            number_of_sisters: 2,
+          },
+        },
+        {
+          stepKey: 'enrollment',
+          answers: {
+            course_selected: 'computer',
+            batch: 'January-June 2026',
+            date_of_admission: iso(-140),
+            interested_in_job: 'Yes - Immediate',
+            preferred_job_type: ['Office/Company', 'Home-based work'],
+            referral_source: 'Friend/Family',
+          },
+        },
+        {
+          stepKey: 'progress_checks',
+          answers: {
+            month_number: 'Month 1',
+            days_attended: 23,
+            total_working_days: 26,
+            overall_progress: 'Good',
+            skills_computer: ['Typing', 'MS Word'],
+            participation_level: 'Active',
+            issues_concerns: ['None'],
+          },
+        },
+        {
+          stepKey: 'progress_checks',
+          answers: {
+            month_number: 'Month 2',
+            days_attended: 24,
+            total_working_days: 26,
+            overall_progress: 'Good',
+            skills_computer: ['Typing', 'MS Word', 'MS Excel'],
+            participation_level: 'Very Active',
+            issues_concerns: ['None'],
+          },
+        },
+        {
+          stepKey: 'progress_checks',
+          answers: {
+            month_number: 'Month 3',
+            days_attended: 22,
+            total_working_days: 26,
+            overall_progress: 'Excellent',
+            skills_computer: ['Typing', 'MS Word', 'MS Excel', 'MS PowerPoint'],
+            participation_level: 'Very Active',
+            issues_concerns: ['None'],
+          },
+        },
+        {
+          stepKey: 'assessments',
+          answers: {
+            assessment_type: 'Mid-Term (Month 3)',
+            assessment_date: iso(-50),
+            practical_test_conducted: 'Yes',
+            practical_score: 78,
+            practical_performance: 'Good',
+            theory_test_conducted: 'Yes',
+            theory_score: 72,
+            ready_for_certification: 'Needs More Practice',
+            assessor_remarks: 'Good progress in MS Office. Needs more practice on Excel formulas and Internet usage.',
+          },
+        },
+        {
+          stepKey: 'exit',
+          answers: {
+            exit_date: iso(-10),
+            exit_reason: 'Course Completed',
+            course_completed: 'Yes',
+            certificate_issued: 'Yes',
+            certificate_number: 'ALAMB/COMP/2026/001',
+            immediate_plan: 'Looking for Job',
+            support_needed: ['Job placement', 'Reference letter'],
+            willing_to_be_contacted: 'Yes',
+          },
+        },
+        {
+          stepKey: 'followups',
+          answers: {
+            followup_number: '1st (1 Month)',
+            followup_date: iso(-5),
+            contact_made: 'Yes - Phone',
+            current_employment_status: 'Employed - Formal Job',
+            employment_related_to_course: 'Yes - Directly related',
+            employment_type: 'Office Job',
+            employer_name: 'TechStar Solutions Pvt Ltd',
+            employer_address: 'Janakpuri, West Delhi',
+            monthly_salary: '₹8,000-10,000',
+            job_satisfaction: 'Satisfied',
+            course_helpfulness: 'Very Helpful',
+            would_recommend: 'Yes',
+          },
+        },
+      ],
+    },
+
+    // Session 2: Fatima Khan — in-progress, Beautician course.
+    // Registered, enrolled, two progress checks (one with low attendance and
+    // follow-up flagged). No assessment or exit yet.
+    {
+      fingerprint: 'alamb-demo-2',
+      daysAgo: 60,
+      entries: [
+        {
+          stepKey: 'registration',
+          answers: {
+            registration_number: 'ALAMB/2026/0002',
+            full_name: 'Fatima Khan',
+            date_of_birth: '2005-11-20',
+            gender: 'Female',
+            contact_number: '9812345678',
+            alternate_contact: '9898765432',
+            address: 'B-12, Om Vihar Phase-3, Uttam Nagar, West Delhi',
+            area: 'om-vihar-phase-3',
+            id_proof_type: 'Aadhar Card',
+            id_proof_number: '9876-5432-1098',
+            highest_qualification: '10th',
+            currently_studying: 'Yes',
+            current_study_details: 'Pursuing 11th through Open School (NIOS)',
+            relationship_type: 'D/O (Daughter of Father)',
+            father_husband_name: 'Mohammed Irfan Khan',
+            father_husband_occupation: 'Driver',
+            father_husband_contact: '9811223344',
+            mother_name: 'Nasreen Khan',
+            mother_occupation: 'Domestic Worker',
+            mother_contact: '9822334455',
+            monthly_family_income: '₹8,000-10,000',
+            number_of_brothers: 3,
+            number_of_sisters: 1,
+            has_guardian: 'Yes',
+            guardian_name: 'Arif Khan',
+            guardian_relationship: 'Elder Brother',
+            guardian_contact: '9833445566',
+          },
+        },
+        {
+          stepKey: 'enrollment',
+          answers: {
+            course_selected: 'beautician',
+            batch: 'January-June 2026',
+            date_of_admission: iso(-60),
+            interested_in_job: 'Yes - After some time',
+            preferred_job_type: ['Beauty Parlour', 'Home-based work'],
+            referral_source: 'Community meeting',
+          },
+        },
+        {
+          stepKey: 'progress_checks',
+          answers: {
+            month_number: 'Month 1',
+            days_attended: 20,
+            total_working_days: 26,
+            overall_progress: 'Good',
+            skills_beautician: ['Facial', 'Mehendi'],
+            participation_level: 'Active',
+            issues_concerns: ['Transportation'],
+          },
+        },
+        {
+          stepKey: 'progress_checks',
+          answers: {
+            month_number: 'Month 2',
+            days_attended: 14,
+            total_working_days: 26,
+            overall_progress: 'Needs Improvement',
+            skills_beautician: ['Facial', 'Mehendi', 'Manicure/Pedicure'],
+            participation_level: 'Passive',
+            issues_concerns: ['Family problems', 'Transportation'],
+            follow_up_required: 'Yes',
+            follow_up_notes: 'Attendance dropped sharply. Fatima mentioned her mother fell ill and she had to take over household chores. Counselled her and contacted her elder brother (guardian) to ensure she continues attending.',
+          },
+        },
+      ],
+    },
+  ],
+};
+
+const SCENARIOS: Scenario[] = [ANTENATAL, KHARIF, CAMPUS, COLD_CHAIN, GRIEVANCE, ALAMB];
 
 // ═════════════════════════════════════════════════════════════════════════════
 // Validation — the part that runs with or without a database
@@ -4240,7 +6258,9 @@ async function seedScenario(scenario: Scenario, ctx: SeedContext) {
       minEntries: step.mode === 'SINGLE' ? 1 : step.minEntries,
       maxEntries: step.mode === 'SINGLE' ? 1 : step.maxEntries,
       isOptional: step.isOptional,
+      scope: step.scope ?? 'SESSION',
       uniqueBy: step.uniqueBy as any,
+      occurredAtKey: step.occurredAtKey ?? null,
       showWhen: (step.showWhen ?? null) as any,
     })),
   });

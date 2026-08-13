@@ -1,6 +1,14 @@
 import {
-  Controller, Get, Post, Patch, Param, Query,
-  UseGuards, Body, Req, ParseUUIDPipe,
+  Controller,
+  Get,
+  Post,
+  Patch,
+  Param,
+  Query,
+  UseGuards,
+  Body,
+  Req,
+  ParseUUIDPipe,
 } from '@nestjs/common';
 import type { Request } from 'express';
 import { AdminService } from './admin.service';
@@ -74,7 +82,11 @@ export class AdminController {
     @Body() body: { systemRole: 'USER' | 'SUPER_ADMIN' },
     @Req() req: Request,
   ) {
-    return this.adminUsers.setSystemRole(userId, body.systemRole, (req.user as any).sub);
+    return this.adminUsers.setSystemRole(
+      userId,
+      body.systemRole,
+      (req.user as any).sub,
+    );
   }
 
   /** Role within one organization the user already belongs to. */
@@ -85,7 +97,12 @@ export class AdminController {
     @Body() body: { role: 'ADMIN' | 'EDITOR' | 'VIEWER' },
     @Req() req: Request,
   ) {
-    return this.adminUsers.setOrgRole(userId, orgId, body.role, (req.user as any).sub);
+    return this.adminUsers.setOrgRole(
+      userId,
+      orgId,
+      body.role,
+      (req.user as any).sub,
+    );
   }
 
   @Post('users/:userId/revoke-sessions')
@@ -102,12 +119,19 @@ export class AdminController {
     @Body() body: { suspended: boolean },
     @Req() req: Request,
   ) {
-    return this.adminUsers.setUserSuspended(userId, body.suspended === true, (req.user as any).sub);
+    return this.adminUsers.setUserSuspended(
+      userId,
+      body.suspended === true,
+      (req.user as any).sub,
+    );
   }
 
   /** Support path for a user locked out of their authenticator. */
   @Post('users/:userId/reset-mfa')
-  async resetMfa(@Param('userId', new ParseUUIDPipe()) userId: string, @Req() req: Request) {
+  async resetMfa(
+    @Param('userId', new ParseUUIDPipe()) userId: string,
+    @Req() req: Request,
+  ) {
     return this.adminUsers.resetMfa(userId, (req.user as any).sub);
   }
 
@@ -126,7 +150,10 @@ export class AdminController {
 
   @Get('organizations')
   async listOrganizations(@Query() query: PaginationQueryDto) {
-    return this.adminService.listOrganizations(parsePagination(query), query.search);
+    return this.adminService.listOrganizations(
+      parsePagination(query),
+      query.search,
+    );
   }
 
   @Get('organizations/:orgId')
@@ -139,7 +166,10 @@ export class AdminController {
     @Param('orgId') orgId: string,
     @Body('reason') reason: string,
   ) {
-    return this.adminService.suspendOrganization(orgId, reason ?? 'Suspended by administrator');
+    return this.adminService.suspendOrganization(
+      orgId,
+      reason ?? 'Suspended by administrator',
+    );
   }
 
   @Post('organizations/:orgId/activate')
@@ -150,7 +180,8 @@ export class AdminController {
   @Patch('organizations/:orgId/quotas')
   async updateOrgQuotas(
     @Param('orgId') orgId: string,
-    @Body() quotas: {
+    @Body()
+    quotas: {
       maxForms?: number;
       maxSubmissionsMonth?: number;
       maxMembers?: number;
@@ -179,6 +210,10 @@ export class AdminController {
 
   @Get('audit-logs')
   async getAuditLogs(@Query() query: AuditLogQueryDto) {
-    return this.adminService.getAuditLogs(parsePagination(query), query.orgId, query.action);
+    return this.adminService.getAuditLogs(
+      parsePagination(query),
+      query.orgId,
+      query.action,
+    );
   }
 }

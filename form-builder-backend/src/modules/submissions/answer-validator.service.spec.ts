@@ -21,19 +21,25 @@ describe('AnswerValidatorService', () => {
     };
 
     it('accepts a valid row/column pair', () => {
-      const result = validator.validate([question], { q1: { 'Item A': 'Yes' } });
+      const result = validator.validate([question], {
+        q1: { 'Item A': 'Yes' },
+      });
       expect(result.valid).toBe(true);
       expect(result.sanitized.q1).toEqual({ 'Item A': 'Yes' });
     });
 
     it('rejects a row that is not on the question', () => {
-      const result = validator.validate([question], { q1: { 'Made up row': 'Yes' } });
+      const result = validator.validate([question], {
+        q1: { 'Made up row': 'Yes' },
+      });
       expect(result.valid).toBe(false);
       expect(result.issues[0].code).toBe('OPTION');
     });
 
     it('rejects a column value that is not on the question', () => {
-      const result = validator.validate([question], { q1: { 'Item A': 'Maybe' } });
+      const result = validator.validate([question], {
+        q1: { 'Item A': 'Maybe' },
+      });
       expect(result.valid).toBe(false);
       expect(result.issues[0].code).toBe('OPTION');
     });
@@ -81,7 +87,11 @@ describe('AnswerValidatorService', () => {
     });
 
     it('does not require a question hidden by conditional logic', () => {
-      const result = validator.validate([required], {}, { visibleQuestionIds: new Set() });
+      const result = validator.validate(
+        [required],
+        {},
+        { visibleQuestionIds: new Set() },
+      );
       expect(result.valid).toBe(true);
     });
 
@@ -100,7 +110,11 @@ describe('AnswerValidatorService', () => {
 
     it('still applies a REQUIRE rule to an otherwise-optional question', () => {
       const optional = { id: 'q1', type: 'SHORT_TEXT', label: 'Why?' };
-      const result = validator.validate([optional], {}, { extraRequiredIds: new Set(['q1']) });
+      const result = validator.validate(
+        [optional],
+        {},
+        { extraRequiredIds: new Set(['q1']) },
+      );
       expect(result.issues[0].code).toBe('REQUIRED');
     });
   });
@@ -156,25 +170,39 @@ describe('AnswerValidatorService — choice lists', () => {
   const catalogue = new Map([
     ['in-districts::NL-kohima', { value: 'NL-kohima', parentValue: 'NL' }],
     ['in-districts::NL-phek', { value: 'NL-phek', parentValue: 'NL' }],
-    ['ng-blocks::NL-kohima-chiephobozou', {
-      value: 'NL-kohima-chiephobozou',
-      parentValue: 'NL-kohima',
-    }],
-    ['ng-blocks::NL-phek-chozuba', { value: 'NL-phek-chozuba', parentValue: 'NL-phek' }],
+    [
+      'ng-blocks::NL-kohima-chiephobozou',
+      {
+        value: 'NL-kohima-chiephobozou',
+        parentValue: 'NL-kohima',
+      },
+    ],
+    [
+      'ng-blocks::NL-phek-chozuba',
+      { value: 'NL-phek-chozuba', parentValue: 'NL-phek' },
+    ],
   ]);
 
   it('accepts a value that is on the list', () => {
-    const result = validator.validate([district], { q_district: 'NL-kohima' }, {
-      choiceItems: catalogue,
-    });
+    const result = validator.validate(
+      [district],
+      { q_district: 'NL-kohima' },
+      {
+        choiceItems: catalogue,
+      },
+    );
     expect(result.valid).toBe(true);
     expect(result.sanitized.q_district).toBe('NL-kohima');
   });
 
   it('rejects a value that is not on the list', () => {
-    const result = validator.validate([district], { q_district: 'MADE-UP' }, {
-      choiceItems: catalogue,
-    });
+    const result = validator.validate(
+      [district],
+      { q_district: 'MADE-UP' },
+      {
+        choiceItems: catalogue,
+      },
+    );
     expect(result.valid).toBe(false);
     expect(result.issues[0].code).toBe('OPTION');
   });
@@ -205,21 +233,33 @@ describe('AnswerValidatorService — choice lists', () => {
   it('fails closed when the catalogue could not be resolved', () => {
     // Accepting the value would silently store something that is not on the
     // list; there is no safe way to "skip" this check.
-    const result = validator.validate([district], { q_district: 'NL-kohima' }, {});
+    const result = validator.validate(
+      [district],
+      { q_district: 'NL-kohima' },
+      {},
+    );
     expect(result.valid).toBe(false);
     expect(result.issues[0].code).toBe('OPTION_SOURCE');
   });
 
   it('checks every selection of a list-backed multi-choice', () => {
     const multi = { ...district, id: 'q_multi', type: 'MULTI_CHOICE' };
-    const ok = validator.validate([multi], { q_multi: ['NL-kohima', 'NL-phek'] }, {
-      choiceItems: catalogue,
-    });
+    const ok = validator.validate(
+      [multi],
+      { q_multi: ['NL-kohima', 'NL-phek'] },
+      {
+        choiceItems: catalogue,
+      },
+    );
     expect(ok.valid).toBe(true);
 
-    const bad = validator.validate([multi], { q_multi: ['NL-kohima', 'MADE-UP'] }, {
-      choiceItems: catalogue,
-    });
+    const bad = validator.validate(
+      [multi],
+      { q_multi: ['NL-kohima', 'MADE-UP'] },
+      {
+        choiceItems: catalogue,
+      },
+    );
     expect(bad.valid).toBe(false);
   });
 

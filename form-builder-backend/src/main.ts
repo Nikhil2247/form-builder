@@ -4,6 +4,13 @@
 // their defaults — which is how every queue ended up pointed at localhost.
 import './config/env';
 
+// Second, and before AppModule is imported. Sentry patches the modules it
+// instruments at require time, so initialising it after the application graph
+// has been pulled in means those patches never take — the SDK loads, reports
+// nothing, and looks configured. No-ops entirely when SENTRY_DSN is unset.
+import { initSentry } from './config/sentry';
+initSentry('api');
+
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
@@ -21,7 +28,7 @@ import { getProcessRole } from './config/runtime.config';
 };
 
 async function bootstrap() {
-  // We use bufferLogs to ensure that NestJS buffers all initialisation logs 
+  // We use bufferLogs to ensure that NestJS buffers all initialisation logs
   // until we can attach our Winston logger adapter.
   const app = await NestFactory.create(AppModule, {
     bufferLogs: true,
@@ -41,7 +48,18 @@ async function bootstrap() {
 
   // ── API Versioning ────────────────────────────────────────────────────────
   // All routes served under /v1/ prefix for future versioning (URI-based).
-  app.setGlobalPrefix('v1');
+  //
+  // /metrics is excluded deliberately. It is not part of the versioned public
+  // API — it is an operational endpoint on the fixed, conventional path every
+  // Prometheus service monitor and Helm chart defaults to. It also has to agree
+  // with the worker, which serves the same registry from a bare http listener
+  // on METRICS_PORT with no notion of a prefix, so that one scrape config can
+  // target both process roles.
+  //
+  // /health is NOT excluded: it stays at /v1/health, where probes, uptime
+  // monitors and the load-balancer check are already pointed. Moving it would
+  // be an outage disguised as a tidy-up.
+  app.setGlobalPrefix('v1', { exclude: ['metrics'] });
 
   // ── Body Size Limits ──────────────────────────────────────────────────────
   // Explicit and small. File bytes never pass through this API (uploads go
@@ -65,7 +83,9 @@ async function bootstrap() {
   const csvJson = json({ limit: csvBodyLimit });
   const CSV_IMPORT_ROUTE = /\/choice-lists\/(?:[^/]+\/)?import\//;
   app.use((req: any, res: any, next: any) =>
-    req.method === 'POST' && CSV_IMPORT_ROUTE.test(req.path) ? csvJson(req, res, next) : next(),
+    req.method === 'POST' && CSV_IMPORT_ROUTE.test(req.path)
+      ? csvJson(req, res, next)
+      : next(),
   );
 
   app.use(json({ limit: bodyLimit }));
@@ -162,4 +182,13 @@ async function bootstrap() {
   }
 }
 
-bootstrap();
+// A failure here — an unreachable database, a Joi-rejected env var, a port
+// already bound — used to surface as an unhandled promise rejection. Node
+// prints a warning-shaped stack and exits with a code that is not obviously a
+// failure, so a container that never came up could look like one that started
+// and stopped. Fail loudly and with a non-zero code, which is what an
+// orchestrator reads.
+bootstrap().catch((err) => {
+  console.error('Fatal: API failed to start.', err);
+  process.exit(1);
+});

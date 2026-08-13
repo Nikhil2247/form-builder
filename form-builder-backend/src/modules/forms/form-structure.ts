@@ -131,7 +131,17 @@ function str(value: unknown, max: number, fallback = ''): string {
 }
 
 function intOrUndefined(value: unknown): number | undefined {
-  const n = typeof value === 'number' ? value : Number.parseInt(String(value ?? ''), 10);
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? Math.trunc(value) : undefined;
+  }
+  // Only strings are worth parsing. Previously anything was coerced with
+  // `String(value ?? '')`, so an object arrived as "[object Object]" and parsed
+  // to NaN — the same `undefined` this returns, but by accident rather than by
+  // decision, and via a coercion that would have masked a real value if the
+  // object had ever had a useful toString.
+  if (typeof value !== 'string') return undefined;
+
+  const n = Number.parseInt(value, 10);
   return Number.isFinite(n) ? Math.trunc(n) : undefined;
 }
 
@@ -148,12 +158,15 @@ function generatedId(prefix: string) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 function normalizePages(input: unknown): any[] {
-  if (input == null) return [{ pageNumber: 1, title: 'Page 1', description: '' }];
+  if (input == null)
+    return [{ pageNumber: 1, title: 'Page 1', description: '' }];
   if (!Array.isArray(input)) {
     throw new BadRequestException('`pages` must be an array.');
   }
   if (input.length > STRUCTURE_LIMITS.MAX_PAGES) {
-    throw new BadRequestException(`A form cannot have more than ${STRUCTURE_LIMITS.MAX_PAGES} pages.`);
+    throw new BadRequestException(
+      `A form cannot have more than ${STRUCTURE_LIMITS.MAX_PAGES} pages.`,
+    );
   }
 
   const seen = new Set<number>();
@@ -170,12 +183,20 @@ function normalizePages(input: unknown): any[] {
 
     pages.push({
       pageNumber,
-      title: str(raw.title, STRUCTURE_LIMITS.MAX_LABEL_LENGTH, `Page ${pageNumber}`),
-      description: str(raw.description, STRUCTURE_LIMITS.MAX_DESCRIPTION_LENGTH),
+      title: str(
+        raw.title,
+        STRUCTURE_LIMITS.MAX_LABEL_LENGTH,
+        `Page ${pageNumber}`,
+      ),
+      description: str(
+        raw.description,
+        STRUCTURE_LIMITS.MAX_DESCRIPTION_LENGTH,
+      ),
     });
   }
 
-  if (pages.length === 0) return [{ pageNumber: 1, title: 'Page 1', description: '' }];
+  if (pages.length === 0)
+    return [{ pageNumber: 1, title: 'Page 1', description: '' }];
   return pages.sort((a, b) => a.pageNumber - b.pageNumber);
 }
 
@@ -183,7 +204,10 @@ function normalizePages(input: unknown): any[] {
 // Questions
 // ─────────────────────────────────────────────────────────────────────────────
 
-function normalizeOptions(raw: unknown, questionLabel: string): any[] | undefined {
+function normalizeOptions(
+  raw: unknown,
+  questionLabel: string,
+): any[] | undefined {
   if (!Array.isArray(raw)) return undefined;
   if (raw.length > STRUCTURE_LIMITS.MAX_OPTIONS_PER_QUESTION) {
     throw new BadRequestException(
@@ -199,11 +223,18 @@ function normalizeOptions(raw: unknown, questionLabel: string): any[] | undefine
 
     // Option ids key the answer payload. A duplicate would make two options
     // indistinguishable in every response and every export.
-    let id = typeof option.id === 'string' && option.id ? option.id : generatedId('opt');
+    let id =
+      typeof option.id === 'string' && option.id
+        ? option.id
+        : generatedId('opt');
     if (seenIds.has(id)) id = generatedId('opt');
     seenIds.add(id);
 
-    const label = str(option.label, STRUCTURE_LIMITS.MAX_LABEL_LENGTH, 'Option');
+    const label = str(
+      option.label,
+      STRUCTURE_LIMITS.MAX_LABEL_LENGTH,
+      'Option',
+    );
     options.push({
       id,
       label,
@@ -231,7 +262,9 @@ function normalizeOptionsSource(
 ): Record<string, any> | undefined {
   if (raw == null) return undefined;
   if (!isPlainObject(raw)) {
-    throw new BadRequestException(`"${questionLabel}" has a malformed options source.`);
+    throw new BadRequestException(
+      `"${questionLabel}" has a malformed options source.`,
+    );
   }
 
   if (raw.kind !== 'CHOICE_LIST') {
@@ -250,13 +283,23 @@ function normalizeOptionsSource(
 
   const listSlug = typeof raw.listSlug === 'string' ? raw.listSlug.trim() : '';
   if (!listSlug) {
-    throw new BadRequestException(`"${questionLabel}" is missing the list to take options from.`);
+    throw new BadRequestException(
+      `"${questionLabel}" is missing the list to take options from.`,
+    );
   }
 
-  const source: Record<string, any> = { kind: 'CHOICE_LIST', listSlug: listSlug.slice(0, 60) };
+  const source: Record<string, any> = {
+    kind: 'CHOICE_LIST',
+    listSlug: listSlug.slice(0, 60),
+  };
 
-  if (typeof raw.parentQuestionKey === 'string' && raw.parentQuestionKey.trim()) {
-    source.parentQuestionKey = raw.parentQuestionKey.trim().slice(0, STRUCTURE_LIMITS.MAX_KEY_LENGTH);
+  if (
+    typeof raw.parentQuestionKey === 'string' &&
+    raw.parentQuestionKey.trim()
+  ) {
+    source.parentQuestionKey = raw.parentQuestionKey
+      .trim()
+      .slice(0, STRUCTURE_LIMITS.MAX_KEY_LENGTH);
   }
   if (typeof raw.displayField === 'string' && raw.displayField.trim()) {
     source.displayField = raw.displayField.trim().slice(0, 60);
@@ -272,7 +315,13 @@ function normalizeValidation(raw: unknown): Record<string, any> {
   const out: Record<string, any> = {};
   if (typeof raw.required === 'boolean') out.required = raw.required;
 
-  for (const key of ['minLength', 'maxLength', 'min', 'max', 'maxSizeMb'] as const) {
+  for (const key of [
+    'minLength',
+    'maxLength',
+    'min',
+    'max',
+    'maxSizeMb',
+  ] as const) {
     const n = intOrUndefined(raw[key]);
     if (n !== undefined) out[key] = n;
   }
@@ -324,17 +373,26 @@ function normalizeQuestions(input: unknown, validPages: Set<number>): any[] {
     // of them. Neither is recoverable after the fact, so neither is allowed
     // through — but a *new* id is safe here, since a question the client failed
     // to identify cannot have answers bound to it yet.
-    let id = typeof raw.id === 'string' && raw.id.trim() ? raw.id.trim() : generatedId('q');
+    let id =
+      typeof raw.id === 'string' && raw.id.trim()
+        ? raw.id.trim()
+        : generatedId('q');
     if (seenIds.has(id)) id = generatedId('q');
     seenIds.add(id);
 
-    const label = str(raw.label, STRUCTURE_LIMITS.MAX_LABEL_LENGTH, 'Untitled question');
+    const label = str(
+      raw.label,
+      STRUCTURE_LIMITS.MAX_LABEL_LENGTH,
+      'Untitled question',
+    );
 
     // A question on a page that does not exist is unreachable — the runner
     // renders pages, not orphans, so it would silently never be shown.
     const declaredPage = intOrUndefined(raw.pageNumber);
     const pageNumber =
-      declaredPage !== undefined && validPages.has(declaredPage) ? declaredPage : firstPage;
+      declaredPage !== undefined && validPages.has(declaredPage)
+        ? declaredPage
+        : firstPage;
 
     // The key is what rules address this question by. Author-set when provided,
     // otherwise derived from the label. Uniqueness is enforced here because a
@@ -342,7 +400,9 @@ function normalizeQuestions(input: unknown, validPages: Set<number>): any[] {
     // and unlike ids, keys are not the join key for stored answers, so
     // renaming one to break a tie is safe.
     let key =
-      typeof raw.key === 'string' && raw.key.trim() ? slugifyKey(raw.key) : slugifyKey(label);
+      typeof raw.key === 'string' && raw.key.trim()
+        ? slugifyKey(raw.key)
+        : slugifyKey(label);
     if (seenKeys.has(key)) {
       let suffix = 2;
       while (seenKeys.has(`${key}_${suffix}`)) suffix += 1;
@@ -355,7 +415,10 @@ function normalizeQuestions(input: unknown, validPages: Set<number>): any[] {
       key,
       type,
       label,
-      description: str(raw.description, STRUCTURE_LIMITS.MAX_DESCRIPTION_LENGTH),
+      description: str(
+        raw.description,
+        STRUCTURE_LIMITS.MAX_DESCRIPTION_LENGTH,
+      ),
       placeholder: str(raw.placeholder, STRUCTURE_LIMITS.MAX_LABEL_LENGTH),
       validation: normalizeValidation(raw.validation),
       pageNumber,
@@ -380,7 +443,11 @@ function normalizeQuestions(input: unknown, validPages: Set<number>): any[] {
 
     // A question bound to a managed list has no static options, and must not
     // be required to have any — its options live in the database.
-    const optionsSource = normalizeOptionsSource(raw.optionsSource, type, label);
+    const optionsSource = normalizeOptionsSource(
+      raw.optionsSource,
+      type,
+      label,
+    );
     if (optionsSource) question.optionsSource = optionsSource;
 
     const options = normalizeOptions(raw.options, label);
@@ -423,10 +490,14 @@ function normalizeQuestions(input: unknown, validPages: Set<number>): any[] {
 
     // ── Quiz ────────────────────────────────────────────────────────────────
     const points = intOrUndefined(raw.points);
-    if (points !== undefined) question.points = Math.min(Math.max(points, 0), 1_000);
+    if (points !== undefined)
+      question.points = Math.min(Math.max(points, 0), 1_000);
 
     if (typeof raw.correctAnswer === 'string') {
-      question.correctAnswer = str(raw.correctAnswer, STRUCTURE_LIMITS.MAX_LABEL_LENGTH);
+      question.correctAnswer = str(
+        raw.correctAnswer,
+        STRUCTURE_LIMITS.MAX_LABEL_LENGTH,
+      );
     } else if (Array.isArray(raw.correctAnswer)) {
       question.correctAnswer = raw.correctAnswer
         .filter((a: unknown): a is string => typeof a === 'string')
@@ -434,7 +505,10 @@ function normalizeQuestions(input: unknown, validPages: Set<number>): any[] {
     }
 
     if (typeof raw.explanation === 'string') {
-      question.explanation = str(raw.explanation, STRUCTURE_LIMITS.MAX_DESCRIPTION_LENGTH);
+      question.explanation = str(
+        raw.explanation,
+        STRUCTURE_LIMITS.MAX_DESCRIPTION_LENGTH,
+      );
     }
 
     if (raw.defaultValue !== undefined && raw.defaultValue !== null) {
@@ -480,7 +554,9 @@ function assertCascadesResolve(questions: any[]): void {
       );
     }
     if (parentKey === question.key) {
-      throw new BadRequestException(`"${question.label}" cannot be filtered by itself.`);
+      throw new BadRequestException(
+        `"${question.label}" cannot be filtered by itself.`,
+      );
     }
   });
 }
@@ -489,7 +565,11 @@ function assertCascadesResolve(questions: any[]): void {
 // Logic
 // ─────────────────────────────────────────────────────────────────────────────
 
-function normalizeLogic(input: unknown, questionIds: Set<string>, pageNumbers: Set<number>): any[] {
+function normalizeLogic(
+  input: unknown,
+  questionIds: Set<string>,
+  pageNumbers: Set<number>,
+): any[] {
   if (input == null) return [];
   if (!Array.isArray(input)) {
     throw new BadRequestException('`logic` must be an array.');
@@ -514,10 +594,12 @@ function normalizeLogic(input: unknown, questionIds: Set<string>, pageNumbers: S
     // is a normal, intentional act; it should not make the form unsaveable, and
     // a rule that can never fire is worse than no rule — a HIDE with a stale
     // target used to hide a live field with no way to find out why.
-    const triggerQuestionId = typeof raw.triggerQuestionId === 'string' ? raw.triggerQuestionId : '';
+    const triggerQuestionId =
+      typeof raw.triggerQuestionId === 'string' ? raw.triggerQuestionId : '';
     if (!questionIds.has(triggerQuestionId)) continue;
 
-    let id = typeof raw.id === 'string' && raw.id ? raw.id : generatedId('logic');
+    let id =
+      typeof raw.id === 'string' && raw.id ? raw.id : generatedId('logic');
     if (seenIds.has(id)) id = generatedId('logic');
     seenIds.add(id);
 
@@ -534,7 +616,8 @@ function normalizeLogic(input: unknown, questionIds: Set<string>, pageNumbers: S
       if (target === undefined || !pageNumbers.has(target)) continue;
       rule.targetPageNumber = target;
     } else {
-      const target = typeof raw.targetQuestionId === 'string' ? raw.targetQuestionId : '';
+      const target =
+        typeof raw.targetQuestionId === 'string' ? raw.targetQuestionId : '';
       if (!questionIds.has(target)) continue;
       // A rule whose trigger is its own target can never settle: showing the
       // field changes the answer that decides whether to show it.
@@ -560,7 +643,10 @@ export function normalizeTheme(input: unknown): Record<string, any> {
     throw new BadRequestException('`themeConfig` must be an object.');
   }
 
-  const entries = Object.entries(input).slice(0, STRUCTURE_LIMITS.MAX_THEME_KEYS);
+  const entries = Object.entries(input).slice(
+    0,
+    STRUCTURE_LIMITS.MAX_THEME_KEYS,
+  );
   const theme: Record<string, any> = {};
 
   for (const [key, value] of entries) {
@@ -625,7 +711,10 @@ function normalizeRules(input: unknown): any[] {
   for (const raw of input) {
     if (!isPlainObject(raw)) continue;
 
-    let id = typeof raw.id === 'string' && raw.id.trim() ? raw.id.trim() : generatedId('rule');
+    let id =
+      typeof raw.id === 'string' && raw.id.trim()
+        ? raw.id.trim()
+        : generatedId('rule');
     if (seen.has(id)) id = generatedId('rule');
     seen.add(id);
 
@@ -649,10 +738,22 @@ function normalizeRules(input: unknown): any[] {
 }
 
 export function normalizeFormStructure(
-  input: { pages?: unknown; questions?: unknown; logic?: unknown; rules?: unknown },
-  current: { pages?: unknown; questions?: unknown; logic?: unknown; rules?: unknown } = {},
+  input: {
+    pages?: unknown;
+    questions?: unknown;
+    logic?: unknown;
+    rules?: unknown;
+  },
+  current: {
+    pages?: unknown;
+    questions?: unknown;
+    logic?: unknown;
+    rules?: unknown;
+  } = {},
 ): NormalizedStructure {
-  const pages = normalizePages(input.pages !== undefined ? input.pages : current.pages);
+  const pages = normalizePages(
+    input.pages !== undefined ? input.pages : current.pages,
+  );
   const pageNumbers = new Set<number>(pages.map((p) => p.pageNumber));
 
   const questions = normalizeQuestions(
@@ -667,9 +768,14 @@ export function normalizeFormStructure(
     pageNumbers,
   );
 
-  const rules = normalizeRules(input.rules !== undefined ? input.rules : current.rules);
+  const rules = normalizeRules(
+    input.rules !== undefined ? input.rules : current.rules,
+  );
 
-  const bytes = Buffer.byteLength(JSON.stringify({ pages, questions, logic, rules }), 'utf8');
+  const bytes = Buffer.byteLength(
+    JSON.stringify({ pages, questions, logic, rules }),
+    'utf8',
+  );
   if (bytes > STRUCTURE_LIMITS.MAX_DEFINITION_BYTES) {
     throw new BadRequestException(
       `This form is too large to save (${Math.round(bytes / 1024)} kb of ` +

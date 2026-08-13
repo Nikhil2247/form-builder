@@ -16,17 +16,8 @@ import { WinstonNestAdapter } from './winston-nest.adapter';
  */
 @Global()
 @Module({
-  imports: [
-    WinstonModule.forRoot(winstonModuleOptions),
-  ],
-  providers: [
-    AppLogger,
-    WinstonNestAdapter,
-  ],
-  exports: [
-    AppLogger,
-    WinstonNestAdapter,
-    WinstonModule,
-  ],
+  imports: [WinstonModule.forRoot(winstonModuleOptions)],
+  providers: [AppLogger, WinstonNestAdapter],
+  exports: [AppLogger, WinstonNestAdapter, WinstonModule],
 })
 export class LoggerModule {}

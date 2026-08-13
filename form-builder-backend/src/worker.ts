@@ -2,6 +2,12 @@
 // so a Redis URL resolved before .env loads breaks it completely.
 import './config/env';
 
+// Before AppModule, for the same reason as main.ts: Sentry instruments modules
+// at require time. Tagged 'worker' so a failure in code shared with the API is
+// attributable to the deployment it actually happened on.
+import { initSentry } from './config/sentry';
+initSentry('worker');
+
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 import { WinstonNestAdapter } from './common/logger/winston-nest.adapter';
@@ -49,4 +55,10 @@ async function bootstrapWorker() {
   process.on('SIGINT', () => void shutdown('SIGINT'));
 }
 
-bootstrapWorker();
+// Same reasoning as main.ts: a worker that cannot reach Redis must exit
+// non-zero so the orchestrator restarts it, rather than dying to an unhandled
+// rejection and leaving the queue quietly unconsumed.
+bootstrapWorker().catch((err) => {
+  console.error('Fatal: worker failed to start.', err);
+  process.exit(1);
+});

@@ -76,7 +76,8 @@ export const EMPTY_PLAN: CompiledPlan = {
  * plan is well-formed, and it already ran at publish.
  */
 export function readPlan(stored: unknown): CompiledPlan {
-  if (!stored || typeof stored !== 'object' || Array.isArray(stored)) return EMPTY_PLAN;
+  if (!stored || typeof stored !== 'object' || Array.isArray(stored))
+    return EMPTY_PLAN;
 
   const raw = stored as Partial<CompiledPlan>;
   const list = (v: unknown) => (Array.isArray(v) ? v : []);
@@ -87,7 +88,9 @@ export function readPlan(stored: unknown): CompiledPlan {
     require: list(raw.require),
     validate: list(raw.validate),
     references: list(raw.references),
-    calculatedKeys: list(raw.calculatedKeys).filter((k): k is string => typeof k === 'string'),
+    calculatedKeys: list(raw.calculatedKeys).filter(
+      (k): k is string => typeof k === 'string',
+    ),
     // Absent on every plan compiled before choice lists existed, which is the
     // common case for a while yet.
     lookups: list(raw.lookups),
@@ -116,7 +119,10 @@ export function buildKeyMaps(questions: AdapterQuestion[]): {
     // Versions published before keys existed fall back to the id, so a rule
     // authored against such a version still resolves rather than silently
     // reading null.
-    const key = typeof question.key === 'string' && question.key ? question.key : question.id;
+    const key =
+      typeof question.key === 'string' && question.key
+        ? question.key
+        : question.id;
     if (!idByKey.has(key)) idByKey.set(key, question.id);
     keyById.set(question.id, key);
   }

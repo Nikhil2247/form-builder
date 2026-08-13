@@ -72,7 +72,10 @@ export class TemplatesService {
     // seeded rows; an empty filter option is worse than none.
     return rows
       .map((row) => row.category)
-      .filter((category): category is string => !!category && category.trim().length > 0);
+      .filter(
+        (category): category is string =>
+          !!category && category.trim().length > 0,
+      );
   }
 
   async getTemplateById(id: string) {

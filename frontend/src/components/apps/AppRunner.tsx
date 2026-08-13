@@ -20,6 +20,7 @@ import { FormRunner } from '@/components/builder/FormRunner';
 import {
   useAppSession,
   type AppSessionStep,
+  type AppSessionSubject,
   type SessionIssue,
 } from '@/hooks/use-app-session';
 import { cn } from '@/lib/utils';
@@ -94,15 +95,71 @@ function resolveStepLayout(appMode: AppLayoutMode, formMode: string | undefined)
   return formMode === 'GRID' ? 'GRID' : 'DOCUMENT';
 }
 
+/**
+ * Who this sitting is about.
+ *
+ * A follow-up form with no record on screen is indistinguishable from a blank
+ * one, and a worker filing four students' visits in a row has no way to tell
+ * they are on the wrong person until after they submit. The identity is stated
+ * before the first field, not after the last.
+ */
+function SubjectContextCard({
+  subject,
+  periodLabel,
+}: {
+  subject: AppSessionSubject;
+  periodLabel: string | null;
+}) {
+  const attributes = Object.entries(subject.attributes ?? {})
+    .filter(([, value]) => value !== null && value !== undefined && value !== '')
+    .slice(0, 4);
+
+  return (
+    <Card className="flex flex-wrap items-center gap-x-6 gap-y-2 p-4">
+      <div className="min-w-0 flex-1">
+        <p className="text-xs text-muted-foreground">Recording for</p>
+        <p className="truncate text-base font-semibold text-foreground">
+          {subject.displayName}
+        </p>
+        {attributes.length > 0 && (
+          <p className="mt-0.5 truncate text-xs text-muted-foreground">
+            {attributes.map(([key, value]) => `${key}: ${String(value)}`).join(' · ')}
+          </p>
+        )}
+      </div>
+      <div className="flex shrink-0 flex-col items-end gap-1">
+        {subject.externalId && (
+          <span className="tabular rounded-md border border-border bg-muted px-2 py-0.5 text-xs text-muted-foreground">
+            {subject.externalId}
+          </span>
+        )}
+        {periodLabel && (
+          <span className="text-xs text-muted-foreground">{periodLabel}</span>
+        )}
+      </div>
+    </Card>
+  );
+}
+
 export function AppRunner({
   publicSlug,
   app,
   appearance = APP_APPEARANCE_DEFAULTS,
+  subjectId,
+  stepKeys,
 }: {
   publicSlug: string;
   app: AppSummary;
   /** Defaulted so the builder preview can mount this without styling decisions. */
   appearance?: AppAppearance;
+  /**
+   * Record this session attaches to. Present when the respondent arrived from a
+   * record's "Add entry" — registration is skipped and only the steps still
+   * open for that record are offered.
+   */
+  subjectId?: string;
+  /** Narrow the session to these steps, so adding one visit is one form. */
+  stepKeys?: string[];
 }) {
   // Anything unrecognised falls back to the stacked layout rather than
   // rendering nothing, matching how the public form page treats PORTAL.
@@ -110,7 +167,7 @@ export function AppRunner({
   const layoutMode: AppLayoutMode =
     declared === 'GRID' || declared === 'INHERIT' ? declared : 'DOCUMENT';
   const density = DENSITY[appearance.density];
-  const session = useAppSession(publicSlug);
+  const session = useAppSession(publicSlug, { subjectId, stepKeys });
   const [issues, setIssues] = React.useState<SessionIssue[]>([]);
   const [submitError, setSubmitError] = React.useState('');
   const [isSubmitting, setIsSubmitting] = React.useState(false);
@@ -260,6 +317,13 @@ export function AppRunner({
   return (
     <div className={density.stack}>
       <div ref={topRef} aria-hidden className="scroll-mt-4" />
+
+      {session.session?.subject && (
+        <SubjectContextCard
+          subject={session.session.subject}
+          periodLabel={session.session.period?.label ?? null}
+        />
+      )}
 
       {isWizard && steps.length > 0 && (
         <WizardProgress

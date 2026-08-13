@@ -1,4 +1,12 @@
-import { Controller, Get, Patch, Body, Param, Req, UseGuards } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Patch,
+  Body,
+  Param,
+  Req,
+  UseGuards,
+} from '@nestjs/common';
 import type { Request } from 'express';
 
 import { FeatureFlagsService } from './feature-flags.service';
@@ -28,7 +36,11 @@ export class FeatureFlagsController {
     @Body() body: { isEnabledGlobally: boolean },
     @Req() req: Request,
   ) {
-    return this.features.setGlobal(key, body.isEnabledGlobally === true, (req.user as any)?.sub);
+    return this.features.setGlobal(
+      key,
+      body.isEnabledGlobally === true,
+      (req.user as any)?.sub,
+    );
   }
 
   /**
@@ -45,6 +57,11 @@ export class FeatureFlagsController {
     @Req() req: Request,
   ) {
     const value = body.isEnabled === null ? null : body.isEnabled === true;
-    return this.features.setForOrganization(key, orgId, value, (req.user as any)?.sub);
+    return this.features.setForOrganization(
+      key,
+      orgId,
+      value,
+      (req.user as any)?.sub,
+    );
   }
 }

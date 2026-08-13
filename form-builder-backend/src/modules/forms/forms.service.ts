@@ -64,6 +64,83 @@ function csvCell(value: string): string {
   return `"${v.replace(/"/g, '""')}"`;
 }
 
+/**
+ * The set of submissions an export is allowed to emit.
+ *
+ * A named predicate rather than an inline object because it is used in two
+ * places — the row-count pre-flight that decides whether the export is even
+ * permitted, and the keyset cursor that streams the rows — and those two must
+ * agree exactly. Nothing here is org-scoped: `exportSubmissions` has already
+ * proved the form belongs to the caller's organization before this is reached,
+ * and a submission cannot belong to a different org than its form.
+ */
+/**
+ * Row-level filters an export may narrow itself with.
+ *
+ * Structurally identical to `FrozenExportFilters` in
+ * `modules/exports/export-filters.ts`, and declared here rather than imported
+ * to keep the dependency pointing one way: ExportsModule already imports
+ * FormsModule, and importing back would close the cycle. The shape is small,
+ * stable, and covered by tests on both sides.
+ */
+export interface ExportRowFilters {
+  /** Inclusive lower bound on `submittedAt`, ISO-8601 UTC. */
+  from?: string;
+  /** Exclusive upper bound on `submittedAt`, ISO-8601 UTC. */
+  to?: string;
+  /** Statuses to include. Absent means every non-deleted status. */
+  statuses?: string[];
+  /** Free-text match over the answer payload. */
+  search?: string;
+}
+
+export function exportableSubmissions(
+  formId: string,
+  filters?: ExportRowFilters,
+): Prisma.FormSubmissionWhereInput {
+  const where: Prisma.FormSubmissionWhereInput = {
+    formId,
+    deletedAt: null,
+    status: { not: 'DELETED' },
+  };
+
+  // A caller-supplied status list must never widen the predicate back out to
+  // include DELETED — the soft-delete exclusion above is not negotiable, and an
+  // export is the worst possible place to lose it. Intersect rather than
+  // replace: `in` the requested statuses, and still `not` DELETED.
+  if (filters?.statuses?.length) {
+    const requested = filters.statuses.filter((s) => s !== 'DELETED');
+    // Every requested status was DELETED, so the caller asked for exactly the
+    // rows that may not be exported. An impossible predicate is the honest
+    // answer — an empty file, not a full one.
+    where.status = requested.length
+      ? { in: requested as Prisma.EnumSubmissionStatusFilter['in'] }
+      : { in: [] };
+  }
+
+  if (filters?.from || filters?.to) {
+    where.submittedAt = {
+      ...(filters.from ? { gte: new Date(filters.from) } : {}),
+      // Exclusive upper bound, matching the doc comment on the filter shape.
+      ...(filters.to ? { lt: new Date(filters.to) } : {}),
+    };
+  }
+
+  if (filters?.search) {
+    // The answers column is JSONB and the searchable text is user-defined per
+    // form, so there is no column to match on. `string_contains` on the whole
+    // document is the only predicate that works across arbitrary schemas.
+    //
+    // It cannot use the GIN index (that one is jsonb_path_ops, for containment,
+    // not substring), so this is a scan. Acceptable precisely because it runs in
+    // a background export job rather than on a request — which is the reason
+    // filtered exports are async-only.
+    where.answers = { string_contains: filters.search };
+  }
+
+  return where;
+}
+
 @Injectable()
 export class FormsService {
   private readonly logger = new Logger(FormsService.name);
@@ -87,11 +164,17 @@ export class FormsService {
    * not exist renders permanently empty, and finding that out at publish time
    * means the author has already built the rest of the form around it.
    */
-  private async assertOptionsSourcesResolve(orgId: string, questions: any[]): Promise<void> {
+  private async assertOptionsSourcesResolve(
+    orgId: string,
+    questions: any[],
+  ): Promise<void> {
     const slugs = new Set<string>();
     for (const question of questions) {
       const source = question?.optionsSource;
-      if (source?.kind === 'CHOICE_LIST' && typeof source.listSlug === 'string') {
+      if (
+        source?.kind === 'CHOICE_LIST' &&
+        typeof source.listSlug === 'string'
+      ) {
         slugs.add(source.listSlug);
       }
     }
@@ -120,7 +203,9 @@ export class FormsService {
     });
 
     if (org && org._count.forms >= org.maxForms) {
-      throw new ForbiddenException('Organization form limit reached. Contact your admin.');
+      throw new ForbiddenException(
+        'Organization form limit reached. Contact your admin.',
+      );
     }
 
     const slug = dto.slug || publicSlug();
@@ -185,7 +270,11 @@ export class FormsService {
   /**
    * Create a new form from an existing template.
    */
-  async createFromTemplate(orgId: string, createdById: string, templateId: string) {
+  async createFromTemplate(
+    orgId: string,
+    createdById: string,
+    templateId: string,
+  ) {
     // `isPublic` must be part of the lookup, not an afterthought: templates are
     // global rows with no organizationId, so a bare findUnique let any editor
     // clone a private template's full formData — and bump its usageCount — by
@@ -200,7 +289,9 @@ export class FormsService {
       select: { maxForms: true, _count: { select: { forms: true } } },
     });
     if (org && org._count.forms >= org.maxForms) {
-      throw new ForbiddenException('Organization form limit reached. Contact your admin.');
+      throw new ForbiddenException(
+        'Organization form limit reached. Contact your admin.',
+      );
     }
 
     const formData = (template.formData as any) || {};
@@ -243,14 +334,16 @@ export class FormsService {
    */
   async generateFormWithAI(orgId: string, createdById: string, prompt: string) {
     if (!process.env.GEMINI_API_KEY) {
-      throw new BadRequestException('AI Generation is not configured on this server (missing GEMINI_API_KEY).');
+      throw new BadRequestException(
+        'AI Generation is not configured on this server (missing GEMINI_API_KEY).',
+      );
     }
 
     try {
       // Dynamic import to avoid breaking if not installed properly or missing env vars at startup
       const { GoogleGenAI } = await import('@google/genai');
       const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-      
+
       const systemInstruction = `You are an expert form builder AI. 
 Generate a comprehensive form based on the user's prompt.
 Respond ONLY with a valid JSON object matching this structure:
@@ -273,11 +366,11 @@ Respond ONLY with a valid JSON object matching this structure:
         contents: prompt,
         config: {
           systemInstruction,
-          responseMimeType: "application/json",
-        }
+          responseMimeType: 'application/json',
+        },
       });
-      
-      const rawText = response.text || "{}";
+
+      const rawText = response.text || '{}';
       const formData = JSON.parse(rawText);
 
       // Save it to the database
@@ -294,9 +387,9 @@ Respond ONLY with a valid JSON object matching this structure:
           themeConfig: {},
           status: 'DRAFT',
           layoutMode: 'DOCUMENT',
-        }
+        },
       });
-      
+
       this.audit.log({
         organizationId: orgId,
         userId: createdById,
@@ -307,10 +400,11 @@ Respond ONLY with a valid JSON object matching this structure:
       });
 
       return form;
-
     } catch (error) {
       console.error('AI Generation Error:', error);
-      throw new BadRequestException('Failed to generate form using AI. Please try again.');
+      throw new BadRequestException(
+        'Failed to generate form using AI. Please try again.',
+      );
     }
   }
 
@@ -335,7 +429,10 @@ Respond ONLY with a valid JSON object matching this structure:
     } = {},
     pagination: Pagination = parsePagination(),
   ) {
-    const where: Prisma.FormWhereInput = { organizationId: orgId, deletedAt: null };
+    const where: Prisma.FormWhereInput = {
+      organizationId: orgId,
+      deletedAt: null,
+    };
 
     if (options.status && options.status !== 'ALL') {
       where.status = options.status as any;
@@ -355,7 +452,9 @@ Respond ONLY with a valid JSON object matching this structure:
     // Allowlist: `sortBy` reaches Prisma as a key, so an unchecked value is a
     // way to probe columns and to sort on unindexed ones.
     const SORTABLE = new Set(['updatedAt', 'createdAt', 'title', 'status']);
-    const sortBy = SORTABLE.has(options.sortBy ?? '') ? options.sortBy! : 'updatedAt';
+    const sortBy = SORTABLE.has(options.sortBy ?? '')
+      ? options.sortBy!
+      : 'updatedAt';
     const sortOrder = options.sortOrder === 'asc' ? 'asc' : 'desc';
 
     const [forms, total] = await Promise.all([
@@ -423,7 +522,12 @@ Respond ONLY with a valid JSON object matching this structure:
    *    stores every future response, so it is normalised first rather than
    *    written through verbatim.
    */
-  async updateForm(orgId: string, formId: string, dto: UpdateFormDto, userId?: string) {
+  async updateForm(
+    orgId: string,
+    formId: string,
+    dto: UpdateFormDto,
+    userId?: string,
+  ) {
     const form = await this.prisma.reader.form.findFirst({
       where: { id: formId, organizationId: orgId, deletedAt: null },
     });
@@ -483,7 +587,12 @@ Respond ONLY with a valid JSON object matching this structure:
 
     const structure = touchesStructure
       ? normalizeFormStructure(
-          { pages: dto.pages, questions: dto.questions, logic: dto.logic, rules: dto.rules },
+          {
+            pages: dto.pages,
+            questions: dto.questions,
+            logic: dto.logic,
+            rules: dto.rules,
+          },
           {
             pages: form.pagesJson,
             questions: form.questionsJson,
@@ -508,12 +617,18 @@ Respond ONLY with a valid JSON object matching this structure:
       ...(isPasswordProtected !== undefined && { isPasswordProtected }),
       ...(passwordHash !== form.passwordHash && { passwordHash }),
       ...(dto.requireAuth !== undefined && { requireAuth: dto.requireAuth }),
-      ...(dto.allowMultiple !== undefined && { allowMultiple: dto.allowMultiple }),
-      ...(dto.maxSubmissions !== undefined && { maxSubmissions: dto.maxSubmissions ?? null }),
+      ...(dto.allowMultiple !== undefined && {
+        allowMultiple: dto.allowMultiple,
+      }),
+      ...(dto.maxSubmissions !== undefined && {
+        maxSubmissions: dto.maxSubmissions ?? null,
+      }),
       ...(dto.expiresAt !== undefined && {
         expiresAt: dto.expiresAt ? new Date(dto.expiresAt) : null,
       }),
-      ...(dto.themeConfig !== undefined && { themeConfig: normalizeTheme(dto.themeConfig) }),
+      ...(dto.themeConfig !== undefined && {
+        themeConfig: normalizeTheme(dto.themeConfig),
+      }),
       ...(dto.notifyEmails !== undefined && {
         notifyEmails: normalizeNotifyEmails(dto.notifyEmails),
       }),
@@ -567,7 +682,9 @@ Respond ONLY with a valid JSON object matching this structure:
       // The slug is unique across the whole platform, so a clash here is a
       // user-correctable input error, not a server fault.
       if (err?.code === 'P2002') {
-        throw new ConflictException('That public link is already taken. Try a different one.');
+        throw new ConflictException(
+          'That public link is already taken. Try a different one.',
+        );
       }
       throw err;
     }
@@ -585,11 +702,19 @@ Respond ONLY with a valid JSON object matching this structure:
     const changedSettings = (
       [
         ['slug', form.slug, updated.slug],
-        ['isPasswordProtected', form.isPasswordProtected, updated.isPasswordProtected],
+        [
+          'isPasswordProtected',
+          form.isPasswordProtected,
+          updated.isPasswordProtected,
+        ],
         ['requireAuth', form.requireAuth, updated.requireAuth],
         ['allowMultiple', form.allowMultiple, updated.allowMultiple],
         ['maxSubmissions', form.maxSubmissions, updated.maxSubmissions],
-        ['expiresAt', form.expiresAt?.getTime() ?? null, updated.expiresAt?.getTime() ?? null],
+        [
+          'expiresAt',
+          form.expiresAt?.getTime() ?? null,
+          updated.expiresAt?.getTime() ?? null,
+        ],
       ] as const
     )
       .filter(([, before, after]) => before !== after)
@@ -720,7 +845,12 @@ Respond ONLY with a valid JSON object matching this structure:
           // does — a snapshot is the worst possible place to discover a
           // duplicate question id or a dangling logic rule.
           const structure = normalizeFormStructure(
-            { pages: pagesJson, questions: questionsJson, logic: logicJson, rules: rulesJson },
+            {
+              pages: pagesJson,
+              questions: questionsJson,
+              logic: logicJson,
+              rules: rulesJson,
+            },
             {
               pages: form.pagesJson,
               questions: form.questionsJson,
@@ -760,7 +890,7 @@ Respond ONLY with a valid JSON object matching this structure:
             // Cross-form references need a subject to hang off. Until a form is
             // bound to a subject type they are rejected rather than silently
             // resolving to null.
-            allowReferences: Boolean((form as any).subjectTypeId),
+            allowReferences: Boolean(form.subjectTypeId),
             // A lookup() naming a list this org cannot see would return null
             // for every respondent, forever, with nothing to indicate why.
             knownChoiceLists,
@@ -769,7 +899,10 @@ Respond ONLY with a valid JSON object matching this structure:
           if (!compiled.ok) {
             throw new BadRequestException({
               message: 'This form has rule errors and cannot be published.',
-              issues: compiled.errors.map((e) => ({ ruleId: e.ruleId, message: e.message })),
+              issues: compiled.errors.map((e) => ({
+                ruleId: e.ruleId,
+                message: e.message,
+              })),
             });
           }
 
@@ -788,7 +921,9 @@ Respond ONLY with a valid JSON object matching this structure:
               pagesJson: structure.pages,
               questionsJson: structure.questions,
               logicJson: structure.logic,
-              themeJson: themeJson ? normalizeTheme(themeJson) : (form.themeConfig ?? {}),
+              themeJson: themeJson
+                ? normalizeTheme(themeJson)
+                : (form.themeConfig ?? {}),
               rulesJson: structure.rules,
               compiledRules: compiled.plan as any,
             },
@@ -822,7 +957,10 @@ Respond ONLY with a valid JSON object matching this structure:
       action: 'form.published',
       resource: 'form',
       resourceId: formId,
-      metadata: { formTitle: result.form.title, version: result.version.version },
+      metadata: {
+        formTitle: result.form.title,
+        version: result.version.version,
+      },
     });
 
     await this.invalidatePublicFormCache(result.form.slug);
@@ -836,13 +974,18 @@ Respond ONLY with a valid JSON object matching this structure:
    * Must be called on publish, update, slug change, delete, and restore —
    * otherwise a deleted or edited form stays publicly fillable for up to 5 min.
    */
-  private async invalidatePublicFormCache(...slugs: (string | null | undefined)[]) {
+  private async invalidatePublicFormCache(
+    ...slugs: (string | null | undefined)[]
+  ) {
     for (const slug of slugs) {
       if (!slug) continue;
       try {
         await this.redis.del(`public_form:${slug}`);
       } catch (e) {
-        this.logger.warn(`Failed to invalidate public form cache for slug ${slug}`, e as any);
+        this.logger.warn(
+          `Failed to invalidate public form cache for slug ${slug}`,
+          e,
+        );
       }
     }
   }
@@ -855,7 +998,10 @@ Respond ONLY with a valid JSON object matching this structure:
     try {
       await this.redis.del(`ingest_policy:${formId}`);
     } catch (e) {
-      this.logger.warn(`Failed to invalidate ingest policy for form ${formId}`, e as any);
+      this.logger.warn(
+        `Failed to invalidate ingest policy for form ${formId}`,
+        e,
+      );
     }
   }
 
@@ -874,7 +1020,13 @@ Respond ONLY with a valid JSON object matching this structure:
     });
     if (!form) throw new NotFoundException('Form not found');
 
-    const where: Prisma.FormSubmissionWhereInput = { formId, status: { not: 'DELETED' } };
+    // `deletedAt: null` as well as the status filter — see the note on the same
+    // pairing in SubmissionsService.listSubmissions for why both are kept.
+    const where: Prisma.FormSubmissionWhereInput = {
+      formId,
+      deletedAt: null,
+      status: { not: 'DELETED' },
+    };
 
     const [submissions, total] = await Promise.all([
       this.prisma.reader.formSubmission.findMany({
@@ -918,6 +1070,14 @@ Respond ONLY with a valid JSON object matching this structure:
     orgId: string,
     formId: string,
     format: 'csv' | 'json',
+    // ── Declared `filters?:` and NOT `filters = {}` — this matters ────────────
+    // `rowSourceSupportsFilters()` in modules/exports/export-filters.ts probes
+    // this function's arity to decide whether a filtered export can be honoured,
+    // and fails closed when it cannot. A default value would drop
+    // `Function.length` from 4 to 3, silently turning every filtered export
+    // request back into a 400 while the code here looked perfectly capable of
+    // serving it. An optional parameter keeps the arity at 4.
+    filters?: ExportRowFilters,
   ): Promise<AsyncGenerator<string>> {
     const form = await this.prisma.reader.form.findFirst({
       where: { id: formId, organizationId: orgId, deletedAt: null },
@@ -932,7 +1092,16 @@ Respond ONLY with a valid JSON object matching this structure:
      * is safe in a way it was not before.
      */
     const maxRows = parseInt(process.env.EXPORT_MAX_ROWS ?? '50000', 10);
-    const total = await this.prisma.reader.formSubmission.count({ where: { formId } });
+    // The row-count pre-flight and the streaming cursor MUST use the same
+    // predicate — `exportableSubmissions(formId)` is that predicate, defined
+    // once at the bottom of this file. When they were two literals a deleted
+    // response was counted here and then either included or skipped there, and
+    // the export is the single worst place for a soft-deleted response to
+    // reappear: it leaves the product entirely, into a spreadsheet on somebody's
+    // laptop, after a customer was told the record was removed.
+    const total = await this.prisma.reader.formSubmission.count({
+      where: exportableSubmissions(formId, filters),
+    });
     if (total > maxRows) {
       throw new BadRequestException(
         `This form has ${total} submissions, which exceeds the ${maxRows}-row synchronous export limit. ` +
@@ -942,8 +1111,8 @@ Respond ONLY with a valid JSON object matching this structure:
 
     const questions = (form.versions[0]?.questionsJson as any[]) || [];
     return format === 'json'
-      ? this.streamJsonExport(formId, maxRows)
-      : this.streamCsvExport(formId, maxRows, questions);
+      ? this.streamJsonExport(formId, maxRows, filters)
+      : this.streamCsvExport(formId, maxRows, questions, filters);
   }
 
   /**
@@ -954,14 +1123,18 @@ Respond ONLY with a valid JSON object matching this structure:
    * tiebreaker and the cursor, giving a total order that is stable even while
    * new submissions arrive mid-export.
    */
-  private async *submissionBatches(formId: string, maxRows: number) {
+  private async *submissionBatches(
+    formId: string,
+    maxRows: number,
+    filters?: ExportRowFilters,
+  ) {
     const BATCH_SIZE = 1_000;
     let cursor: string | undefined;
     let emitted = 0;
 
     while (emitted < maxRows) {
       const batch = await this.prisma.reader.formSubmission.findMany({
-        where: { formId },
+        where: exportableSubmissions(formId, filters),
         orderBy: [{ submittedAt: 'desc' }, { id: 'asc' }],
         take: Math.min(BATCH_SIZE, maxRows - emitted),
         ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
@@ -974,15 +1147,30 @@ Respond ONLY with a valid JSON object matching this structure:
     }
   }
 
-  private async *streamCsvExport(formId: string, maxRows: number, questions: any[]) {
+  private async *streamCsvExport(
+    formId: string,
+    maxRows: number,
+    questions: any[],
+    filters?: ExportRowFilters,
+  ) {
     // Extract labels or IDs for headers. Prioritize labels if available.
     const questionHeaders = questions.map((q) => q.label || q.id);
-    const headers = ['Submission ID', 'Submitted At', 'Status', 'Country', ...questionHeaders];
+    const headers = [
+      'Submission ID',
+      'Submitted At',
+      'Status',
+      'Country',
+      ...questionHeaders,
+    ];
 
     // CRLF is what Excel expects; a bare \n breaks multi-line cells there.
     yield headers.map((h) => csvCell(h)).join(',');
 
-    for await (const batch of this.submissionBatches(formId, maxRows)) {
+    for await (const batch of this.submissionBatches(
+      formId,
+      maxRows,
+      filters,
+    )) {
       const lines: string[] = [];
       for (const sub of batch) {
         const answers = (sub.answers as Record<string, any>) || {};
@@ -995,7 +1183,9 @@ Respond ONLY with a valid JSON object matching this structure:
             ...questions.map((q) => {
               const val = answers[q.id];
               if (val === undefined || val === null) return '';
-              return csvCell(typeof val === 'object' ? JSON.stringify(val) : String(val));
+              return csvCell(
+                typeof val === 'object' ? JSON.stringify(val) : String(val),
+              );
             }),
           ].join(','),
         );
@@ -1007,10 +1197,18 @@ Respond ONLY with a valid JSON object matching this structure:
   }
 
   /** Same rows the non-streaming version returned, emitted as a JSON array. */
-  private async *streamJsonExport(formId: string, maxRows: number) {
+  private async *streamJsonExport(
+    formId: string,
+    maxRows: number,
+    filters?: ExportRowFilters,
+  ) {
     yield '[';
     let first = true;
-    for await (const batch of this.submissionBatches(formId, maxRows)) {
+    for await (const batch of this.submissionBatches(
+      formId,
+      maxRows,
+      filters,
+    )) {
       for (const sub of batch) {
         yield first ? JSON.stringify(sub) : `,${JSON.stringify(sub)}`;
         first = false;
@@ -1034,7 +1232,9 @@ Respond ONLY with a valid JSON object matching this structure:
       select: { maxForms: true, _count: { select: { forms: true } } },
     });
     if (org && org._count.forms >= org.maxForms) {
-      throw new ForbiddenException('Organization form limit reached. Contact your admin.');
+      throw new ForbiddenException(
+        'Organization form limit reached. Contact your admin.',
+      );
     }
 
     const cloned = await this.prisma.writer.form.create({
@@ -1057,7 +1257,7 @@ Respond ONLY with a valid JSON object matching this structure:
         questionsJson: original.questionsJson || [],
         logicJson: original.logicJson || [],
         status: 'DRAFT',
-      }
+      },
     });
 
     this.audit.log({
@@ -1093,12 +1293,9 @@ Respond ONLY with a valid JSON object matching this structure:
     // 2. Fallback to DB
     // We check both slug and id to be robust against legacy URLs or frontend passing id
     const form = await this.prisma.reader.form.findFirst({
-      where: { 
-        OR: [
-          { slug },
-          { id: slug.length === 36 ? slug : undefined }
-        ],
-        deletedAt: null 
+      where: {
+        OR: [{ slug }, { id: slug.length === 36 ? slug : undefined }],
+        deletedAt: null,
       },
       include: {
         // Fetch a small window rather than only the newest row so we can select
@@ -1122,7 +1319,9 @@ Respond ONLY with a valid JSON object matching this structure:
     // and the respondent simply arrived too late. Collapsing it into the 404
     // told them their link was wrong, so they went and asked for it again.
     if (form.status === 'CLOSED') {
-      throw new ForbiddenException('This form is no longer accepting responses.');
+      throw new ForbiddenException(
+        'This form is no longer accepting responses.',
+      );
     }
 
     if (form.status !== 'PUBLISHED') {
@@ -1135,14 +1334,17 @@ Respond ONLY with a valid JSON object matching this structure:
     }
 
     if (form.expiresAt && form.expiresAt < new Date()) {
-      throw new ForbiddenException('This form has closed and is no longer accepting responses.');
+      throw new ForbiddenException(
+        'This form has closed and is no longer accepting responses.',
+      );
     }
 
     // Serve the version the Form actually points at, not simply the newest row.
     // These can differ mid-publish, and the respondent must fill against the
     // same version the submission will later be graded and stored against.
     const activeVersion =
-      form.versions.find((v: any) => v.version === form.currentVersion) ?? form.versions[0];
+      form.versions.find((v: any) => v.version === form.currentVersion) ??
+      form.versions[0];
 
     // Strip everything the respondent must not see: the access password hash,
     // the draft columns (which may contain unpublished questions), and the
@@ -1191,7 +1393,7 @@ Respond ONLY with a valid JSON object matching this structure:
     try {
       await this.redis.set(cacheKey, JSON.stringify(publicForm), 300);
     } catch (err) {
-      this.logger.warn('Redis write failed for public form cache', err as any);
+      this.logger.warn('Redis write failed for public form cache', err);
     }
 
     return publicForm;
@@ -1199,16 +1401,24 @@ Respond ONLY with a valid JSON object matching this structure:
   /**
    * Save a partial submission draft.
    */
-  async saveDraft(slug: string, data: { fingerprint: string; answers: any; lastFieldId?: string; progress?: number }) {
+  async saveDraft(
+    slug: string,
+    data: {
+      fingerprint: string;
+      answers: any;
+      lastFieldId?: string;
+      progress?: number;
+    },
+  ) {
     if (!data.fingerprint) {
       throw new BadRequestException('Fingerprint is required to save a draft.');
     }
-    
+
     const form = await this.prisma.reader.form.findUnique({
       where: { slug, deletedAt: null },
       select: { id: true, status: true },
     });
-    
+
     if (!form || form.status !== 'PUBLISHED') {
       throw new NotFoundException('Published form not found');
     }
@@ -1269,9 +1479,11 @@ Respond ONLY with a valid JSON object matching this structure:
 
     const day = new Date().toISOString().slice(0, 10);
     try {
-      await this.redis.getClient().hincrby(`analytics:pending:${day}`, `${form}:${event}`, 1);
+      await this.redis
+        .getClient()
+        .hincrby(`analytics:pending:${day}`, `${form}:${event}`, 1);
     } catch (e) {
-      this.logger.warn('Failed to buffer analytics event', e as any);
+      this.logger.warn('Failed to buffer analytics event', e);
     }
   }
 
@@ -1300,14 +1512,16 @@ Respond ONLY with a valid JSON object matching this structure:
    */
   async getDraft(slug: string, fingerprint: string) {
     if (!fingerprint) {
-      throw new BadRequestException('Fingerprint query parameter (fp) is required.');
+      throw new BadRequestException(
+        'Fingerprint query parameter (fp) is required.',
+      );
     }
 
     const form = await this.prisma.reader.form.findUnique({
       where: { slug, deletedAt: null },
       select: { id: true },
     });
-    
+
     if (!form) {
       throw new NotFoundException('Form not found');
     }

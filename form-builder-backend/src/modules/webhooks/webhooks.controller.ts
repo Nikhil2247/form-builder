@@ -1,4 +1,12 @@
-import { Controller, Get, Post, Delete, Body, Param, UseGuards } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Post,
+  Delete,
+  Body,
+  Param,
+  UseGuards,
+} from '@nestjs/common';
 import { WebhooksService } from './webhooks.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { OrgMemberGuard } from '../../common/guards/org-member.guard';
@@ -23,10 +31,7 @@ export class WebhooksController {
   }
 
   @Get()
-  async getWebhooks(
-    @OrgId() orgId: string,
-    @Param('formId') formId: string,
-  ) {
+  async getWebhooks(@OrgId() orgId: string, @Param('formId') formId: string) {
     return this.webhooksService.getWebhooks(orgId, formId);
   }
 

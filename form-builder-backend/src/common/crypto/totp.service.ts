@@ -34,7 +34,11 @@ export class TotpService {
   }
 
   /** Build the otpauth:// URI that gets rendered as an enrolment QR code. */
-  buildUri(accountEmail: string, secret: string, issuer = 'FormBuilder'): string {
+  buildUri(
+    accountEmail: string,
+    secret: string,
+    issuer = 'FormBuilder',
+  ): string {
     return generateURI({ issuer, label: accountEmail, secret });
   }
 

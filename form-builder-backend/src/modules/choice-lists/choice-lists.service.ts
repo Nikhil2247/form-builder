@@ -1051,7 +1051,11 @@ export class ChoiceListsService {
         example.value,
         example.label,
         ...(list.parentListId
-          ? [parentSamples[index] ?? parentSamples[0] ?? 'parent-value-from-the-list-above']
+          ? [
+              parentSamples[index] ??
+                parentSamples[0] ??
+                'parent-value-from-the-list-above',
+            ]
           : []),
         ...schema.map((column) => `sample ${column.label || column.key}`),
       ]

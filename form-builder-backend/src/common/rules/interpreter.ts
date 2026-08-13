@@ -116,7 +116,10 @@ export function evaluate(
     const args = node.args.map((arg) => evaluate(arg, ctx, budget));
     const result = def.fn(args, ctx);
 
-    if (typeof result === 'string' && result.length > EVAL_LIMITS.maxStringLength) {
+    if (
+      typeof result === 'string' &&
+      result.length > EVAL_LIMITS.maxStringLength
+    ) {
       throw new RuleBudgetExceededError(
         `Operator "${node.op}" produced a string longer than ${EVAL_LIMITS.maxStringLength} characters.`,
       );

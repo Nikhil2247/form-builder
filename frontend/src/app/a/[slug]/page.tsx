@@ -1,4 +1,5 @@
 import type { Metadata } from 'next';
+import { connection } from 'next/server';
 
 import { API_BASE_URL_SERVER } from '@/lib/config';
 import { FormUnavailable } from '../../f/[id]/FormUnavailable';
@@ -86,6 +87,11 @@ export async function generateMetadata({ params }: PageProps): Promise<Metadata>
 }
 
 export default async function PublicAppPage({ params }: PageProps) {
+  // Same reasoning as /f/[id]: a CSP nonce is valid for exactly one response,
+  // so this route must never be prerendered or served from the full route
+  // cache. See the longer note there.
+  await connection();
+
   const { slug } = await params;
   const result = await loadApp(slug);
 

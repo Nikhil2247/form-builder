@@ -27,6 +27,9 @@ import { SubjectsModule } from './modules/subjects/subjects.module';
 import { FormAppsModule } from './modules/form-apps/form-apps.module';
 import { FeatureFlagsModule } from './modules/feature-flags/feature-flags.module';
 import { ChoiceListsModule } from './modules/choice-lists/choice-lists.module';
+import { ApiKeysModule } from './modules/api-keys/api-keys.module';
+import { NotificationsModule } from './modules/notifications/notifications.module';
+import { ExportsModule } from './modules/exports/exports.module';
 
 import configuration, { validationSchema } from './config/configuration';
 import { bullMQConnection } from './config/bullmq.config';
@@ -39,6 +42,14 @@ import { HttpLoggingInterceptor } from './common/interceptors/logging.intercepto
 import { PrismaModule } from './common/prisma/prisma.module';
 import { RedisModule } from './common/redis/redis.module';
 import { CryptoModule } from './common/crypto/crypto.module';
+import { SessionModule } from './common/session/session.module';
+
+// ── Observability ──────────────────────────────────────────────────────────────
+import { MetricsModule } from './common/metrics/metrics.module';
+import { HttpMetricsInterceptor } from './common/metrics/http-metrics.interceptor';
+
+// ── Tenant scoping ─────────────────────────────────────────────────────────────
+import { TenantContextInterceptor } from './common/tenancy/tenant-context.interceptor';
 
 // ── Global error handling ──────────────────────────────────────────────────────
 import { HttpExceptionFilter } from './common/filters/http-exception.filter';
@@ -64,6 +75,17 @@ import { CacheControlInterceptor } from './common/interceptors/cache-control.int
 
     // ── Redis (global, single shared connection) ──────────────────────────────
     RedisModule,
+
+    // ── Prometheus metrics (global) ───────────────────────────────────────────
+    // Owns the process's single prom-client Registry. @Global for the same
+    // reason as RedisModule: a second instance would try to register metric
+    // names that already exist and, in worker mode, bind METRICS_PORT twice.
+    MetricsModule,
+
+    // ── Session cache (global) ────────────────────────────────────────────────
+    // Serves the authenticated user + memberships to JwtStrategy and
+    // OrgMemberGuard from Redis instead of two DB round-trips per request.
+    SessionModule,
 
     // ── Crypto: secret encryption at rest + TOTP (global) ─────────────────────
     CryptoModule,
@@ -100,7 +122,9 @@ import { CacheControlInterceptor } from './common/interceptors/cache-control.int
         // Trust the proxy-provided client IP. main.ts sets `trust proxy` so
         // req.ips is populated from X-Forwarded-For.
         getTracker: (req: any) =>
-          req.ips?.length ? req.ips[0] : (req.ip ?? req.socket?.remoteAddress ?? 'unknown'),
+          req.ips?.length
+            ? req.ips[0]
+            : (req.ip ?? req.socket?.remoteAddress ?? 'unknown'),
       }),
     }),
 
@@ -120,13 +144,42 @@ import { CacheControlInterceptor } from './common/interceptors/cache-control.int
     FormAppsModule,
     FeatureFlagsModule,
     ChoiceListsModule,
+
+    // Global: exports ApiKeyGuard / ApiKeyOrJwtGuard, which controllers in other
+    // modules name in @UseGuards(). A guard that injects another guard needs
+    // that guard to be a real exported provider — Nest will not instantiate it
+    // implicitly.
+    ApiKeysModule,
+
+    // In-app notifications + the SSE stream.
+    NotificationsModule,
+
+    // Asynchronous exports. Registers its processor only in worker/combined mode
+    // (see ExportsModule), so API pods never stream a submissions table on the
+    // event loop they serve HTTP from.
+    ExportsModule,
   ],
   controllers: [AppController],
   providers: [
     AppService,
 
+    // ── INTERCEPTOR ORDER IS LOAD-BEARING ─────────────────────────────────────
+    // Nest applies global interceptors in registration order, and the FIRST
+    // registered is the OUTERMOST wrapper. Read this list as onion layers,
+    // outside in. Guards run before all of them, which is why none of these can
+    // observe a 401/429/404 — see the note in common/metrics/.
+
+    // ── HTTP metrics (outermost) ──────────────────────────────────────────────
+    // Only from here does http_request_duration_seconds cover the work the other
+    // interceptors do, and does http_requests_in_flight count a request for the
+    // whole time it is in the pipeline rather than only while the handler runs.
+    {
+      provide: APP_INTERCEPTOR,
+      useClass: HttpMetricsInterceptor,
+    },
+
     // ── Global HTTP request/response logger (Winston) ─────────────────────────
-    // Runs on EVERY request: logs incoming + outgoing with timing, status, IP.
+    // One record per request, emitted on response finish.
     {
       provide: APP_INTERCEPTOR,
       useClass: HttpLoggingInterceptor,
@@ -146,6 +199,21 @@ import { CacheControlInterceptor } from './common/interceptors/cache-control.int
     {
       provide: APP_INTERCEPTOR,
       useClass: ResponseInterceptor,
+    },
+
+    // ── Tenant context (innermost) ────────────────────────────────────────────
+    // Registered LAST so it sits closest to the route handler. That is
+    // deliberate: it must wrap the handler (everything the handler awaits runs
+    // inside the AsyncLocalStorage store), but there is nothing to gain from
+    // also wrapping response serialisation, and an ALS store held across more
+    // of the pipeline than necessary is a store with more chances to leak.
+    //
+    // It reads request.orgId — the OUTPUT of OrgMemberGuard, never the raw
+    // :orgId URL segment. Guards run before interceptors, so by this point
+    // membership has already been proven. See tenant-context.interceptor.ts.
+    {
+      provide: APP_INTERCEPTOR,
+      useClass: TenantContextInterceptor,
     },
 
     // ── Global rate limiting guard ────────────────────────────────────────────

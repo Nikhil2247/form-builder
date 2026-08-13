@@ -1,6 +1,24 @@
 import { Prisma } from '@prisma/client';
 
 /**
+ * The predicate every "how many responses does this form have?" count uses.
+ *
+ * A relation `_count` is a read path like any other, and it was the easiest one
+ * to miss: nothing about `_count: { select: { submissions: true } }` looks like
+ * a query. Left unfiltered, a form card would read "1,204 responses" above a
+ * list that paginates through 1,198 of them, and the only way to discover why
+ * would be to count the pages.
+ *
+ * Both markers, for the reason given at the head of
+ * SubmissionsService.listSubmissions: `deletedAt` is the primary, indexed,
+ * fully-backfilled filter and `status` is the backstop for a row that reaches
+ * DELETED by some route that does not stamp a timestamp.
+ */
+const undeletedSubmissions = {
+  where: { deletedAt: null, status: { not: 'DELETED' } },
+} satisfies Prisma.FormCountOutputTypeCountSubmissionsArgs;
+
+/**
  * Shared Prisma `select` projections.
  *
  * ── Why ────────────────────────────────────────────────────────────────────
@@ -97,7 +115,7 @@ export const formListSelect = {
   createdAt: true,
   updatedAt: true,
   createdBy: { select: userSummarySelect },
-  _count: { select: { submissions: true } },
+  _count: { select: { submissions: undeletedSubmissions } },
 } satisfies Prisma.FormSelect;
 
 /** Trash rows: the list projection plus when it was deleted. */
@@ -142,7 +160,7 @@ export const formDetailSelect = {
   createdAt: true,
   updatedAt: true,
   createdBy: { select: userSummarySelect },
-  _count: { select: { submissions: true } },
+  _count: { select: { submissions: undeletedSubmissions } },
 } satisfies Prisma.FormSelect;
 
 // ─────────────────────────────────────────────────────────────────────────────

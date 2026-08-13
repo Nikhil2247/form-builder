@@ -50,10 +50,38 @@ export class AuthController {
     });
   }
 
+  /**
+   * Where this request came from, for the session record and for security
+   * audit entries.
+   *
+   * `req.ip` is trustworthy only because main.ts sets `trust proxy`, which makes
+   * Express derive it from X-Forwarded-For behind the load balancer instead of
+   * reporting the proxy's own address for every user on the platform. Both
+   * values are still attacker-influenced and are recorded for humans to read —
+   * never used to decide anything.
+   */
+  private sessionContext(req: Request) {
+    return {
+      ipAddress: req.ip,
+      userAgent: req.headers['user-agent'],
+    };
+  }
+
   @Post('register')
-  async register(@Body() dto: RegisterDto, @Res({ passthrough: true }) res: Response) {
-    const result = await this.authService.register(dto);
-    this.setRefreshTokenCookie(res, result.refreshToken, result.sessionExpiresAt);
+  async register(
+    @Body() dto: RegisterDto,
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const result = await this.authService.register(
+      dto,
+      this.sessionContext(req),
+    );
+    this.setRefreshTokenCookie(
+      res,
+      result.refreshToken,
+      result.sessionExpiresAt,
+    );
     return { accessToken: result.accessToken, user: result.user };
   }
 
@@ -63,15 +91,23 @@ export class AuthController {
   @Throttle({ default: { limit: 5, ttl: 900_000 } })
   @Post('login')
   @HttpCode(HttpStatus.OK)
-  async login(@Body() dto: LoginDto, @Res({ passthrough: true }) res: Response) {
-    const result = await this.authService.login(dto);
-    
+  async login(
+    @Body() dto: LoginDto,
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const result = await this.authService.login(dto, this.sessionContext(req));
+
     // If MFA is required, we don't get tokens yet
     if ('mfaRequired' in result) {
       return result;
     }
 
-    this.setRefreshTokenCookie(res, result.refreshToken, result.sessionExpiresAt);
+    this.setRefreshTokenCookie(
+      res,
+      result.refreshToken,
+      result.sessionExpiresAt,
+    );
     return { accessToken: result.accessToken, user: result.user };
   }
 
@@ -81,15 +117,30 @@ export class AuthController {
   @Throttle({ default: { limit: 5, ttl: 300_000 } })
   @Post('login/mfa')
   @HttpCode(HttpStatus.OK)
-  async loginMfa(@Body() dto: VerifyMfaLoginDto, @Res({ passthrough: true }) res: Response) {
-    const result = await this.authService.verifyMfaLogin(dto.mfaToken, dto.code);
-    this.setRefreshTokenCookie(res, result.refreshToken, result.sessionExpiresAt);
+  async loginMfa(
+    @Body() dto: VerifyMfaLoginDto,
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const result = await this.authService.verifyMfaLogin(
+      dto.mfaToken,
+      dto.code,
+      this.sessionContext(req),
+    );
+    this.setRefreshTokenCookie(
+      res,
+      result.refreshToken,
+      result.sessionExpiresAt,
+    );
     return { accessToken: result.accessToken, user: result.user };
   }
 
   @Post('refresh')
   @HttpCode(HttpStatus.OK)
-  async refresh(@Req() req: Request, @Res({ passthrough: true }) res: Response) {
+  async refresh(
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+  ) {
     const oldRefreshToken = req.cookies?.[COOKIE_NAME];
     if (!oldRefreshToken) {
       // `passthrough: true` means Nest still owns the response after this
@@ -104,7 +155,10 @@ export class AuthController {
 
     let result: Awaited<ReturnType<AuthService['refresh']>>;
     try {
-      result = await this.authService.refresh(oldRefreshToken);
+      result = await this.authService.refresh(
+        oldRefreshToken,
+        this.sessionContext(req),
+      );
     } catch (err) {
       // The cookie is spent — revoked, expired, or from a session that has run
       // its full day. Clearing it here matters because `middleware.ts` reads
@@ -115,7 +169,11 @@ export class AuthController {
       throw err;
     }
 
-    this.setRefreshTokenCookie(res, result.refreshToken, result.sessionExpiresAt);
+    this.setRefreshTokenCookie(
+      res,
+      result.refreshToken,
+      result.sessionExpiresAt,
+    );
     return { accessToken: result.accessToken, user: result.user };
   }
 

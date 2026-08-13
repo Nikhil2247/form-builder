@@ -43,7 +43,9 @@ export class FeatureFlagsService {
    * database blip should degrade the product to its previous, known-good
    * feature set rather than surfacing half-configured screens.
    */
-  async getForOrganization(orgId: string | null | undefined): Promise<Record<string, boolean>> {
+  async getForOrganization(
+    orgId: string | null | undefined,
+  ): Promise<Record<string, boolean>> {
     const cacheKey = `features:${orgId ?? 'none'}`;
 
     try {
@@ -63,27 +65,40 @@ export class FeatureFlagsService {
           : Promise.resolve([]),
       ]);
 
-      const overrideByKey = new Map(overrides.map((o) => [o.flagKey, o.isEnabled]));
+      const overrideByKey = new Map(
+        overrides.map((o) => [o.flagKey, o.isEnabled]),
+      );
 
       const resolved: Record<string, boolean> = {};
       for (const flag of flags) {
-        resolved[flag.key] = overrideByKey.get(flag.key) ?? flag.isEnabledGlobally;
+        resolved[flag.key] =
+          overrideByKey.get(flag.key) ?? flag.isEnabledGlobally;
       }
 
       try {
-        await this.redis.set(cacheKey, JSON.stringify(resolved), CACHE_TTL_SECONDS);
+        await this.redis.set(
+          cacheKey,
+          JSON.stringify(resolved),
+          CACHE_TTL_SECONDS,
+        );
       } catch {
         // Non-fatal.
       }
 
       return resolved;
     } catch (err) {
-      this.logger.error('Failed to resolve feature flags; defaulting all to off.', err as any);
+      this.logger.error(
+        'Failed to resolve feature flags; defaulting all to off.',
+        err,
+      );
       return {};
     }
   }
 
-  async isEnabled(orgId: string | null | undefined, key: FeatureKey): Promise<boolean> {
+  async isEnabled(
+    orgId: string | null | undefined,
+    key: FeatureKey,
+  ): Promise<boolean> {
     const flags = await this.getForOrganization(orgId);
     return flags[key] === true;
   }
@@ -116,7 +131,9 @@ export class FeatureFlagsService {
   }
 
   async setGlobal(key: string, isEnabledGlobally: boolean, userId?: string) {
-    const flag = await this.prisma.reader.featureFlag.findUnique({ where: { key } });
+    const flag = await this.prisma.reader.featureFlag.findUnique({
+      where: { key },
+    });
     if (!flag) throw new NotFoundException('Unknown feature.');
 
     const updated = await this.prisma.writer.featureFlag.update({
@@ -131,9 +148,11 @@ export class FeatureFlagsService {
     // Per-org overrides below invalidate immediately, because those have one key.
 
     this.audit.log({
-      organizationId: null as any,
+      organizationId: null,
       userId,
-      action: isEnabledGlobally ? 'FEATURE_ENABLED_GLOBALLY' : 'FEATURE_DISABLED_GLOBALLY',
+      action: isEnabledGlobally
+        ? 'FEATURE_ENABLED_GLOBALLY'
+        : 'FEATURE_DISABLED_GLOBALLY',
       resource: 'FeatureFlag',
       resourceId: key,
       metadata: { name: flag.name },
@@ -148,7 +167,9 @@ export class FeatureFlagsService {
     isEnabled: boolean | null,
     userId?: string,
   ) {
-    const flag = await this.prisma.reader.featureFlag.findUnique({ where: { key } });
+    const flag = await this.prisma.reader.featureFlag.findUnique({
+      where: { key },
+    });
     if (!flag) throw new NotFoundException('Unknown feature.');
 
     const org = await this.prisma.reader.organization.findUnique({
@@ -165,7 +186,9 @@ export class FeatureFlagsService {
       });
     } else {
       await this.prisma.writer.organizationFeatureFlag.upsert({
-        where: { organizationId_flagKey: { organizationId: orgId, flagKey: key } },
+        where: {
+          organizationId_flagKey: { organizationId: orgId, flagKey: key },
+        },
         create: { organizationId: orgId, flagKey: key, isEnabled },
         update: { isEnabled },
       });

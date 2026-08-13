@@ -1,14 +1,25 @@
 import {
-  Controller, Get, Post, Put, Delete, Body, Param,
-  UseGuards, Req, Query, Res, Logger
+  Controller,
+  Get,
+  Post,
+  Put,
+  Delete,
+  Body,
+  Param,
+  UseGuards,
+  Req,
+  Query,
+  Res,
+  Logger,
 } from '@nestjs/common';
 import { FormsService } from './forms.service';
 import { CreateFormDto } from './dto/create-form.dto';
 import { UpdateFormDto } from './dto/update-form.dto';
-import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
+import { ApiKeyOrJwtGuard } from '../../common/guards/api-key-or-jwt.guard';
 import { OrgMemberGuard } from '../../common/guards/org-member.guard';
 import { RoleGuard } from '../../common/guards/role.guard';
 import { RequiredRole } from '../../common/decorators/roles.decorator';
+import { RequiredScope } from '../../common/decorators/scopes.decorator';
 import { OrgId } from '../../common/decorators/org-id.decorator';
 import type { Request, Response } from 'express';
 import { ListFormsQueryDto } from './dto/list-forms-query.dto';
@@ -23,9 +34,22 @@ import { parsePagination } from '../../common/pagination/pagination';
  *   VIEWER  — can list and view forms
  *   EDITOR  — can create and edit forms
  *   ADMIN   — can delete forms and manage all form settings
+ *
+ * AUTHENTICATION: `ApiKeyOrJwtGuard` stands where `JwtAuthGuard` used to. That
+ * substitution changes nothing on its own — the guard hands any request without
+ * an `X-API-Key` header straight to the JWT path, and refuses a key outright on
+ * any handler that carries no `@RequiredScope`. The three read routes below
+ * that DO carry one are the machine-to-machine surface: read a form, list its
+ * submissions, export them. Everything else on this controller mutates, and
+ * mutations stay behind a human session.
+ *
+ * The role chain still applies to a key: ApiKeyGuard resolves the key to its
+ * owner, OrgMemberGuard re-checks that owner's membership of :orgId, and
+ * RoleGuard applies their role. A key is bounded by its scopes AND its owner's
+ * access, whichever is narrower.
  */
 @Controller('organizations/:orgId/forms')
-@UseGuards(JwtAuthGuard, OrgMemberGuard, RoleGuard)
+@UseGuards(ApiKeyOrJwtGuard, OrgMemberGuard, RoleGuard)
 export class FormsController {
   private readonly logger = new Logger(FormsController.name);
 
@@ -73,10 +97,7 @@ export class FormsController {
    */
   @Get()
   @RequiredRole('VIEWER')
-  getForms(
-    @OrgId() orgId: string,
-    @Query() query: ListFormsQueryDto,
-  ) {
+  getForms(@OrgId() orgId: string, @Query() query: ListFormsQueryDto) {
     return this.formsService.getForms(
       orgId,
       {
@@ -101,8 +122,15 @@ export class FormsController {
     return this.formsService.restoreForm(orgId, formId);
   }
 
+  /**
+   * GET /organizations/:orgId/forms/:formId — Read one form.
+   *
+   * Accepts an API key scoped `forms:read`. This is what an integration calls
+   * to discover a form's question set before mapping it onto its own schema.
+   */
   @Get(':formId')
   @RequiredRole('VIEWER')
+  @RequiredScope('forms:read')
   getFormById(@OrgId() orgId: string, @Param('formId') formId: string) {
     return this.formsService.getFormById(orgId, formId);
   }
@@ -130,7 +158,8 @@ export class FormsController {
   publishForm(
     @OrgId() orgId: string,
     @Param('formId') formId: string,
-    @Body() body: { pages: any; questions: any; logic: any; theme: any; rules?: any },
+    @Body()
+    body: { pages: any; questions: any; logic: any; theme: any; rules?: any },
     @Req() req: Request,
   ) {
     const userId = (req.user as any).sub;
@@ -149,15 +178,23 @@ export class FormsController {
   /**
    * GET /organizations/:orgId/forms/:formId/submissions — List submissions.
    * Any member can view submissions.
+   *
+   * Accepts an API key scoped `submissions:read` — the polling endpoint for an
+   * integration that syncs responses into its own store.
    */
   @Get(':formId/submissions')
   @RequiredRole('VIEWER')
+  @RequiredScope('submissions:read')
   getSubmissions(
     @OrgId() orgId: string,
     @Param('formId') formId: string,
     @Query() query: PaginationQueryDto,
   ) {
-    return this.formsService.getSubmissions(orgId, formId, parsePagination(query));
+    return this.formsService.getSubmissions(
+      orgId,
+      formId,
+      parsePagination(query),
+    );
   }
 
   /**
@@ -166,9 +203,17 @@ export class FormsController {
    * Streamed. `exportSubmissions` validates and throws before handing back the
    * generator, so a missing form or an over-cap request still becomes a normal
    * JSON error — nothing is written until the first chunk is pulled below.
+   *
+   * Accepts an API key holding BOTH `submissions:read` and
+   * `submissions:export`. Export is not just "read, but as a file": it hands
+   * over every response to the form in one request, so a key that may poll for
+   * new submissions should not automatically be able to drain the archive. The
+   * two scopes are required together (@RequiredScope is an AND) so that
+   * `submissions:export` alone is never a way around the read scope either.
    */
   @Get(':formId/export')
   @RequiredRole('VIEWER')
+  @RequiredScope('submissions:read', 'submissions:export')
   async exportSubmissions(
     @OrgId() orgId: string,
     @Param('formId') formId: string,
@@ -176,11 +221,17 @@ export class FormsController {
     @Res() res: Response,
   ) {
     const formatType = format === 'json' ? 'json' : 'csv';
-    const chunks = await this.formsService.exportSubmissions(orgId, formId, formatType);
+    const chunks = await this.formsService.exportSubmissions(
+      orgId,
+      formId,
+      formatType,
+    );
 
     res.setHeader(
       'Content-Type',
-      formatType === 'json' ? 'application/json; charset=utf-8' : 'text/csv; charset=utf-8',
+      formatType === 'json'
+        ? 'application/json; charset=utf-8'
+        : 'text/csv; charset=utf-8',
     );
     res.setHeader(
       'Content-Disposition',

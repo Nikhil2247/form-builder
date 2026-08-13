@@ -18,13 +18,35 @@ import {
   Duration,
   type DataTableColumn,
 } from '@/components/shared';
-import { SubmissionDetailsDialog } from '@/components/submissions/SubmissionDetailsDialog';
+import { SubmissionDetailPanel } from '@/components/submissions/SubmissionDetailPanel';
+import { SubmissionBulkActions } from '@/components/submissions/SubmissionBulkActions';
 import { usePagination } from '@/hooks/use-pagination';
+import { usePermissions } from '@/hooks/use-auth';
 import { useOrgSubmissions, type Submission } from '@/hooks/use-submissions';
+
+/**
+ * Rows rendered at once by the virtualizer's viewport, before scrolling.
+ *
+ * The table is virtualized because the page size goes up to 100 and this list
+ * is the one place in the product where an operator genuinely wants a long
+ * page — triaging spam means scanning, not paging. See the note on
+ * `DataTableVirtualization` for why it is opt-in rather than the default.
+ */
+const TABLE_VIEWPORT = 'min(38rem, calc(100vh - 22rem))';
+/** px. Two lines of text plus the avatar and the row padding. */
+const ROW_HEIGHT = 57;
 
 export default function OrgSubmissionsPage() {
   const pager = usePagination();
-  const [selected, setSelected] = useState<Submission | null>(null);
+  const { atLeast } = usePermissions();
+  const [detailId, setDetailId] = useState<string | null>(null);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+
+  // Mirrors the API's `@RequiredRole('EDITOR')` on the annotate, delete and
+  // bulk routes. Checked with the role ladder rather than a capability because
+  // that is exactly what the server checks — a capability that mapped to a
+  // different set of roles would show controls that 403.
+  const canModerate = atLeast('EDITOR');
 
   const { data, isLoading, isFetching, error, refetch } = useOrgSubmissions({
     page: pager.page,
@@ -40,7 +62,6 @@ export default function OrgSubmissionsPage() {
       id: 'respondent',
       header: 'Respondent',
       isRowHeader: true,
-      className: 'max-w-0',
       cell: (submission) => {
         const respondent = submission.respondent;
         const name = respondent
@@ -68,7 +89,6 @@ export default function OrgSubmissionsPage() {
       id: 'form',
       header: 'Form',
       hideBelow: 'sm',
-      className: 'max-w-0',
       cell: (submission) =>
         submission.form ? (
           <Link
@@ -136,8 +156,30 @@ export default function OrgSubmissionsPage() {
         isLoading={isLoading || isFetching}
         error={error}
         onRetry={() => refetch()}
-        onRowClick={setSelected}
+        onRowClick={(submission) => setDetailId(submission.id)}
         pagination={pager.paginationProps(total, 'responses')}
+        // Only offered to a role that can act on a selection. Ticking rows with
+        // nothing to do with them is a dead end, and the bulk API would 403.
+        selection={
+          canModerate
+            ? {
+                selectedIds,
+                onChange: setSelectedIds,
+                selectAllLabel: 'Select all responses on this page',
+                rowLabel: (submission) =>
+                  `Select response from ${submission.respondent?.email ?? 'anonymous respondent'}`,
+              }
+            : undefined
+        }
+        virtual={{ height: TABLE_VIEWPORT, estimateRowHeight: ROW_HEIGHT }}
+        toolbar={
+          selectedIds.length > 0 ? (
+            <SubmissionBulkActions
+              selectedIds={selectedIds}
+              onClear={() => setSelectedIds([])}
+            />
+          ) : undefined
+        }
         empty={
           <EmptyState
             variant="inline"
@@ -163,10 +205,16 @@ export default function OrgSubmissionsPage() {
         }
       />
 
-      <SubmissionDetailsDialog
-        submission={selected}
-        open={!!selected}
-        onOpenChange={(open) => !open && setSelected(null)}
+      <SubmissionDetailPanel
+        submissionId={detailId}
+        open={!!detailId}
+        onOpenChange={(open) => !open && setDetailId(null)}
+        canModerate={canModerate}
+        // A deleted row is gone from the next page of results, so leaving it
+        // ticked would arm the bulk bar with an id the server will now reject —
+        // and, because the bulk API is all-or-nothing, that would block every
+        // other row in the selection too.
+        onDeleted={(id) => setSelectedIds((ids) => ids.filter((value) => value !== id))}
       />
     </PageShell>
   );

@@ -3,6 +3,7 @@
 import React from 'react';
 import { Button } from '@/components/ui/button';
 import { AlertTriangle, RotateCcw } from 'lucide-react';
+import { captureBoundaryError } from '@/lib/report-error';
 
 interface Props {
   children: React.ReactNode;
@@ -31,8 +32,11 @@ export class ErrorBoundary extends React.Component<Props, State> {
   }
 
   componentDidCatch(error: Error, info: React.ErrorInfo) {
-    // Replace with your error reporter (Sentry, etc.) when one is wired up.
+    // The console line stays: it is what makes this debuggable in dev and in
+    // any deployment with no DSN configured, which is the default one.
     console.error('[ErrorBoundary]', error, info.componentStack);
+    // No-op unless NEXT_PUBLIC_SENTRY_DSN is set — see lib/report-error.ts.
+    captureBoundaryError(error, info);
   }
 
   reset = () => this.setState({ error: null });

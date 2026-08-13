@@ -32,6 +32,11 @@ yarn-error.log*
 
 # env files (can opt-in for committing if needed)
 .env*
+# ...opting in for exactly one: .env.example holds no values, only the list of
+# variables and what happens when each is set. It was being ignored along with
+# the real .env files, which meant the operator instructions for the security
+# and error-reporting settings existed only on whoever's laptop wrote them.
+!.env.example
 
 # vercel
 .vercel

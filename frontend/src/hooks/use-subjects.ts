@@ -86,9 +86,68 @@ export interface TimelineEntry {
   id: string;
   formId: string;
   submittedAt: string;
+  /**
+   * When the recorded thing HAPPENED. Distinct from `submittedAt`, which is
+   * when it was typed — a February visit written up in March has a February
+   * `occurredAt` and a March `submittedAt`, and the timeline orders by the
+   * former. Always present; it defaults to the submission time server-side.
+   */
+  occurredAt: string;
   answers: Record<string, AttributeValue>;
   status: string;
   form: { id: string; title: string } | null;
+  /** Which step of which programme produced this. NULL for standalone forms. */
+  formAppStep: { key: string; title: string; scope: StepScope } | null;
+  period: { id: string; label: string } | null;
+}
+
+/** Where a step's entry count is measured. Mirrors the backend enum. */
+export type StepScope = 'SESSION' | 'SUBJECT' | 'SUBJECT_PERIOD';
+
+/** Why a step can or cannot be added to a record right now. */
+export type StepAvailabilityReason =
+  | 'OPEN'
+  | 'ALREADY_COMPLETED'
+  | 'PERIOD_SATISFIED'
+  | 'MAX_REACHED'
+  | 'HIDDEN_BY_CONDITION';
+
+export interface AvailableStep {
+  stepKey: string;
+  title: string;
+  description: string | null;
+  icon: string | null;
+  order: number;
+  scope: StepScope;
+  mode: 'SINGLE' | 'REPEATABLE';
+  formId: string;
+  formTitle: string;
+  existingCount: number;
+  remaining: number | null;
+  lastOccurredAt: string | null;
+  available: boolean;
+  reason: StepAvailabilityReason;
+  /** A sentence explaining the greyed-out case. NULL when the step is open. */
+  detail: string | null;
+}
+
+/** One app that records against this record, and what it will accept now. */
+export interface EntryOption {
+  app: {
+    id: string;
+    name: string;
+    slug: string;
+    icon: string | null;
+    publicSlug: string | null;
+  };
+  period: { id: string; label: string; startsAt: string; endsAt: string } | null;
+  isOutsidePeriod: boolean;
+  steps: AvailableStep[];
+}
+
+export interface EntryOptionsResponse {
+  subjectId: string;
+  options: EntryOption[];
 }
 
 export interface TimelineResponse {
@@ -196,6 +255,30 @@ export function useSubjectTimeline(
     },
     enabled: !!orgId && !!subjectId && options.enabled !== false,
     placeholderData: keepPreviousData,
+  });
+}
+
+/**
+ * What can be added to this record right now.
+ *
+ * Returns UNAVAILABLE steps too, each with a reason. A worker who cannot find
+ * "Monthly Progress Check" in a menu learns nothing; one who sees it greyed
+ * with "already recorded for this period" learns the job is done. Menus that
+ * silently omit things read as bugs.
+ */
+export function useSubjectEntryOptions(
+  subjectId: string | undefined,
+  options: { enabled?: boolean } = {},
+) {
+  const orgId = useOrgId();
+
+  return useQuery<EntryOptionsResponse>({
+    queryKey: ['subject-entry-options', orgId, subjectId],
+    queryFn: async () =>
+      unwrap<EntryOptionsResponse>(
+        await fetchApi(`/organizations/${orgId}/subjects/${subjectId}/entry-options`),
+      ),
+    enabled: !!orgId && !!subjectId && options.enabled !== false,
   });
 }
 

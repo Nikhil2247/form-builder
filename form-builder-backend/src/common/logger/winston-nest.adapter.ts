@@ -21,7 +21,9 @@ import { Logger as WinstonLogger } from 'winston';
  */
 @Injectable()
 export class WinstonNestAdapter implements LoggerService {
-  constructor(@Inject(WINSTON_MODULE_PROVIDER) private readonly winston: WinstonLogger) {}
+  constructor(
+    @Inject(WINSTON_MODULE_PROVIDER) private readonly winston: WinstonLogger,
+  ) {}
 
   log(message: any, context?: string) {
     this.winston.info(this.stringify(message), { context });
@@ -49,6 +51,10 @@ export class WinstonNestAdapter implements LoggerService {
 
   private stringify(message: any): string {
     if (typeof message === 'string') return message;
-    try { return JSON.stringify(message); } catch { return String(message); }
+    try {
+      return JSON.stringify(message);
+    } catch {
+      return String(message);
+    }
   }
 }

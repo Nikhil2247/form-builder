@@ -46,9 +46,32 @@ const DEFAULT_ALLOWED_MIME = new Set([
 
 /** Extensions that must never be issued a presigned URL, whatever MIME claims. */
 const BLOCKED_EXTENSIONS = new Set([
-  '.html', '.htm', '.xhtml', '.svg', '.js', '.mjs', '.exe', '.dll', '.so', '.sh',
-  '.bat', '.cmd', '.com', '.scr', '.msi', '.jar', '.php', '.phtml', '.asp', '.aspx',
-  '.jsp', '.cgi', '.pl', '.py', '.rb', '.ps1',
+  '.html',
+  '.htm',
+  '.xhtml',
+  '.svg',
+  '.js',
+  '.mjs',
+  '.exe',
+  '.dll',
+  '.so',
+  '.sh',
+  '.bat',
+  '.cmd',
+  '.com',
+  '.scr',
+  '.msi',
+  '.jar',
+  '.php',
+  '.phtml',
+  '.asp',
+  '.aspx',
+  '.jsp',
+  '.cgi',
+  '.pl',
+  '.py',
+  '.rb',
+  '.ps1',
 ]);
 
 @Injectable()
@@ -57,7 +80,8 @@ export class StorageService {
 
   constructor(
     private readonly prisma: PrismaService,
-    @InjectQueue(QUEUE_NAMES.FILE_VERIFY) private readonly fileVerifyQueue: Queue,
+    @InjectQueue(QUEUE_NAMES.FILE_VERIFY)
+    private readonly fileVerifyQueue: Queue,
   ) {}
 
   async generatePresignedUrl(
@@ -88,7 +112,11 @@ export class StorageService {
         deletedAt: true,
         currentVersion: true,
         organization: {
-          select: { isActive: true, storageQuotaBytes: true, storageUsedBytes: true },
+          select: {
+            isActive: true,
+            storageQuotaBytes: true,
+            storageUsedBytes: true,
+          },
         },
         versions: {
           orderBy: { version: 'desc' },
@@ -112,7 +140,8 @@ export class StorageService {
     //    Without this, any published formId could be used to write arbitrary
     //    objects into the bucket under a fabricated question id. ──────────────
     const activeVersion =
-      form.versions.find((v) => v.version === form.currentVersion) ?? form.versions[0];
+      form.versions.find((v) => v.version === form.currentVersion) ??
+      form.versions[0];
     const questions = Array.isArray(activeVersion?.questionsJson)
       ? (activeVersion.questionsJson as any[])
       : [];
@@ -122,21 +151,31 @@ export class StorageService {
       throw new BadRequestException('Unknown question for this form.');
     }
     if (question.type !== 'FILE_UPLOAD') {
-      throw new BadRequestException('This question does not accept file uploads.');
+      throw new BadRequestException(
+        'This question does not accept file uploads.',
+      );
     }
 
     // ── MIME + extension allowlist ──────────────────────────────────────────
     const normalizedMime = (mimeType ?? '').split(';')[0].trim().toLowerCase();
-    const questionAllowed: string[] | undefined = Array.isArray(question.acceptedMimeTypes)
+    const questionAllowed: string[] | undefined = Array.isArray(
+      question.acceptedMimeTypes,
+    )
       ? question.acceptedMimeTypes
       : undefined;
 
     const allowed = questionAllowed
-      ? new Set(questionAllowed.map((m) => m.toLowerCase()).filter((m) => DEFAULT_ALLOWED_MIME.has(m)))
+      ? new Set(
+          questionAllowed
+            .map((m) => m.toLowerCase())
+            .filter((m) => DEFAULT_ALLOWED_MIME.has(m)),
+        )
       : DEFAULT_ALLOWED_MIME;
 
     if (!allowed.has(normalizedMime)) {
-      throw new BadRequestException(`File type "${normalizedMime}" is not permitted.`);
+      throw new BadRequestException(
+        `File type "${normalizedMime}" is not permitted.`,
+      );
     }
 
     // Per-question size override may only tighten the global cap.
@@ -152,7 +191,9 @@ export class StorageService {
     const safeName = sanitizeFilename(filename);
     const extension = path.extname(safeName).toLowerCase();
     if (BLOCKED_EXTENSIONS.has(extension)) {
-      throw new BadRequestException(`Files with the "${extension}" extension are not permitted.`);
+      throw new BadRequestException(
+        `Files with the "${extension}" extension are not permitted.`,
+      );
     }
 
     // ── Storage quota ───────────────────────────────────────────────────────
@@ -176,7 +217,9 @@ export class StorageService {
 
     const reserved = inFlight._sum.sizeBytes ?? 0n;
     const projected =
-      form.organization.storageUsedBytes + reserved + BigInt(Math.floor(fileSizeBytes));
+      form.organization.storageUsedBytes +
+      reserved +
+      BigInt(Math.floor(fileSizeBytes));
 
     if (projected > form.organization.storageQuotaBytes) {
       throw new ForbiddenException('Organization storage quota exceeded.');
@@ -208,7 +251,11 @@ export class StorageService {
       // MinIO's presignedPutObject cannot bind Content-Length; the
       // FileVerifierProcessor reads the real size back and quarantines
       // anything oversized.
-      url = await storageWrapper.client.presignedPutObject(bucket, objectKey, ttl);
+      url = await storageWrapper.client.presignedPutObject(
+        bucket,
+        objectKey,
+        ttl,
+      );
     }
 
     const expiresAt = new Date(Date.now() + ttl * 1000);
@@ -285,7 +332,9 @@ export class StorageService {
     }
 
     if (file.status === 'QUARANTINED') {
-      throw new ForbiddenException('This file was quarantined and cannot be downloaded.');
+      throw new ForbiddenException(
+        'This file was quarantined and cannot be downloaded.',
+      );
     }
     if (file.status !== 'VERIFIED') {
       throw new NotFoundException('File is not available yet.');
@@ -306,7 +355,11 @@ export class StorageService {
     }
 
     return {
-      downloadUrl: await storage.client.presignedGetObject(file.bucket, file.objectKey, ttl),
+      downloadUrl: await storage.client.presignedGetObject(
+        file.bucket,
+        file.objectKey,
+        ttl,
+      ),
       expiresIn: ttl,
     };
   }

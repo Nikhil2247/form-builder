@@ -17,7 +17,12 @@ import { MailModule } from '../mail/mail.module';
         // (sourced from the same env var via ConfigService), so this default
         // only matters for other `jwtService.sign()` callers — currently just
         // the short-lived MFA challenge token, which sets its own 5m anyway.
-        signOptions: { expiresIn: parseInt(process.env.JWT_ACCESS_TTL_SECONDS ?? '86400', 10) },
+        signOptions: {
+          expiresIn: parseInt(
+            process.env.JWT_ACCESS_TTL_SECONDS ?? '86400',
+            10,
+          ),
+        },
       }),
     }),
     MailModule,

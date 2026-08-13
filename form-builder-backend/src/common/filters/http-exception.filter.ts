@@ -1,6 +1,13 @@
-import { ExceptionFilter, Catch, ArgumentsHost, HttpException, HttpStatus } from '@nestjs/common';
+import {
+  ExceptionFilter,
+  Catch,
+  ArgumentsHost,
+  HttpException,
+  HttpStatus,
+} from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { AppLogger } from '../logger/app-logger.service';
+import { captureException } from '../../config/sentry';
 
 /**
  * Column names as the user knows them. Anything not listed falls back to a
@@ -54,6 +61,19 @@ function uniqueConstraintMessage(target: unknown): string {
   return `That combination of ${labels.join(' and ')} is already in use.`;
 }
 
+/**
+ * The two statuses this filter branches on, as plain numbers.
+ *
+ * `status` here is whatever `exception.getStatus()` returned — an arbitrary
+ * number, not a member of the HttpStatus enum. TypeScript permits assigning a
+ * number to a numeric-enum type, which is exactly the unsoundness
+ * `no-unsafe-enum-comparison` exists to catch: comparing the two reads as a
+ * type-safe check and is not one. Widening the enum members here once keeps the
+ * comparisons below honest and still named.
+ */
+const HTTP_INTERNAL_SERVER_ERROR: number = HttpStatus.INTERNAL_SERVER_ERROR;
+const HTTP_UNAUTHORIZED: number = HttpStatus.UNAUTHORIZED;
+
 @Catch()
 export class HttpExceptionFilter implements ExceptionFilter {
   constructor(private readonly logger: AppLogger) {
@@ -65,7 +85,13 @@ export class HttpExceptionFilter implements ExceptionFilter {
     const res = ctx.getResponse();
     const req = ctx.getRequest();
 
-    let status = HttpStatus.INTERNAL_SERVER_ERROR;
+    // Typed `number`, not `HttpStatus`. It is assigned from
+    // `exception.getStatus()`, which returns an arbitrary number — TypeScript
+    // permits number → numeric-enum assignment, so the inferred `HttpStatus`
+    // type was a claim the value could not keep, and every comparison against a
+    // real enum member was therefore comparing two things that only looked like
+    // the same type.
+    let status: number = HttpStatus.INTERNAL_SERVER_ERROR;
     let message: string | object = 'Internal server error';
 
     /**
@@ -88,9 +114,16 @@ export class HttpExceptionFilter implements ExceptionFilter {
       const response = exception.getResponse();
       message = (response as any).message ?? exception.message;
 
-      if (response && typeof response === 'object' && !Array.isArray(response)) {
-        for (const [key, value] of Object.entries(response as Record<string, unknown>)) {
-          if (key === 'message' || key === 'statusCode' || key === 'error') continue;
+      if (
+        response &&
+        typeof response === 'object' &&
+        !Array.isArray(response)
+      ) {
+        for (const [key, value] of Object.entries(
+          response as Record<string, unknown>,
+        )) {
+          if (key === 'message' || key === 'statusCode' || key === 'error')
+            continue;
           detail[key] = value;
         }
       }
@@ -126,7 +159,8 @@ export class HttpExceptionFilter implements ExceptionFilter {
           // The user gets a generic sentence; we get the code and meta in the
           // logs, which is the half that actually helps diagnose it.
           status = HttpStatus.BAD_REQUEST;
-          message = 'We could not process that request. Please check your input and try again.';
+          message =
+            'We could not process that request. Please check your input and try again.';
           this.logger.warn(`Unmapped Prisma error [${exception.code}]`, {
             path: req.url,
             code: exception.code,
@@ -141,11 +175,27 @@ export class HttpExceptionFilter implements ExceptionFilter {
 
     // ── Production Sanitization & Logging ─────────────────────────────────────
     const isProd = process.env.NODE_ENV === 'production';
-    
-    if (status === HttpStatus.INTERNAL_SERVER_ERROR) {
+
+    if (status === HTTP_INTERNAL_SERVER_ERROR) {
       // 500s are actual bugs. Log full stack trace as ERROR.
       this.logger.error('Unhandled Exception', exception, { path: req.url });
-      
+
+      // Reported from here rather than via Sentry's own global filter so it
+      // fires on exactly the same condition as the ERROR log — one definition of
+      // "this is a bug", not two that can drift. 4xx are deliberately not sent:
+      // a validation rejection is the API working, and burying real defects
+      // under thousands of them is how an error tracker stops being read.
+      //
+      // Only the request id and route go with it. The body never does — see the
+      // scrubbing rationale in config/sentry.ts.
+      captureException(exception, {
+        path: req.url,
+        method: req.method,
+        requestId: req.headers?.['x-request-id'],
+        userId: req.user?.sub,
+        organizationId: req.orgId,
+      });
+
       if (isProd) {
         // Hide internal error details from the client in production
         message = 'Internal server error';
@@ -154,9 +204,13 @@ export class HttpExceptionFilter implements ExceptionFilter {
         detail = {};
       }
     } else if (status >= 400) {
-      // Client errors (4xx) are logged as WARN, except 401 to reduce noise
-      if (status !== HttpStatus.UNAUTHORIZED) {
-        this.logger.warn(`Client Error [${status}]`, { path: req.url, message, exception });
+      // Client errors (4xx) are logged as WARN, except 401 to reduce noise.
+      if (status !== HTTP_UNAUTHORIZED) {
+        this.logger.warn(`Client Error [${status}]`, {
+          path: req.url,
+          message,
+          exception,
+        });
       }
     }
 

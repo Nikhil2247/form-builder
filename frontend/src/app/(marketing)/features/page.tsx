@@ -352,7 +352,7 @@ export default function FeaturesPage() {
 
           <FeatureCard icon={ShieldCheck} title="Server-side answer validation">
             Every submission is re-validated against the published version: required fields, types,
-            option membership, bounds, and payload size. The browser's word is never taken for it.
+            option membership, bounds, and payload size. The browser&rsquo;s word is never taken for it.
           </FeatureCard>
 
           <FeatureCard icon={Lock} title="Guarded outbound webhooks">

@@ -39,13 +39,19 @@ export class FormAppsController {
 
   @Get(':appId')
   @RequiredRole('VIEWER')
-  getApp(@OrgId() orgId: string, @Param('appId', new ParseUUIDPipe()) appId: string) {
+  getApp(
+    @OrgId() orgId: string,
+    @Param('appId', new ParseUUIDPipe()) appId: string,
+  ) {
     return this.apps.getApp(orgId, appId);
   }
 
   @Get(':appId/dashboard')
   @RequiredRole('VIEWER')
-  getDashboard(@OrgId() orgId: string, @Param('appId', new ParseUUIDPipe()) appId: string) {
+  getDashboard(
+    @OrgId() orgId: string,
+    @Param('appId', new ParseUUIDPipe()) appId: string,
+  ) {
     return this.apps.getDashboard(orgId, appId);
   }
 

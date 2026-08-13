@@ -30,8 +30,9 @@ const BLOCKED_HOSTNAMES = new Set([
 
 /** Ports commonly fronting internal services. */
 const BLOCKED_PORTS = new Set([
-  22, 23, 25, 111, 135, 139, 445, 1433, 1521, 2049, 2375, 2376, 3306, 3389, 4444, 5432, 5433,
-  5984, 6379, 6380, 7001, 8020, 8086, 9000, 9001, 9042, 9200, 9300, 11211, 27017, 27018,
+  22, 23, 25, 111, 135, 139, 445, 1433, 1521, 2049, 2375, 2376, 3306, 3389,
+  4444, 5432, 5433, 5984, 6379, 6380, 7001, 8020, 8086, 9000, 9001, 9042, 9200,
+  9300, 11211, 27017, 27018,
 ]);
 
 export interface ValidatedUrl {
@@ -59,7 +60,9 @@ export async function assertSafeOutboundUrl(
   }
 
   if (url.username || url.password) {
-    throw new BadRequestException('Webhook URL must not contain embedded credentials.');
+    throw new BadRequestException(
+      'Webhook URL must not contain embedded credentials.',
+    );
   }
 
   const hostname = url.hostname.toLowerCase().replace(/\.$/, '');
@@ -69,12 +72,20 @@ export async function assertSafeOutboundUrl(
   }
 
   // `.internal`, `.local`, and single-label hosts are internal by convention.
-  if (hostname.endsWith('.internal') || hostname.endsWith('.local') || !hostname.includes('.')) {
-    throw new BadRequestException('Webhook URL must point to a public hostname.');
+  if (
+    hostname.endsWith('.internal') ||
+    hostname.endsWith('.local') ||
+    !hostname.includes('.')
+  ) {
+    throw new BadRequestException(
+      'Webhook URL must point to a public hostname.',
+    );
   }
 
   if (url.port && BLOCKED_PORTS.has(Number(url.port))) {
-    throw new BadRequestException(`Port ${url.port} is not allowed for webhooks.`);
+    throw new BadRequestException(
+      `Port ${url.port} is not allowed for webhooks.`,
+    );
   }
 
   // A literal IP in the URL still has to pass the range check below.
@@ -90,7 +101,9 @@ export function assertPublicAddress(address: string): void {
   try {
     parsed = ipaddr.parse(address);
   } catch {
-    throw new BadRequestException('Webhook host resolved to an invalid address.');
+    throw new BadRequestException(
+      'Webhook host resolved to an invalid address.',
+    );
   }
 
   // Several IPv6 ranges EMBED an IPv4 address. Judging them by their v6 range
@@ -106,7 +119,7 @@ export function assertPublicAddress(address: string): void {
     } else if (v6.range() === 'rfc6052') {
       // NAT64 well-known prefix: the last 32 bits are the real IPv4 target.
       const bytes = v6.toByteArray();
-      parsed = new ipaddr.IPv4(bytes.slice(12, 16) as any);
+      parsed = new ipaddr.IPv4(bytes.slice(12, 16));
     }
   }
 
@@ -118,10 +131,15 @@ export function assertPublicAddress(address: string): void {
   }
 }
 
-async function resolveFirst(hostname: string): Promise<{ address: string; family: 4 | 6 }> {
+async function resolveFirst(
+  hostname: string,
+): Promise<{ address: string; family: 4 | 6 }> {
   // A bare IP literal needs no DNS lookup.
   if (ipaddr.isValid(hostname)) {
-    return { address: hostname, family: ipaddr.parse(hostname).kind() === 'ipv4' ? 4 : 6 };
+    return {
+      address: hostname,
+      family: ipaddr.parse(hostname).kind() === 'ipv4' ? 4 : 6,
+    };
   }
 
   try {

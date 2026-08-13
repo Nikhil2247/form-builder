@@ -10,24 +10,38 @@ import {
   userAdminSelect,
   auditLogSelect,
 } from '../../common/prisma/selects';
+import { SessionCacheService } from '../../common/session/session-cache.service';
 
 @Injectable()
 export class AdminService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly sessions: SessionCacheService,
+  ) {}
 
   /**
    * Platform-wide dashboard statistics for SuperAdmin.
    */
   async getDashboard() {
-    const [totalOrgs, activeOrgs, suspendedOrgs, totalUsers, totalForms, totalSubmissions] =
-      await Promise.all([
-        this.prisma.reader.organization.count(),
-        this.prisma.reader.organization.count({ where: { isActive: true, deletedAt: null } }),
-        this.prisma.reader.organization.count({ where: { suspendedAt: { not: null } } }),
-        this.prisma.reader.user.count({ where: { deletedAt: null } }),
-        this.prisma.reader.form.count(),
-        this.prisma.reader.formSubmission.count(),
-      ]);
+    const [
+      totalOrgs,
+      activeOrgs,
+      suspendedOrgs,
+      totalUsers,
+      totalForms,
+      totalSubmissions,
+    ] = await Promise.all([
+      this.prisma.reader.organization.count(),
+      this.prisma.reader.organization.count({
+        where: { isActive: true, deletedAt: null },
+      }),
+      this.prisma.reader.organization.count({
+        where: { suspendedAt: { not: null } },
+      }),
+      this.prisma.reader.user.count({ where: { deletedAt: null } }),
+      this.prisma.reader.form.count(),
+      this.prisma.reader.formSubmission.count(),
+    ]);
 
     // Recent activity
     const recentOrgs = await this.prisma.reader.organization.findMany({
@@ -60,7 +74,10 @@ export class AdminService {
   /**
    * List all organizations with pagination and search.
    */
-  async listOrganizations(pagination: Pagination = parsePagination(), search?: string) {
+  async listOrganizations(
+    pagination: Pagination = parsePagination(),
+    search?: string,
+  ) {
     const where: any = { deletedAt: null };
 
     const term = search?.trim();
@@ -128,7 +145,7 @@ export class AdminService {
 
     if (!org) throw new NotFoundException('Organization not found.');
 
-    return this.prisma.writer.organization.update({
+    const suspended = await this.prisma.writer.organization.update({
       where: { id: orgId },
       data: {
         isActive: false,
@@ -136,13 +153,21 @@ export class AdminService {
         suspendReason: reason,
       },
     });
+
+    // Suspension is enforced from `organization.isActive` / `suspendedAt`, which
+    // every member carries a copy of inside their cached session. An operator
+    // who suspends a workspace expects it closed now, not at the end of a cache
+    // TTL — this is the whole reason the invalidation list exists.
+    await this.sessions.invalidateOrganizationMembers(orgId);
+
+    return suspended;
   }
 
   /**
    * Reactivate a suspended organization.
    */
   async activateOrganization(orgId: string) {
-    return this.prisma.writer.organization.update({
+    const activated = await this.prisma.writer.organization.update({
       where: { id: orgId },
       data: {
         isActive: true,
@@ -150,17 +175,27 @@ export class AdminService {
         suspendReason: null,
       },
     });
+
+    // The mirror image, and a usability failure rather than a security one:
+    // without it the members of a just-restored org keep being told their
+    // workspace is suspended, and the support ticket gets reopened.
+    await this.sessions.invalidateOrganizationMembers(orgId);
+
+    return activated;
   }
 
   /**
    * Update organization quotas (SuperAdmin privilege).
    */
-  async updateOrgQuotas(orgId: string, quotas: {
-    maxForms?: number;
-    maxSubmissionsMonth?: number;
-    maxMembers?: number;
-    storageQuotaBytes?: bigint;
-  }) {
+  async updateOrgQuotas(
+    orgId: string,
+    quotas: {
+      maxForms?: number;
+      maxSubmissionsMonth?: number;
+      maxMembers?: number;
+      storageQuotaBytes?: bigint;
+    },
+  ) {
     return this.prisma.writer.organization.update({
       where: { id: orgId },
       data: quotas,

@@ -112,7 +112,7 @@ export default function LandingPage() {
 
           <FeatureCard icon={Layers} title="Versioned publishing" href="/docs/publishing">
             A published version is immutable and every response records which one it belongs to.
-            Reword a question next month and last month's answers still read against the wording
+            Reword a question next month and last month&rsquo;s answers still read against the wording
             their respondent actually saw.
           </FeatureCard>
 

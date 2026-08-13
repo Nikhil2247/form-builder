@@ -60,7 +60,11 @@ export type RefWhen =
   /** The submission that registered the subject. */
   | 'REGISTRATION';
 
-export const REF_WHEN_VALUES: readonly RefWhen[] = ['LATEST', 'FIRST', 'REGISTRATION'];
+export const REF_WHEN_VALUES: readonly RefWhen[] = [
+  'LATEST',
+  'FIRST',
+  'REGISTRATION',
+];
 
 /** Application of a built-in operator. The operator set is closed (operators.ts). */
 export interface OpNode {
@@ -93,7 +97,12 @@ export type RuleKind =
   /** Submission is rejected when the expression is true. */
   | 'VALIDATE';
 
-export const RULE_KINDS: readonly RuleKind[] = ['CALCULATE', 'SHOW', 'REQUIRE', 'VALIDATE'];
+export const RULE_KINDS: readonly RuleKind[] = [
+  'CALCULATE',
+  'SHOW',
+  'REQUIRE',
+  'VALIDATE',
+];
 
 export interface FormRule {
   id: string;

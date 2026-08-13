@@ -101,7 +101,7 @@ export default function AboutPage() {
 
           <FeatureCard icon={GitCommitHorizontal} title="Answers stay readable">
             A published version is frozen and every response records the version it belongs to, so
-            editing a form next year cannot quietly change what last year's data appears to say.
+            editing a form next year cannot quietly change what last year&rsquo;s data appears to say.
           </FeatureCard>
 
           <FeatureCard icon={Ruler} title="The interface is not the security">

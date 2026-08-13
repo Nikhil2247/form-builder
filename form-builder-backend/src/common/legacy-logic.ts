@@ -50,7 +50,7 @@ export interface LegacyLogicQuestion {
 function isAnswered(value: unknown): boolean {
   if (value === undefined || value === null || value === '') return false;
   if (Array.isArray(value)) return value.length > 0;
-  if (typeof value === 'object') return Object.keys(value as object).length > 0;
+  if (typeof value === 'object') return Object.keys(value).length > 0;
   return true;
 }
 
@@ -64,12 +64,17 @@ function isAnswered(value: unknown): boolean {
  * both sides parse as numbers before falling back to text.
  */
 function looseMatches(answer: unknown, value: string): boolean {
-  if (Array.isArray(answer)) return answer.some((item) => looseMatches(item, value));
+  if (Array.isArray(answer))
+    return answer.some((item) => looseMatches(item, value));
   if (answer === undefined || answer === null) return false;
 
   if (typeof answer === 'number' || typeof answer === 'boolean') {
     const asNumber = Number(value);
-    if (typeof answer === 'number' && value.trim() !== '' && Number.isFinite(asNumber)) {
+    if (
+      typeof answer === 'number' &&
+      value.trim() !== '' &&
+      Number.isFinite(asNumber)
+    ) {
       return answer === asNumber;
     }
     return String(answer) === value;
@@ -79,7 +84,12 @@ function looseMatches(answer: unknown, value: string): boolean {
     if (answer === value) return true;
     const a = Number(answer);
     const b = Number(value);
-    if (answer.trim() !== '' && value.trim() !== '' && Number.isFinite(a) && Number.isFinite(b)) {
+    if (
+      answer.trim() !== '' &&
+      value.trim() !== '' &&
+      Number.isFinite(a) &&
+      Number.isFinite(b)
+    ) {
       return a === b;
     }
     return false;
@@ -98,7 +108,10 @@ function conditionMet(rule: LegacyLogicRule, answer: unknown): boolean {
 
     case 'CONTAINS':
       if (Array.isArray(answer)) return looseMatches(answer, rule.value);
-      return typeof answer === 'string' && answer.toLowerCase().includes(rule.value.toLowerCase());
+      return (
+        typeof answer === 'string' &&
+        answer.toLowerCase().includes(rule.value.toLowerCase())
+      );
 
     case 'IS_FILLED':
       return isAnswered(answer);

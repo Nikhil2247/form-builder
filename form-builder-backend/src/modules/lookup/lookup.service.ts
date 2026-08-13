@@ -25,7 +25,9 @@ export class LookupService {
       return cached;
     }
 
-    this.logger.debug(`[LookupService] CACHE MISS: ${cacheKey}, fetching from DB...`);
+    this.logger.debug(
+      `[LookupService] CACHE MISS: ${cacheKey}, fetching from DB...`,
+    );
     const org = await this.prisma.reader.organization.findUnique({
       where: { id: orgId },
       select: { settings: true, isActive: true },
@@ -51,7 +53,9 @@ export class LookupService {
       return cached;
     }
 
-    this.logger.debug(`[LookupService] CACHE MISS: ${cacheKey}, fetching from DB...`);
+    this.logger.debug(
+      `[LookupService] CACHE MISS: ${cacheKey}, fetching from DB...`,
+    );
     const version = await this.prisma.reader.formVersion.findUnique({
       where: { id: formVersionId },
     });

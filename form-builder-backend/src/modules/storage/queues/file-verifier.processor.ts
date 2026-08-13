@@ -1,9 +1,10 @@
-import { Processor, WorkerHost } from '@nestjs/bullmq';
-import { Logger } from '@nestjs/common';
+import { Processor, WorkerHost, OnWorkerEvent } from '@nestjs/bullmq';
+import { Logger, Optional } from '@nestjs/common';
 import { Job } from 'bullmq';
 import { HeadObjectCommand } from '@aws-sdk/client-s3';
 import { createStorageClient } from '../../../config/storage.config';
 import { PrismaService } from '../../../common/prisma/prisma.service';
+import { MetricsService } from '../../../common/metrics/metrics.service';
 import { QUEUE_NAMES } from '../../../config/bullmq.config';
 
 export interface VerifyFilePayload {
@@ -33,8 +34,22 @@ export interface VerifyFilePayload {
 export class FileVerifierProcessor extends WorkerHost {
   private readonly logger = new Logger(FileVerifierProcessor.name);
 
-  constructor(private readonly prisma: PrismaService) {
+  constructor(
+    private readonly prisma: PrismaService,
+    // @Optional: see the note in SubmissionProcessor.
+    @Optional() private readonly metrics?: MetricsService,
+  ) {
     super();
+  }
+
+  @OnWorkerEvent('completed')
+  onJobCompleted(job: Job) {
+    this.metrics?.observeJob(QUEUE_NAMES.FILE_VERIFY, job, 'completed');
+  }
+
+  @OnWorkerEvent('failed')
+  onJobFailed(job?: Job) {
+    this.metrics?.observeJob(QUEUE_NAMES.FILE_VERIFY, job, 'failed');
   }
 
   async process(job: Job<VerifyFilePayload>): Promise<void> {
@@ -45,7 +60,9 @@ export class FileVerifierProcessor extends WorkerHost {
     });
 
     if (!file) {
-      this.logger.warn(`File record ${fileId} no longer exists; nothing to verify.`);
+      this.logger.warn(
+        `File record ${fileId} no longer exists; nothing to verify.`,
+      );
       return;
     }
 
@@ -77,7 +94,10 @@ export class FileVerifierProcessor extends WorkerHost {
         actualSize = BigInt(head.ContentLength ?? 0);
         actualMime = head.ContentType;
       } else {
-        const stat = await storage.client.statObject(file.bucket, file.objectKey);
+        const stat = await storage.client.statObject(
+          file.bucket,
+          file.objectKey,
+        );
         actualSize = BigInt(stat.size);
         actualMime = stat.metaData?.['content-type'];
       }
@@ -88,12 +108,17 @@ export class FileVerifierProcessor extends WorkerHost {
         where: { id: fileId },
         data: { status: 'DELETED' },
       });
-      this.logger.warn(`Upload never completed for ${file.objectKey}; marked DELETED.`);
+      this.logger.warn(
+        `Upload never completed for ${file.objectKey}; marked DELETED.`,
+      );
       return;
     }
 
     // ── Enforce the real size against the configured ceiling ────────────────
-    const maxBytes = BigInt(parseInt(process.env.MAX_FILE_SIZE_MB ?? '25', 10)) * 1024n * 1024n;
+    const maxBytes =
+      BigInt(parseInt(process.env.MAX_FILE_SIZE_MB ?? '25', 10)) *
+      1024n *
+      1024n;
     if (actualSize > maxBytes) {
       await this.prisma.writer.formSubmissionFile.update({
         where: { id: fileId },
@@ -103,7 +128,9 @@ export class FileVerifierProcessor extends WorkerHost {
           sizeBytes: actualSize,
         },
       });
-      this.logger.warn(`File ${fileId} exceeded size limit (${actualSize} bytes); quarantined.`);
+      this.logger.warn(
+        `File ${fileId} exceeded size limit (${actualSize} bytes); quarantined.`,
+      );
       return;
     }
 
@@ -152,7 +179,9 @@ export class FileVerifierProcessor extends WorkerHost {
       }
 
       if (count === 0) {
-        this.logger.debug(`File ${fileId} already verified by a concurrent job.`);
+        this.logger.debug(
+          `File ${fileId} already verified by a concurrent job.`,
+        );
         return;
       }
 

@@ -29,7 +29,8 @@ export interface SubmissionPayload {
 @Injectable()
 export class SubmissionProducer {
   constructor(
-    @InjectQueue(QUEUE_NAMES.SUBMISSIONS) private readonly queue: Queue<SubmissionPayload>,
+    @InjectQueue(QUEUE_NAMES.SUBMISSIONS)
+    private readonly queue: Queue<SubmissionPayload>,
   ) {}
 
   async enqueue(payload: SubmissionPayload): Promise<void> {

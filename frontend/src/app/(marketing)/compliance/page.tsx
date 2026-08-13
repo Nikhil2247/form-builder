@@ -129,7 +129,7 @@ export default function CompliancePage() {
 
           <FeatureCard icon={DatabaseZap} title="Tenant isolation">
             Data is scoped to one organization at every layer — forms, responses, files, option
-            lists and exports. A member of one workspace cannot reach another's records by changing
+            lists and exports. A member of one workspace cannot reach another&rsquo;s records by changing
             an identifier.
           </FeatureCard>
 
@@ -180,7 +180,7 @@ export default function CompliancePage() {
 
         <CardGrid className="grid gap-6 sm:grid-cols-2">
           <FeatureCard icon={DatabaseZap} title="Export it" href="/docs/responses">
-            Every form's responses export to CSV from the response inbox, filtered or in full, at
+            Every form&rsquo;s responses export to CSV from the response inbox, filtered or in full, at
             any time and without a support request.
           </FeatureCard>
 

@@ -48,10 +48,12 @@ export class FormAppStepsController {
       description?: string;
       icon?: string;
       mode?: 'SINGLE' | 'REPEATABLE';
+      scope?: 'SESSION' | 'SUBJECT' | 'SUBJECT_PERIOD';
       minEntries?: number;
       maxEntries?: number | null;
       isOptional?: boolean;
       uniqueBy?: string[];
+      occurredAtKey?: string | null;
       showWhen?: unknown;
     },
     @Req() req: Request,
@@ -71,10 +73,12 @@ export class FormAppStepsController {
       description?: string | null;
       icon?: string | null;
       mode?: 'SINGLE' | 'REPEATABLE';
+      scope?: 'SESSION' | 'SUBJECT' | 'SUBJECT_PERIOD';
       minEntries?: number;
       maxEntries?: number | null;
       isOptional?: boolean;
       uniqueBy?: string[];
+      occurredAtKey?: string | null;
       showWhen?: unknown;
     },
     @Req() req: Request,
@@ -101,7 +105,12 @@ export class FormAppStepsController {
     @Body() body: { stepIds: string[] },
     @Req() req: Request,
   ) {
-    return this.apps.reorderSteps(orgId, appId, body?.stepIds ?? [], this.userId(req));
+    return this.apps.reorderSteps(
+      orgId,
+      appId,
+      body?.stepIds ?? [],
+      this.userId(req),
+    );
   }
 
   // ── Periods ───────────────────────────────────────────────────────────────
@@ -111,7 +120,13 @@ export class FormAppStepsController {
   createPeriod(
     @OrgId() orgId: string,
     @Param('appId', new ParseUUIDPipe()) appId: string,
-    @Body() body: { label: string; startsAt: string; endsAt: string; isActive?: boolean },
+    @Body()
+    body: {
+      label: string;
+      startsAt: string;
+      endsAt: string;
+      isActive?: boolean;
+    },
     @Req() req: Request,
   ) {
     return this.apps.createPeriod(orgId, appId, body, this.userId(req));
@@ -123,7 +138,13 @@ export class FormAppStepsController {
     @OrgId() orgId: string,
     @Param('appId', new ParseUUIDPipe()) appId: string,
     @Param('periodId', new ParseUUIDPipe()) periodId: string,
-    @Body() body: { label?: string; startsAt?: string; endsAt?: string; isActive?: boolean },
+    @Body()
+    body: {
+      label?: string;
+      startsAt?: string;
+      endsAt?: string;
+      isActive?: boolean;
+    },
   ) {
     return this.apps.updatePeriod(orgId, appId, periodId, body);
   }

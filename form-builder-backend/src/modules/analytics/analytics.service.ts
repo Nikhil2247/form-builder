@@ -15,8 +15,19 @@ function startOfDayUtc(daysAgo: number): Date {
 }
 
 export interface OrgSummary {
-  forms: { total: number; published: number; draft: number; closed: number; archived: number };
-  submissions: { total: number; window: number; previousWindow: number; changePercent: number | null };
+  forms: {
+    total: number;
+    published: number;
+    draft: number;
+    closed: number;
+    archived: number;
+  };
+  submissions: {
+    total: number;
+    window: number;
+    previousWindow: number;
+    changePercent: number | null;
+  };
   engagement: {
     views: number;
     starts: number;
@@ -95,44 +106,48 @@ export class AnalyticsService {
     const windowStart = startOfDayUtc(windowDays);
     const previousStart = startOfDayUtc(windowDays * 2);
 
-    const [formCounts, analytics, windowRows, previousRows, org] = await Promise.all([
-      this.prisma.reader.form.groupBy({
-        by: ['status'],
-        where: { organizationId: orgId, deletedAt: null },
-        _count: { _all: true },
-      }),
+    const [formCounts, analytics, windowRows, previousRows, org] =
+      await Promise.all([
+        this.prisma.reader.form.groupBy({
+          by: ['status'],
+          where: { organizationId: orgId, deletedAt: null },
+          _count: { _all: true },
+        }),
 
-      // Lifetime engagement totals, plus the sum needed for a true mean
-      // completion time (see `sumCompletionMs` — `avgCompletionMs` alone is a
-      // per-day average and cannot be averaged again without weighting).
-      this.prisma.reader.formAnalytics.aggregate({
-        where: { form: { organizationId: orgId } },
-        _sum: {
-          submissions: true,
-          views: true,
-          starts: true,
-          sumCompletionMs: true,
-        },
-      }),
+        // Lifetime engagement totals, plus the sum needed for a true mean
+        // completion time (see `sumCompletionMs` — `avgCompletionMs` alone is a
+        // per-day average and cannot be averaged again without weighting).
+        this.prisma.reader.formAnalytics.aggregate({
+          where: { form: { organizationId: orgId } },
+          _sum: {
+            submissions: true,
+            views: true,
+            starts: true,
+            sumCompletionMs: true,
+          },
+        }),
 
-      this.prisma.reader.formAnalytics.aggregate({
-        where: { form: { organizationId: orgId }, date: { gte: windowStart } },
-        _sum: { submissions: true },
-      }),
+        this.prisma.reader.formAnalytics.aggregate({
+          where: {
+            form: { organizationId: orgId },
+            date: { gte: windowStart },
+          },
+          _sum: { submissions: true },
+        }),
 
-      this.prisma.reader.formAnalytics.aggregate({
-        where: {
-          form: { organizationId: orgId },
-          date: { gte: previousStart, lt: windowStart },
-        },
-        _sum: { submissions: true },
-      }),
+        this.prisma.reader.formAnalytics.aggregate({
+          where: {
+            form: { organizationId: orgId },
+            date: { gte: previousStart, lt: windowStart },
+          },
+          _sum: { submissions: true },
+        }),
 
-      this.prisma.reader.organization.findUnique({
-        where: { id: orgId },
-        select: { storageUsedBytes: true, storageQuotaBytes: true },
-      }),
-    ]);
+        this.prisma.reader.organization.findUnique({
+          where: { id: orgId },
+          select: { storageUsedBytes: true, storageQuotaBytes: true },
+        }),
+      ]);
 
     const byStatus = (status: string) =>
       formCounts.find((row) => row.status === status)?._count._all ?? 0;
@@ -159,7 +174,9 @@ export class AnalyticsService {
         // Growth from zero is undefined, not "+100%".
         changePercent:
           previousSubmissions > 0
-            ? ((windowSubmissions - previousSubmissions) / previousSubmissions) * 100
+            ? ((windowSubmissions - previousSubmissions) /
+                previousSubmissions) *
+              100
             : null,
       },
       engagement: {
@@ -168,15 +185,20 @@ export class AnalyticsService {
         // A "completion" is a persisted submission; there is no separate
         // counter, so the rate is submissions/starts. It can exceed 100% only
         // if starts were under-recorded, so clamp for display sanity.
-        completionRate: starts > 0 ? Math.min((totalSubmissions / starts) * 100, 100) : null,
+        completionRate:
+          starts > 0 ? Math.min((totalSubmissions / starts) * 100, 100) : null,
         avgCompletionMs:
-          totalSubmissions > 0 ? Math.round(Number(sumCompletionMs) / totalSubmissions) : null,
+          totalSubmissions > 0
+            ? Math.round(Number(sumCompletionMs) / totalSubmissions)
+            : null,
       },
       storage: {
         // BigInt does not survive JSON.stringify; send it as a string and let
         // the client format it.
         usedBytes: (org?.storageUsedBytes ?? BigInt(0)).toString(),
-        quotaBytes: org?.storageQuotaBytes ? org.storageQuotaBytes.toString() : null,
+        quotaBytes: org?.storageQuotaBytes
+          ? org.storageQuotaBytes.toString()
+          : null,
       },
       windowDays,
     };

@@ -7,7 +7,11 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
-import { parsePagination, paginated, type Pagination } from '../../common/pagination/pagination';
+import {
+  parsePagination,
+  paginated,
+  type Pagination,
+} from '../../common/pagination/pagination';
 import { refKey, type RuleValue, type CompiledPlan } from '../../common/rules';
 
 /**
@@ -52,7 +56,12 @@ export class SubjectsService {
 
   async createSubjectType(
     orgId: string,
-    dto: { name: string; slug?: string; icon?: string; identityConfig?: IdentityConfig },
+    dto: {
+      name: string;
+      slug?: string;
+      icon?: string;
+      identityConfig?: IdentityConfig;
+    },
     userId?: string,
   ) {
     const slug = normalizeSlug(dto.slug || dto.name);
@@ -62,7 +71,9 @@ export class SubjectsService {
       where: { organizationId_slug: { organizationId: orgId, slug } },
     });
     if (existing) {
-      throw new ConflictException(`A subject type with the id "${slug}" already exists.`);
+      throw new ConflictException(
+        `A subject type with the id "${slug}" already exists.`,
+      );
     }
 
     const subjectType = await this.prisma.writer.subjectType.create({
@@ -105,7 +116,11 @@ export class SubjectsService {
     // the app shell.
     if (dto.registrationFormId) {
       const form = await this.prisma.reader.form.findFirst({
-        where: { id: dto.registrationFormId, organizationId: orgId, deletedAt: null },
+        where: {
+          id: dto.registrationFormId,
+          organizationId: orgId,
+          deletedAt: null,
+        },
         select: { id: true },
       });
       if (!form) throw new NotFoundException('Registration form not found.');
@@ -116,7 +131,9 @@ export class SubjectsService {
       data: {
         ...(dto.name !== undefined && { name: dto.name }),
         ...(dto.icon !== undefined && { icon: dto.icon }),
-        ...(dto.identityConfig !== undefined && { identityConfig: dto.identityConfig as any }),
+        ...(dto.identityConfig !== undefined && {
+          identityConfig: dto.identityConfig as any,
+        }),
         ...(dto.registrationFormId !== undefined && {
           registrationFormId: dto.registrationFormId,
         }),
@@ -143,7 +160,11 @@ export class SubjectsService {
     return updated;
   }
 
-  async deleteSubjectType(orgId: string, subjectTypeId: string, userId?: string) {
+  async deleteSubjectType(
+    orgId: string,
+    subjectTypeId: string,
+    userId?: string,
+  ) {
     await this.assertSubjectType(orgId, subjectTypeId);
 
     const subjectCount = await this.prisma.reader.subject.count({
@@ -199,7 +220,11 @@ export class SubjectsService {
         orderBy: { createdAt: 'desc' },
         skip: pagination.skip,
         take: pagination.limit,
-        include: { subjectType: { select: { id: true, name: true, slug: true, icon: true } } },
+        include: {
+          subjectType: {
+            select: { id: true, name: true, slug: true, icon: true },
+          },
+        },
       }),
       this.prisma.reader.subject.count({ where }),
     ]);
@@ -218,6 +243,16 @@ export class SubjectsService {
 
   /**
    * The subject's timeline — every submission attached to it, newest first.
+   *
+   * Ordered by `occurredAt`, which is when the recorded thing HAPPENED rather
+   * than when somebody was at a keyboard. A February visit written up in March
+   * belongs in February; ordering by `submittedAt` filed it under March and
+   * made the history of a record disagree with the history of the person.
+   *
+   * `occurredAt` is NOT NULL and defaults to the submission time precisely so
+   * this can be a plain indexed sort. `ORDER BY COALESCE(occurred_at,
+   * submitted_at)` would need an expression index and, lacking one, would sort
+   * the whole result set on every page load.
    */
   async getSubjectTimeline(
     orgId: string,
@@ -226,21 +261,36 @@ export class SubjectsService {
   ) {
     await this.getSubject(orgId, subjectId);
 
-    const where = { subjectId, status: { not: 'DELETED' as const } };
+    // Soft-deleted entries are excluded from the timeline by BOTH markers. The
+    // timeline is the record's history as an operator reads it, and a response
+    // somebody deleted has to disappear from it — leaving it visible here would
+    // make "delete" mean "hidden from the responses list only", which is not
+    // what anyone deleting a response believes they are doing.
+    const where = {
+      subjectId,
+      deletedAt: null,
+      status: { not: 'DELETED' as const },
+    };
 
     const [items, total] = await Promise.all([
       this.prisma.reader.formSubmission.findMany({
         where,
-        orderBy: { submittedAt: 'desc' },
+        orderBy: { occurredAt: 'desc' },
         skip: pagination.skip,
         take: pagination.limit,
         select: {
           id: true,
           formId: true,
           submittedAt: true,
+          occurredAt: true,
           answers: true,
           status: true,
           form: { select: { id: true, title: true } },
+          // Which step of which programme this entry is, so the timeline can
+          // say "Monthly Progress Check" rather than repeating the form's title
+          // for the sixth time, and can group a cycle's entries together.
+          formAppStep: { select: { key: true, title: true, scope: true } },
+          period: { select: { id: true, label: true } },
         },
       }),
       this.prisma.reader.formSubmission.count({ where }),
@@ -264,16 +314,33 @@ export class SubjectsService {
     candidate: { displayName?: string; externalId?: string },
   ) {
     const clauses: any[] = [];
-    if (candidate.externalId?.trim()) clauses.push({ externalId: candidate.externalId.trim() });
+    if (candidate.externalId?.trim())
+      clauses.push({ externalId: candidate.externalId.trim() });
     if (candidate.displayName?.trim()) {
-      clauses.push({ displayName: { equals: candidate.displayName.trim(), mode: 'insensitive' } });
+      clauses.push({
+        displayName: {
+          equals: candidate.displayName.trim(),
+          mode: 'insensitive',
+        },
+      });
     }
     if (clauses.length === 0) return [];
 
     return this.prisma.reader.subject.findMany({
-      where: { organizationId: orgId, subjectTypeId, deletedAt: null, OR: clauses },
+      where: {
+        organizationId: orgId,
+        subjectTypeId,
+        deletedAt: null,
+        OR: clauses,
+      },
       take: 5,
-      select: { id: true, displayName: true, externalId: true, createdAt: true, attributes: true },
+      select: {
+        id: true,
+        displayName: true,
+        externalId: true,
+        createdAt: true,
+        attributes: true,
+      },
     });
   }
 
@@ -314,11 +381,18 @@ export class SubjectsService {
     identityConfig: IdentityConfig,
     questions: any[],
     answers: Record<string, any>,
-  ): { displayName: string; attributes: Record<string, any>; externalId: string | null } {
+  ): {
+    displayName: string;
+    attributes: Record<string, any>;
+    externalId: string | null;
+  } {
     const idByKey = new Map<string, string>();
     for (const question of questions) {
       if (!question || typeof question.id !== 'string') continue;
-      const key = typeof question.key === 'string' && question.key ? question.key : question.id;
+      const key =
+        typeof question.key === 'string' && question.key
+          ? question.key
+          : question.id;
       if (!idByKey.has(key)) idByKey.set(key, question.id);
     }
 
@@ -338,7 +412,9 @@ export class SubjectsService {
       if (value !== undefined) attributes[key] = value;
     }
 
-    const rawExternal = identityConfig.externalId ? valueOf(identityConfig.externalId) : undefined;
+    const rawExternal = identityConfig.externalId
+      ? valueOf(identityConfig.externalId)
+      : undefined;
 
     return {
       // A record with no name is unusable in a search list, so fall back to
@@ -386,10 +462,17 @@ export async function resolveReferences(
 
   // Group by (form, when) so several questions read from the same submission
   // cost one query between them.
-  const groups = new Map<string, { form: string; when: string; questions: string[] }>();
+  const groups = new Map<
+    string,
+    { form: string; when: string; questions: string[] }
+  >();
   for (const ref of plan.references) {
     const groupKey = `${ref.form}::${ref.when}`;
-    const group = groups.get(groupKey) ?? { form: ref.form, when: ref.when, questions: [] };
+    const group = groups.get(groupKey) ?? {
+      form: ref.form,
+      when: ref.when,
+      questions: [],
+    };
     group.questions.push(ref.question);
     groups.set(groupKey, group);
   }
@@ -400,6 +483,7 @@ export async function resolveReferences(
         where: {
           subjectId,
           formId: group.form,
+          deletedAt: null,
           status: { not: 'DELETED' },
           // REGISTRATION means the entry that created the record, which is
           // exactly the one the subject points at.
@@ -424,15 +508,23 @@ export async function resolveReferences(
       const idByKey = new Map<string, string>();
       for (const question of questions) {
         if (!question || typeof question.id !== 'string') continue;
-        const key = typeof question.key === 'string' && question.key ? question.key : question.id;
+        const key =
+          typeof question.key === 'string' && question.key
+            ? question.key
+            : question.id;
         if (!idByKey.has(key)) idByKey.set(key, question.id);
       }
 
       for (const questionKey of group.questions) {
         const id = idByKey.get(questionKey);
         const value = id ? answers[id] : undefined;
-        bag[refKey({ form: group.form, question: questionKey, when: group.when as any })] =
-          value === undefined ? null : value;
+        bag[
+          refKey({
+            form: group.form,
+            question: questionKey,
+            when: group.when as any,
+          })
+        ] = value === undefined ? null : value;
       }
     }),
   );

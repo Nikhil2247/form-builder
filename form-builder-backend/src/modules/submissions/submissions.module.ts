@@ -8,6 +8,7 @@ import { AnswerValidatorService } from './answer-validator.service';
 import { QUEUE_NAMES } from '../../config/bullmq.config';
 import { isWorkerMode } from '../../config/runtime.config';
 import { ChoiceListsModule } from '../choice-lists/choice-lists.module';
+import { StorageModule } from '../storage/storage.module';
 
 /**
  * Queue processors are only registered when this process runs in worker mode
@@ -21,6 +22,11 @@ import { ChoiceListsModule } from '../choice-lists/choice-lists.module';
     // that lookup() reads. Imported rather than duplicated here so tenancy
     // rules for lists live in exactly one place.
     ChoiceListsModule,
+    // The submission detail view signs a download URL per attached file. It goes
+    // through StorageService rather than signing here, so the tenant check, the
+    // QUARANTINED refusal and the not-yet-VERIFIED refusal exist in exactly one
+    // place. AuditService needs no import — AuditModule is @Global().
+    StorageModule,
     BullModule.registerQueue(
       { name: QUEUE_NAMES.SUBMISSIONS },
       { name: QUEUE_NAMES.WEBHOOKS },

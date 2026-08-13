@@ -48,7 +48,12 @@ export class WebhooksService {
     return form;
   }
 
-  async createWebhook(orgId: string, formId: string, url: string, name: string = 'Webhook') {
+  async createWebhook(
+    orgId: string,
+    formId: string,
+    url: string,
+    name: string = 'Webhook',
+  ) {
     await this.verifyFormOrg(orgId, formId);
 
     // Throws BadRequestException for non-HTTPS, credentialed, internal, or
@@ -142,7 +147,12 @@ export class WebhooksService {
   }
 
   /** Recent delivery attempts, for the integrations UI. */
-  async getDeliveries(orgId: string, formId: string, webhookId: string, limit = 50) {
+  async getDeliveries(
+    orgId: string,
+    formId: string,
+    webhookId: string,
+    limit = 50,
+  ) {
     await this.verifyFormOrg(orgId, formId);
 
     return this.prisma.reader.webhookDelivery.findMany({

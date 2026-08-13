@@ -1,6 +1,8 @@
 import { Injectable, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
 import { PrismaClient, Prisma } from '@prisma/client';
 import { PrismaPg } from '@prisma/adapter-pg';
+import { tenantScopeExtension } from '../tenancy/tenant-scope.extension';
+import { Pool } from 'pg';
 import { AppLogger } from '../logger/app-logger.service';
 import pagination from 'prisma-extension-pagination';
 
@@ -13,8 +15,14 @@ import pagination from 'prisma-extension-pagination';
  * duplicate PrismaService instances per pod and could exhaust the server.
  */
 const POOL_MAX = parseInt(process.env.DB_POOL_MAX ?? '10', 10);
-const POOL_IDLE_TIMEOUT_MS = parseInt(process.env.DB_POOL_IDLE_TIMEOUT_MS ?? '30000', 10);
-const POOL_CONNECTION_TIMEOUT_MS = parseInt(process.env.DB_POOL_CONNECT_TIMEOUT_MS ?? '10000', 10);
+const POOL_IDLE_TIMEOUT_MS = parseInt(
+  process.env.DB_POOL_IDLE_TIMEOUT_MS ?? '30000',
+  10,
+);
+const POOL_CONNECTION_TIMEOUT_MS = parseInt(
+  process.env.DB_POOL_CONNECT_TIMEOUT_MS ?? '10000',
+  10,
+);
 
 /**
  * Build a Prisma 7 client backed by an explicitly-configured pg driver adapter.
@@ -41,9 +49,42 @@ const POOL_CONNECTION_TIMEOUT_MS = parseInt(process.env.DB_POOL_CONNECT_TIMEOUT_
  * it ends up being logged.
  */
 const SLOW_QUERY_WARN_MS = parseInt(process.env.SLOW_QUERY_WARN_MS ?? '0', 10);
-const SLOW_QUERY_LOGGING = Number.isFinite(SLOW_QUERY_WARN_MS) && SLOW_QUERY_WARN_MS > 0;
+const SLOW_QUERY_LOGGING =
+  Number.isFinite(SLOW_QUERY_WARN_MS) && SLOW_QUERY_WARN_MS > 0;
 
-function createExtendedClient(url: string, logger: AppLogger, instanceName: string) {
+/**
+ * Build the pg pool that backs a client.
+ *
+ * Split out from the adapter so the pool is OURS rather than one the adapter
+ * creates and hides. `PrismaPg` accepts either a config object or a live
+ * `pg.Pool`, and the two behave identically at runtime — but only the second
+ * leaves us a handle on `totalCount`/`idleCount`/`waitingCount`, which is the
+ * only pool-saturation signal available on Prisma 7. (The documented
+ * `$metrics.json()` was a Rust query-engine feature and v7 removed the engine
+ * along with it; the generated client here has no `$metrics` member at all.)
+ * `disposeExternalPool` hands ownership back for shutdown, so `$disconnect()`
+ * still ends the pool exactly as it did when the adapter owned it.
+ */
+function createPool(url: string, instanceName: string): Pool {
+  return new Pool({
+    connectionString: url,
+    max: POOL_MAX,
+    idleTimeoutMillis: POOL_IDLE_TIMEOUT_MS,
+    connectionTimeoutMillis: POOL_CONNECTION_TIMEOUT_MS,
+    // Belt-and-braces against a runaway query pinning a connection forever.
+    statement_timeout: parseInt(
+      process.env.DB_STATEMENT_TIMEOUT_MS ?? '30000',
+      10,
+    ),
+    application_name: `formbuilder-${instanceName.toLowerCase()}`,
+  });
+}
+
+function createExtendedClient(
+  pool: Pool,
+  logger: AppLogger,
+  instanceName: string,
+) {
   const isDev = process.env.NODE_ENV !== 'production';
 
   const logConfig: Prisma.LogDefinition[] = [
@@ -54,14 +95,14 @@ function createExtendedClient(url: string, logger: AppLogger, instanceName: stri
     ...(isDev ? [{ emit: 'event', level: 'info' } as const] : []),
   ];
 
-  const adapter = new PrismaPg({
-    connectionString: url,
-    max: POOL_MAX,
-    idleTimeoutMillis: POOL_IDLE_TIMEOUT_MS,
-    connectionTimeoutMillis: POOL_CONNECTION_TIMEOUT_MS,
-    // Belt-and-braces against a runaway query pinning a connection forever.
-    statement_timeout: parseInt(process.env.DB_STATEMENT_TIMEOUT_MS ?? '30000', 10),
-    application_name: `formbuilder-${instanceName.toLowerCase()}`,
+  const adapter = new PrismaPg(pool, {
+    disposeExternalPool: true,
+    // An idle client dying — a failover, a proxy closing the socket — emits
+    // 'error' on the Pool. An EventEmitter 'error' with no listener throws, so
+    // without this the process dies over something the pool recovers from on
+    // its own by discarding the client.
+    onPoolError: (err) =>
+      logger.error(`[${instanceName}] idle pool client error`, err),
   });
 
   const client = new PrismaClient({ adapter, log: logConfig });
@@ -89,22 +130,55 @@ function createExtendedClient(url: string, logger: AppLogger, instanceName: stri
   client.$on('error' as never, (e: Prisma.LogEvent) =>
     logger.error(`[${instanceName}] ${e.message}`),
   );
-  client.$on('warn' as never, (e: Prisma.LogEvent) => logger.warn(`[${instanceName}] ${e.message}`));
+  client.$on('warn' as never, (e: Prisma.LogEvent) =>
+    logger.warn(`[${instanceName}] ${e.message}`),
+  );
   if (isDev) {
-    client.$on('info' as never, (e: Prisma.LogEvent) => logger.info(`[${instanceName}] ${e.message}`));
+    client.$on('info' as never, (e: Prisma.LogEvent) =>
+      logger.info(`[${instanceName}] ${e.message}`),
+    );
   }
 
-  return client.$extends(
-    pagination({
-      pages: {
-        limit: 20, // Default limit if not specified
-        includePageCount: true,
-      },
-    }),
+  return (
+    client
+      .$extends(
+        pagination({
+          pages: {
+            limit: 20, // Default limit if not specified
+            includePageCount: true,
+          },
+        }),
+      )
+      // Applied LAST, which in Prisma means it wraps OUTERMOST: a `query`
+      // extension registered later sits above earlier ones in the pipeline. That
+      // is the position this one wants — it sees `where` exactly as the calling
+      // service wrote it, before pagination has folded in skip/take, so a
+      // violation message names the predicate the author is looking at.
+      //
+      // See common/tenancy/tenant-scope.extension.ts for what it enforces and,
+      // more importantly, what it deliberately does not.
+      .$extends(
+        tenantScopeExtension((message) =>
+          logger.warn(`[${instanceName}] ${message}`),
+        ),
+      )
   );
 }
 
 export type ExtendedPrismaClient = ReturnType<typeof createExtendedClient>;
+
+/** A point-in-time reading of one connection pool. Consumed by MetricsService. */
+export interface PrismaPoolStats {
+  client: 'writer' | 'reader';
+  /** Connections currently open, idle or busy. */
+  total: number;
+  /** Open connections sitting unused. */
+  idle: number;
+  /** Queries blocked waiting for a free connection — the saturation signal. */
+  waiting: number;
+  /** Configured ceiling (DB_POOL_MAX). */
+  max: number;
+}
 
 /**
  * PrismaService — two PrismaClient instances for read/write splitting.
@@ -125,6 +199,9 @@ export class PrismaService implements OnModuleInit, OnModuleDestroy {
   /** True when reader and writer point at the same database (no replica configured). */
   private readonly readerIsWriter: boolean;
 
+  private readonly writerPool: Pool;
+  private readonly readerPool: Pool;
+
   constructor(private readonly logger: AppLogger) {
     this.logger.setContext(PrismaService.name);
 
@@ -132,10 +209,39 @@ export class PrismaService implements OnModuleInit, OnModuleDestroy {
     const readerUrl = process.env.DATABASE_REPLICA_URL ?? writerUrl;
     this.readerIsWriter = readerUrl === writerUrl;
 
-    this.writer = createExtendedClient(writerUrl, this.logger, 'Writer');
+    this.writerPool = createPool(writerUrl, 'Writer');
+    this.readerPool = this.readerIsWriter
+      ? this.writerPool
+      : createPool(readerUrl, 'Reader');
+
+    this.writer = createExtendedClient(this.writerPool, this.logger, 'Writer');
     this.reader = this.readerIsWriter
       ? this.writer
-      : createExtendedClient(readerUrl, this.logger, 'Reader');
+      : createExtendedClient(this.readerPool, this.logger, 'Reader');
+  }
+
+  /**
+   * Live pool counters, for the Prometheus exporter.
+   *
+   * Reports one entry when reader and writer share a pool, so a deployment
+   * without a replica does not publish a second, identical series under a
+   * `reader` label that does not correspond to anything.
+   */
+  poolStats(): PrismaPoolStats[] {
+    const read = (
+      client: 'writer' | 'reader',
+      pool: Pool,
+    ): PrismaPoolStats => ({
+      client,
+      total: pool.totalCount,
+      idle: pool.idleCount,
+      waiting: pool.waitingCount,
+      max: POOL_MAX,
+    });
+
+    return this.readerIsWriter
+      ? [read('writer', this.writerPool)]
+      : [read('writer', this.writerPool), read('reader', this.readerPool)];
   }
 
   async onModuleInit() {

@@ -1,6 +1,14 @@
 import {
-  Controller, Get, Post, Patch, Delete,
-  Body, Param, UseGuards, Req, Query
+  Controller,
+  Get,
+  Post,
+  Patch,
+  Delete,
+  Body,
+  Param,
+  UseGuards,
+  Req,
+  Query,
 } from '@nestjs/common';
 import { OrganizationsService } from './organizations.service';
 import { UpdateOrganizationDto } from './dto/update-organization.dto';
@@ -89,7 +97,10 @@ export class OrganizationsController {
   @Patch(':orgId')
   @UseGuards(OrgMemberGuard, RoleGuard)
   @RequiredRole('ADMIN')
-  async updateOrganization(@OrgId() orgId: string, @Body() dto: UpdateOrganizationDto) {
+  async updateOrganization(
+    @OrgId() orgId: string,
+    @Body() dto: UpdateOrganizationDto,
+  ) {
     return this.orgsService.updateOrganization(orgId, dto);
   }
 
@@ -115,7 +126,10 @@ export class OrganizationsController {
   @Get(':orgId/members')
   @UseGuards(OrgMemberGuard, RoleGuard)
   @RequiredRole('ADMIN')
-  async listMembers(@OrgId() orgId: string, @Query() query: PaginationQueryDto) {
+  async listMembers(
+    @OrgId() orgId: string,
+    @Query() query: PaginationQueryDto,
+  ) {
     return this.orgsService.listMembers(orgId, parsePagination(query));
   }
 
@@ -133,7 +147,12 @@ export class OrganizationsController {
     @Req() req: Request,
   ) {
     const actorUserId = (req.user as any).sub;
-    return this.orgsService.updateMemberRole(orgId, memberId, dto.role, actorUserId);
+    return this.orgsService.updateMemberRole(
+      orgId,
+      memberId,
+      dto.role,
+      actorUserId,
+    );
   }
 
   /**
@@ -169,7 +188,12 @@ export class OrganizationsController {
     @Req() req: Request,
   ) {
     const invitedById = (req.user as any).sub;
-    return this.orgsService.createInvitation(orgId, dto.email, dto.role ?? 'VIEWER', invitedById);
+    return this.orgsService.createInvitation(
+      orgId,
+      dto.email,
+      dto.role ?? 'VIEWER',
+      invitedById,
+    );
   }
 
   /**
@@ -179,7 +203,10 @@ export class OrganizationsController {
   @Get(':orgId/invitations')
   @UseGuards(OrgMemberGuard, RoleGuard)
   @RequiredRole('ADMIN')
-  async listInvitations(@OrgId() orgId: string, @Query() query: PaginationQueryDto) {
+  async listInvitations(
+    @OrgId() orgId: string,
+    @Query() query: PaginationQueryDto,
+  ) {
     return this.orgsService.listInvitations(orgId, parsePagination(query));
   }
 
@@ -234,6 +261,10 @@ export class OrganizationsController {
   @UseGuards(OrgMemberGuard, RoleGuard)
   @RequiredRole('ADMIN')
   async getAuditLogs(@OrgId() orgId: string, @Query() query: AuditLogQueryDto) {
-    return this.orgsService.getAuditLogs(orgId, parsePagination(query), query.action);
+    return this.orgsService.getAuditLogs(
+      orgId,
+      parsePagination(query),
+      query.action,
+    );
   }
 }

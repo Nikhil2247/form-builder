@@ -1,4 +1,12 @@
-import { IsInt, IsMimeType, IsString, IsUUID, Max, MaxLength, Min } from 'class-validator';
+import {
+  IsInt,
+  IsMimeType,
+  IsString,
+  IsUUID,
+  Max,
+  MaxLength,
+  Min,
+} from 'class-validator';
 
 export class PresignedUrlDto {
   @IsUUID()

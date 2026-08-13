@@ -270,6 +270,7 @@ model Organization {
   formApps           FormApp[]
   featureFlags       OrganizationFeatureFlag[]
   choiceLists        ChoiceList[]
+  exportJobs         ExportJob[]
 
   @@index([slug])
   @@index([isActive])
@@ -436,6 +437,10 @@ model User {
   mfaRecoveryCodes        MfaRecoveryCode[]
   auditLogs               AuditLog[]               @relation("AuditActor")
 
+  reviewedSubmissions FormSubmission[] @relation("SubmissionReviewer")
+  deletedSubmissions  FormSubmission[] @relation("SubmissionDeleter")
+  exportJobs          ExportJob[]
+
   @@index([email])
   @@map("users")
 }
@@ -500,19 +505,52 @@ model RefreshToken {
   userId    String    @map("user_id") @db.Uuid
   // SHA-256 hex of the raw 32-byte random token (64 hex chars).
   tokenHash String    @unique @map("token_hash") @db.VarChar(64)
+
+  /// Token FAMILY — every token descended from a single login shares this id.
+  ///
+  /// WHY: rotation alone does not detect theft. If an attacker steals a refresh
+  /// token and uses it before the legitimate user does, the attacker gets a
+  /// fresh token and the victim's next refresh simply fails — indistinguishable
+  /// from an expired session, and the attacker keeps a working session forever.
+  ///
+  /// Presenting an ALREADY-REVOKED token is the signal: under normal operation
+  /// a rotated token is never replayed, so a replay means the token leaked.
+  /// The response is to revoke the entire family (OAuth 2.0 Security BCP
+  /// §4.13.2), which logs out both the attacker and the victim — the victim can
+  /// sign in again, the attacker cannot.
+  ///
+  /// Seeded to the row's own id at login, so a family is never empty.
+  familyId  String    @map("family_id") @db.Uuid
+
   // Stored to display in "active sessions" admin UI, not for auth decisions.
   userAgent String?   @map("user_agent") @db.Text
   ipAddress String?   @map("ip_address") @db.VarChar(45)
   expiresAt DateTime  @map("expires_at")
   // NULL = token is still valid. Set to NOW() on logout or rotation.
   revokedAt DateTime? @map("revoked_at")
+  /// Why the token stopped being valid. Distinguishes routine rotation from a
+  /// security event, so "your session ended" and "we detected token reuse" can
+  /// be different messages — and so the audit trail can be queried for the
+  /// latter. NULL while the token is live.
+  revokedReason RefreshTokenRevokeReason? @map("revoked_reason")
   createdAt DateTime  @default(now()) @map("created_at")
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
   @@index([tokenHash])
+  /// The cascade-revoke query: every live token in a compromised family.
+  @@index([familyId, revokedAt])
   @@map("refresh_tokens")
+}
+
+/// Why a RefreshToken was revoked. See RefreshToken.familyId for the threat model.
+enum RefreshTokenRevokeReason {
+  ROTATED // Normal: exchanged for a successor during refresh.
+  LOGOUT // User signed out explicitly.
+  PASSWORD_RESET // All sessions dropped after a credential change.
+  ADMIN_REVOKED // Super-admin ended the user's sessions.
+  REUSE_DETECTED // A revoked token was replayed — the family was burned.
 }
 
 /// Machine-to-machine API key for programmatic access (CLI tools, integrations, scripts).
@@ -541,6 +579,10 @@ model ApiKey {
   lastUsedAt     DateTime? @map("last_used_at")
   // NULL = never expires
   expiresAt      DateTime? @map("expires_at")
+  /// Soft revoke. A hard DELETE would erase the audit trail of what the key was
+  /// permitted to do and when it was last used — exactly what an incident
+  /// review needs. Revoked keys stay listed, greyed out, and never authenticate.
+  revokedAt      DateTime? @map("revoked_at")
   createdAt      DateTime  @default(now()) @map("created_at")
 
   user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -666,6 +708,7 @@ model Form {
   drafts             FormDraft[]
   integrationConfigs IntegrationConfig[]
   formAppSteps       FormAppStep[]
+  exportJobs         ExportJob[]
 
   @@index([organizationId, status]) // Most common query: list the org's forms by status
   @@index([slug]) // Public form page lookup — hot path
@@ -795,11 +838,63 @@ model FormSubmission {
   /// The record this submission belongs to. NULL for standalone forms.
   subjectId      String? @map("subject_id") @db.Uuid
 
+  // ── Denormalised form-app provenance ───────────────────────────────────────
+  // All three are NULL for a standalone form submission, which is most of them.
+  //
+  // `formAppStepId` is the load-bearing one. "How many progress checks does
+  // this student have?" was previously answerable only by walking
+  // FormAppSessionEntry → session → step, and `formId` cannot stand in for it:
+  // one form may serve steps in two different apps, so counting by form would
+  // silently merge two programmes' histories.
+  appSessionId  String? @map("app_session_id") @db.Uuid
+  formAppStepId String? @map("form_app_step_id") @db.Uuid
+  /// The reporting period this entry was filed into. The counting dimension for
+  /// a SUBJECT_PERIOD step.
+  periodId      String? @map("period_id") @db.Uuid
+
+  /// When the recorded thing actually HAPPENED, from the step's occurredAtKey.
+  ///
+  /// NOT NULL and defaulted to the submission time, deliberately rather than
+  /// nullable with a read-time fallback: `ORDER BY COALESCE(occurred_at,
+  /// submitted_at)` cannot use a btree index, so the timeline would sort its
+  /// whole result set on every page load. Always-present keeps it index-only.
+  occurredAt DateTime @default(now()) @map("occurred_at")
+
+  /// The identity of a repeat, hashed from the step's `uniqueBy` answers —
+  /// "month 3", "final assessment". NULL when the step declares no uniqueBy, or
+  /// for standalone submissions.
+  ///
+  /// A partial UNIQUE index over (subject_id, form_app_step_id,
+  /// occurrence_key) is what actually prevents a duplicate month. Application
+  /// checks cannot: two coordinators submitting March for the same student at
+  /// the same moment both read a count of zero and both pass.
+  occurrenceKey String? @map("occurrence_key") @db.VarChar(80)
+
   status      SubmissionStatus @default(SUBMITTED)
   // submittedAt = timestamp the API received the request (used in analytics & display).
   submittedAt DateTime         @default(now()) @map("submitted_at")
   // processedAt = when the worker finished writing this record (for queue latency monitoring).
   processedAt DateTime?        @map("processed_at")
+
+  // ── Review & moderation ────────────────────────────────────────────────────
+  /// Free-text note left by a team member. INTERNAL ONLY — never returned on
+  /// any public or respondent-facing route, and never included in exports that
+  /// a respondent could receive.
+  reviewNote   String?   @map("review_note") @db.Text
+  reviewedById String?   @map("reviewed_by_id") @db.Uuid
+  reviewedAt   DateTime? @map("reviewed_at")
+
+  // ── Soft delete ────────────────────────────────────────────────────────────
+  /// Set alongside status = DELETED. Two fields rather than one because status
+  /// alone cannot answer "when" or "by whom", and a submission is evidence: a
+  /// response deleted the day before a dispute is a different fact from one
+  /// deleted a year earlier.
+  ///
+  /// Every read path must filter on this. The analytics counters deliberately
+  /// do NOT decrement — a deleted response was still received, and quota is
+  /// charged on receipt.
+  deletedAt   DateTime? @map("deleted_at")
+  deletedById String?   @map("deleted_by_id") @db.Uuid
 
   // Relations
   form        Form                 @relation(fields: [formId], references: [id], onDelete: Cascade)
@@ -807,19 +902,40 @@ model FormSubmission {
   respondent  User?                @relation(fields: [respondentId], references: [id], onDelete: SetNull)
   subject     Subject?             @relation(fields: [subjectId], references: [id], onDelete: SetNull)
   files       FormSubmissionFile[]
+  // SetNull throughout, never Cascade: a submission is evidence and must
+  // outlive the app scaffolding that produced it. Restructuring an app — or
+  // pruning an abandoned session — cannot be allowed to delete collected data.
+  appSession    FormAppSession? @relation(fields: [appSessionId], references: [id], onDelete: SetNull)
+  formAppStep   FormAppStep?    @relation(fields: [formAppStepId], references: [id], onDelete: SetNull)
+  period        FormAppPeriod?  @relation(fields: [periodId], references: [id], onDelete: SetNull)
+  reviewedBy  User?                @relation("SubmissionReviewer", fields: [reviewedById], references: [id], onDelete: SetNull)
+  deletedBy   User?                @relation("SubmissionDeleter", fields: [deletedById], references: [id], onDelete: SetNull)
 
   // ── Critical Performance Indexes ─────────────────────────────────────────
   @@index([formId, submittedAt(sort: Desc)]) // Dashboard: paginate newest first
   @@index([formId, status]) // Filter SUBMITTED vs FLAGGED_SPAM
   @@index([formVersionId]) // Version-scoped analytics queries
   @@index([respondentId]) // All submissions by a logged-in user
-  // The subject timeline: every entry for one record, newest first.
-  @@index([subjectId, submittedAt(sort: Desc)])
+  /// The subject timeline: every entry for one record, newest first.
+  ///
+  /// REPLACED [subjectId, submittedAt desc] rather than joining it — the
+  /// timeline now orders by occurredAt, so the old index had no reader left.
+  /// Net index count on this table is unchanged by the swap.
+  @@index([subjectId, occurredAt(sort: Desc)])
+  /// Step availability for one subject, in ONE grouped scan:
+  ///   SELECT form_app_step_id, period_id, count(*) … GROUP BY 1, 2
+  /// The alternative — a COUNT per step — turns opening a record into six or
+  /// more round-trips, which is what makes longitudinal apps feel slow.
+  @@index([subjectId, formAppStepId, periodId])
   // Org-scoped listing without joining through `forms`, and the shape a
   // partitioned table will need.
   @@index([organizationId, submittedAt(sort: Desc)])
   // Resolving a cross-form reference: "this subject's latest answer to form X".
   @@index([subjectId, formId, submittedAt(sort: Desc)])
+  /// Every list/export/count now carries `deletedAt: null`. Without this the
+  /// filter is applied after the index scan, so a form with many deleted rows
+  /// pays for reading all of them on every page.
+  @@index([formId, deletedAt, submittedAt(sort: Desc)])
   @@map("form_submissions")
 }
 
@@ -1327,6 +1443,24 @@ model FormApp {
   /// interpolated into `src` on a public page.
   branding Json @default("{}") @db.JsonB
 
+  // ── Reporting windows ──────────────────────────────────────────────────────
+  /// NONE unless an author says otherwise. An app that had hand-made periods
+  /// before this column existed is migrated to FIXED, so its behaviour — closed
+  /// outside its windows — is preserved exactly.
+  periodMode FormAppPeriodMode @default(NONE) @map("period_mode")
+
+  /// Read only when `periodMode` is RECURRING.
+  ///
+  ///   { cadence: "MONTHLY" | "QUARTERLY" | "WEEKLY" | "YEARLY",
+  ///     anchor: "2026-01-01",   // where the cycle counts from
+  ///     graceDays: 10,          // how long a closed window still accepts data
+  ///     backfillPeriods: 2 }    // how many closed windows back may be chosen
+  ///
+  /// Grace and backfill exist because field data arrives late by nature. A
+  /// worker who visited on the 28th and reaches a keyboard on the 3rd must be
+  /// able to file it under the month it happened, not the month they typed it.
+  periodConfig Json @default("{}") @map("period_config") @db.JsonB
+
   /// Respondents must be signed in. Defaults to TRUE: an app registers records
   /// against a subject, which is a heavier act than answering a survey, and
   /// the safe default for something that writes to a registry is closed.
@@ -1375,6 +1509,38 @@ model FormAppStep {
   /// Renders the "Optional" badge and relaxes the minimum to zero.
   isOptional Boolean         @default(false) @map("is_optional")
 
+  /// WHERE `minEntries`/`maxEntries`/`uniqueBy` are counted.
+  ///
+  /// Until this existed they were counted within one sitting, which made them
+  /// mean the wrong thing for anything longitudinal: `maxEntries: 6` on a
+  /// monthly progress check meant six per SITTING, and `uniqueBy: ["month"]`
+  /// could not stop month 3 being entered twice in two different sessions.
+  /// SESSION is the default so every app that predates this behaves exactly as
+  /// it did.
+  scope FormAppStepScope @default(SESSION)
+
+  /// Question key whose answer is the REAL-WORLD date of an entry, promoted
+  /// onto the submission as `occurredAt`. A February visit typed up in March
+  /// belongs in February; without this the timeline can only order by when
+  /// somebody happened to be at a keyboard.
+  occurredAtKey String? @map("occurred_at_key") @db.VarChar(60)
+
+  /// When this step becomes DUE, relative to an anchor.
+  ///
+  ///   { anchor: "REGISTRATION" | "<stepKey>",
+  ///     offsets: [{ months: 1 }, { months: 3 }, { months: 6 }],
+  ///     graceDays: 14 }
+  ///
+  /// Advisory, never a gate: a step past its date is marked overdue and is
+  /// still fillable, and one not yet due can still be filled early. Blocking on
+  /// a schedule would mean a worker standing in front of the respondent cannot
+  /// record what just happened, which is worse than a date being untidy.
+  ///
+  /// This is what lets the platform say "Ravi has no February check" — the one
+  /// output a monitoring programme actually exists to produce, and the one
+  /// thing a timeline of what DID happen can never show.
+  schedule Json? @db.JsonB
+
   /// ExprNode over EARLIER steps' answers, addressed `stepKey.questionKey`.
   /// Evaluated with the same engine and the same fail-closed direction as a
   /// SHOW rule: a step whose condition cannot be evaluated is hidden, never
@@ -1388,9 +1554,10 @@ model FormAppStep {
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
-  app     FormApp               @relation(fields: [appId], references: [id], onDelete: Cascade)
-  form    Form                  @relation(fields: [formId], references: [id], onDelete: Restrict)
-  entries FormAppSessionEntry[]
+  app         FormApp               @relation(fields: [appId], references: [id], onDelete: Cascade)
+  form        Form                  @relation(fields: [formId], references: [id], onDelete: Restrict)
+  entries     FormAppSessionEntry[]
+  submissions FormSubmission[]
 
   @@unique([appId, key])
   @@index([appId, order])
@@ -1405,6 +1572,33 @@ enum FormAppStepMode {
   REPEATABLE
 }
 
+/// The window a step's cardinality is measured over.
+enum FormAppStepScope {
+  /// Within one sitting. The original behaviour, and the default.
+  SESSION
+  /// Across the subject's whole history. "Registered once, ever."
+  SUBJECT
+  /// Per subject, per reporting period. "One progress check a month."
+  SUBJECT_PERIOD
+}
+
+/// How an app's reporting windows come into being.
+enum FormAppPeriodMode {
+  /// No windows. Reports are accepted whenever the app is published.
+  NONE
+  /// Hand-made windows. The app is CLOSED outside them — the original
+  /// behaviour, and still right for a survey that runs Feb–May and then stops.
+  FIXED
+  /// Windows derived from a cadence, computed rather than stored.
+  ///
+  /// A monthly programme under FIXED needs twelve hand-made rows a year and
+  /// locks every worker out on the 1st. Under RECURRING the current window is a
+  /// pure function of the cadence and the clock, and being between windows does
+  /// not close the app — late entry is the normal case in field work, and
+  /// refusing it is what makes people file under the wrong month.
+  RECURRING
+}
+
 /// A reporting window. The reference form's "Feb – May 2026 · Fixed Reporting
 /// Period" badge, and what segregates one cycle's returns from the next.
 model FormAppPeriod {
@@ -1415,11 +1609,26 @@ model FormAppPeriod {
   endsAt   DateTime @map("ends_at")
   isActive Boolean  @default(true) @map("is_active")
 
+  /// Derived from the app's cadence rather than typed by an author.
+  ///
+  /// Generated rows are written LAZILY — at submit, never at open. Materialising
+  /// on open would put a write on the hottest read path in the app, for a row
+  /// that is only needed once something is actually filed against it.
+  isGenerated Boolean @default(false) @map("is_generated")
+  /// Position in the cadence, counted from its anchor. Lets a label be
+  /// recomputed or a window be found without date arithmetic in SQL.
+  sequence    Int?
+
   createdAt DateTime @default(now()) @map("created_at")
 
-  app      FormApp          @relation(fields: [appId], references: [id], onDelete: Cascade)
-  sessions FormAppSession[]
+  app         FormApp          @relation(fields: [appId], references: [id], onDelete: Cascade)
+  sessions    FormAppSession[]
+  submissions FormSubmission[]
 
+  /// Two concurrent submits into a not-yet-materialised window must converge on
+  /// ONE row, or the same month would exist twice and `SUBJECT_PERIOD` counting
+  /// would silently allow two entries. This is what makes the upsert safe.
+  @@unique([appId, startsAt])
   @@index([appId, isActive])
   @@map("form_app_periods")
 }
@@ -1437,8 +1646,22 @@ model FormAppSession {
   organizationId String  @map("organization_id") @db.Uuid
   periodId       String? @map("period_id") @db.Uuid
 
-  /// Resolved from the REGISTERS step at submit; NULL while still a draft.
+  /// REGISTER: resolved from the REGISTERS step at submit, NULL while a draft.
+  /// FOLLOW_UP: bound when the session is OPENED, and never re-resolved.
   subjectId String? @map("subject_id") @db.Uuid
+
+  /// Whether this session creates a record or adds to an existing one.
+  ///
+  /// Before FOLLOW_UP existed, adding March's progress check to a student meant
+  /// re-filling their whole registration so the identity hash would land on the
+  /// same Subject. That cost the worker a re-typed registration every visit,
+  /// and one typo in a name silently minted a duplicate student.
+  mode FormAppSessionMode @default(REGISTER)
+
+  /// Steps this session is narrowed to, by key. Empty means "all of them".
+  /// Set when a worker picks a single entry to add from a record page, so the
+  /// runner shows one form rather than a six-step wizard with five skipped.
+  stepKeys Json @default("[]") @map("step_keys") @db.JsonB
 
   status       FormAppSessionStatus @default(DRAFT)
   respondentId String?              @map("respondent_id") @db.Uuid
@@ -1449,15 +1672,20 @@ model FormAppSession {
   submittedAt      DateTime? @map("submitted_at")
   completionTimeMs Int?      @map("completion_time_ms")
 
-  app     FormApp               @relation(fields: [appId], references: [id], onDelete: Cascade)
-  period  FormAppPeriod?        @relation(fields: [periodId], references: [id], onDelete: SetNull)
-  subject Subject?              @relation(fields: [subjectId], references: [id], onDelete: SetNull)
-  entries FormAppSessionEntry[]
+  app         FormApp               @relation(fields: [appId], references: [id], onDelete: Cascade)
+  period      FormAppPeriod?        @relation(fields: [periodId], references: [id], onDelete: SetNull)
+  subject     Subject?              @relation(fields: [subjectId], references: [id], onDelete: SetNull)
+  entries     FormAppSessionEntry[]
+  submissions FormSubmission[]
 
-  /// One open draft per respondent per app. Partial, so SUBMITTED sessions do
-  /// not collide — a respondent files many reports over time, but resumes only
-  /// the one they left open. Enforced by a partial unique index in the
-  /// migration, which Prisma cannot express here.
+  /// One open draft per respondent per app PER SUBJECT. Partial, so SUBMITTED
+  /// sessions do not collide — a respondent files many reports over time, but
+  /// resumes only the one they left open. Enforced by a partial unique index in
+  /// the migration, which Prisma cannot express here.
+  ///
+  /// The subject is part of the key because a field worker mid-round has one
+  /// unfinished visit per student, not one in total; keying on the respondent
+  /// alone would make opening student B's form silently resume student A's.
   @@index([appId, status])
   @@index([organizationId, submittedAt])
   @@index([subjectId])
@@ -1468,6 +1696,13 @@ enum FormAppSessionStatus {
   DRAFT
   SUBMITTED
   ABANDONED
+}
+
+enum FormAppSessionMode {
+  /// Starts from the REGISTERS step; the subject is resolved at submit.
+  REGISTER
+  /// Bound to an existing subject at open. Registration is skipped.
+  FOLLOW_UP
 }
 
 /// One filled-in copy of one step. "School Visit #2" is `index: 1` here.
@@ -1647,4 +1882,93 @@ model ChoiceItem {
   /// Type-ahead search on label.
   @@index([listId, label])
   @@map("choice_items")
+}
+
+// ============================================================================
+// SECTION 15 — ASYNC EXPORT JOBS
+// ============================================================================
+
+/// Lifecycle of an asynchronous export.
+enum ExportJobStatus {
+  QUEUED // Accepted, waiting for a worker.
+  RUNNING // A worker is streaming rows into object storage.
+  COMPLETED // Object written; objectKey is set and downloadable.
+  FAILED // Gave up. `error` explains why; BullMQ retries are already exhausted.
+  EXPIRED // Object passed its retention window and was swept from the bucket.
+}
+
+/// Output encoding for an export.
+enum ExportJobFormat {
+  CSV
+  JSON
+}
+
+/// A long-running export, decoupled from the HTTP request that asked for it.
+///
+/// WHY THIS EXISTS:
+///  `GET /forms/:id/export` already streams with a keyset cursor, so it no
+///  longer buffers the whole result set in memory. But it still holds one HTTP
+///  connection, one Node worker slot and one database cursor open for the
+///  entire duration — and a load balancer with a 60-second idle timeout will
+///  cut a large export in half regardless of how efficiently it streams.
+///  A truncated CSV is worse than a failed one: it arrives, it opens, and it
+///  looks complete.
+///
+///  So exports past a threshold become jobs: the request returns an id
+///  immediately, a worker streams rows into object storage, and the user gets a
+///  presigned link when it lands. Retention is deliberately short — an export
+///  is a derived artefact that can always be regenerated, and it contains a
+///  full copy of the tenant's response data, which is the last thing that
+///  should accumulate indefinitely in a bucket.
+model ExportJob {
+  id             String @id @default(uuid()) @db.Uuid
+  organizationId String @map("organization_id") @db.Uuid
+  /// NULL means an org-wide export rather than a single form's.
+  formId         String? @map("form_id") @db.Uuid
+  /// Who asked. Used for the notification and for the audit trail.
+  requestedById  String @map("requested_by_id") @db.Uuid
+
+  status ExportJobStatus @default(QUEUED)
+  format ExportJobFormat @default(CSV)
+
+  /// Frozen copy of the filters the request carried (date range, status, search).
+  /// Stored rather than re-derived so a completed export can always explain
+  /// exactly what it contains, even after the form has since changed.
+  filters Json @default("{}") @db.JsonB
+
+  /// Rows written so far. Updated in batches, not per row — this is progress
+  /// display, not an accounting record.
+  rowsWritten Int  @default(0) @map("rows_written")
+  /// Best-effort total for a progress bar. NULL until counted.
+  rowsTotal   Int? @map("rows_total")
+
+  /// Object storage location of the finished file. NULL until COMPLETED.
+  objectKey String?         @map("object_key") @db.VarChar(500)
+  bytes     BigInt?
+  provider  StorageProvider @default(MINIO)
+
+  /// Failure reason, surfaced to the user. Must stay free of internal detail:
+  /// it is shown in the dashboard.
+  error String? @db.Text
+
+  /// When the stored object becomes eligible for sweeping. Enforced by a
+  /// scheduled job AND by a bucket lifecycle rule, because a sweeper that
+  /// silently stops running would otherwise retain response data forever.
+  expiresAt   DateTime? @map("expires_at")
+  startedAt   DateTime? @map("started_at")
+  completedAt DateTime? @map("completed_at")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  form         Form?        @relation(fields: [formId], references: [id], onDelete: Cascade)
+  requestedBy  User         @relation(fields: [requestedById], references: [id], onDelete: Cascade)
+
+  /// The dashboard list: this org's exports, newest first.
+  @@index([organizationId, createdAt(sort: Desc)])
+  /// The sweeper: everything COMPLETED and past retention.
+  @@index([status, expiresAt])
+  @@index([formId])
+  @@index([requestedById])
+  @@map("export_jobs")
 }

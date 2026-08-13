@@ -36,14 +36,23 @@ export class PublicFormsController {
   @Throttle({ default: { limit: 30, ttl: 60_000 } })
   @Post(':slug/track')
   @HttpCode(HttpStatus.NO_CONTENT)
-  async track(@Param('slug') slug: string, @Body() body: { event: 'view' | 'start' }) {
+  async track(
+    @Param('slug') slug: string,
+    @Body() body: { event: 'view' | 'start' },
+  ) {
     await this.formsService.trackEvent(slug, body?.event);
   }
 
   @Put(':slug/draft')
   async saveDraft(
     @Param('slug') slug: string,
-    @Body() body: { fingerprint: string; answers: any; lastFieldId?: string; progress?: number }
+    @Body()
+    body: {
+      fingerprint: string;
+      answers: any;
+      lastFieldId?: string;
+      progress?: number;
+    },
   ) {
     return this.formsService.saveDraft(slug, body);
   }
@@ -51,28 +60,33 @@ export class PublicFormsController {
   @Get(':slug/draft')
   async getDraft(
     @Param('slug') slug: string,
-    @Query('fp') fingerprint: string
+    @Query('fp') fingerprint: string,
   ) {
     return this.formsService.getDraft(slug, fingerprint);
   }
 
   @Delete(':slug/draft')
   @HttpCode(HttpStatus.NO_CONTENT)
-  async deleteDraft(@Param('slug') slug: string, @Query('fp') fingerprint: string) {
+  async deleteDraft(
+    @Param('slug') slug: string,
+    @Query('fp') fingerprint: string,
+  ) {
     await this.formsService.deleteDraft(slug, fingerprint);
   }
 
   @Get(':slug/embed')
-  async getEmbedCode(@Param('slug') slug: string, @Req() req: any) {
+  // Not async: this builds a snippet from the request's own headers and touches
+  // no I/O. Nest serialises a plain return value identically.
+  getEmbedCode(@Param('slug') slug: string, @Req() req: any) {
     const host = req.headers.host;
     const protocol = req.headers['x-forwarded-proto'] || req.protocol;
     const baseUrl = `${protocol}://${host}`;
-    
-    // We assume the frontend will serve a lightweight web component bundle 
+
+    // We assume the frontend will serve a lightweight web component bundle
     // at /embed.js which will parse data-slug and render the form.
     return {
       script: `<script src="${baseUrl}/embed.js" data-form-slug="${slug}" data-api-url="${baseUrl}/api/v1"></script><div id="form-builder-embed-${slug}"></div>`,
-      iframe: `<iframe src="${baseUrl}/f/${slug}" width="100%" height="800" frameborder="0"></iframe>`
+      iframe: `<iframe src="${baseUrl}/f/${slug}" width="100%" height="800" frameborder="0"></iframe>`,
     };
   }
 }

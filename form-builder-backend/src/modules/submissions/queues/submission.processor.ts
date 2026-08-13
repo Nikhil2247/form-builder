@@ -1,8 +1,14 @@
-import { Processor, WorkerHost, InjectQueue } from '@nestjs/bullmq';
-import { Logger } from '@nestjs/common';
+import {
+  Processor,
+  WorkerHost,
+  InjectQueue,
+  OnWorkerEvent,
+} from '@nestjs/bullmq';
+import { Logger, Optional } from '@nestjs/common';
 import { Job, Queue } from 'bullmq';
 import { PrismaService } from '../../../common/prisma/prisma.service';
 import { MailService } from '../../mail/mail.service';
+import { MetricsService } from '../../../common/metrics/metrics.service';
 import { QUEUE_NAMES, defaultJobOptions } from '../../../config/bullmq.config';
 import type { SubmissionPayload } from './submission.producer';
 
@@ -14,9 +20,27 @@ export class SubmissionProcessor extends WorkerHost {
     private readonly prisma: PrismaService,
     private readonly mailService: MailService,
     @InjectQueue(QUEUE_NAMES.WEBHOOKS) private readonly webhookQueue: Queue,
-    @InjectQueue(QUEUE_NAMES.FILE_VERIFY) private readonly fileVerifyQueue: Queue,
+    @InjectQueue(QUEUE_NAMES.FILE_VERIFY)
+    private readonly fileVerifyQueue: Queue,
+    // @Optional so this consumer still starts if MetricsModule is not imported.
+    // Instrumentation must never be the reason a queue stops draining.
+    @Optional() private readonly metrics?: MetricsService,
   ) {
     super();
+  }
+
+  // ── Job-duration metrics ──────────────────────────────────────────────────
+  // Read off the job's own processedOn/finishedOn stamps rather than timed
+  // here, so the histogram measures processing and excludes queue wait — the
+  // distinction between "make the handler faster" and "add replicas".
+  @OnWorkerEvent('completed')
+  onJobCompleted(job: Job) {
+    this.metrics?.observeJob(QUEUE_NAMES.SUBMISSIONS, job, 'completed');
+  }
+
+  @OnWorkerEvent('failed')
+  onJobFailed(job?: Job) {
+    this.metrics?.observeJob(QUEUE_NAMES.SUBMISSIONS, job, 'failed');
   }
 
   async process(job: Job<SubmissionPayload>): Promise<void> {
@@ -60,7 +84,9 @@ export class SubmissionProcessor extends WorkerHost {
     if (!formVersion) {
       // Unrecoverable: retrying cannot conjure a deleted version. Throwing here
       // sends the job to the failed set for inspection rather than looping.
-      throw new Error(`Form version ${formVersionId} not found for submission ${submissionId}`);
+      throw new Error(
+        `Form version ${formVersionId} not found for submission ${submissionId}`,
+      );
     }
 
     const questions = formVersion.questionsJson as any[];
@@ -84,7 +110,9 @@ export class SubmissionProcessor extends WorkerHost {
 
     if (existing) {
       const storedAnswers = (existing.answers ?? {}) as Record<string, any>;
-      this.logger.log(`Submission ${submissionId} already persisted; running side effects only.`);
+      this.logger.log(
+        `Submission ${submissionId} already persisted; running side effects only.`,
+      );
       await this.runSideEffects({
         formId,
         submissionId,
@@ -109,9 +137,13 @@ export class SubmissionProcessor extends WorkerHost {
       const form = formVersion.form as any;
       let resolvedSubjectId: string | null = subjectId ?? null;
 
-      if (form.subjectRole === 'REGISTERS' && form.subjectTypeId && !resolvedSubjectId) {
+      if (
+        form.subjectRole === 'REGISTERS' &&
+        form.subjectTypeId &&
+        !resolvedSubjectId
+      ) {
         const identity = buildSubjectIdentity(
-          (form.subjectType?.identityConfig ?? {}) as any,
+          form.subjectType?.identityConfig ?? {},
           questions,
           answers,
         );
@@ -192,7 +224,11 @@ export class SubmissionProcessor extends WorkerHost {
     formTitle: string;
     notifyEmails: unknown;
   }) {
-    await this.linkAndVerifyFiles(input.questions, input.answers, input.submissionId);
+    await this.linkAndVerifyFiles(
+      input.questions,
+      input.answers,
+      input.submissionId,
+    );
     await this.enqueueWebhooks(input.formId, input.submissionId, input.answers);
 
     const notifyEmails = Array.isArray(input.notifyEmails)
@@ -207,7 +243,9 @@ export class SubmissionProcessor extends WorkerHost {
           input.submissionId,
           input.answers,
         )
-        .catch((e) => this.logger.error('Failed to send notification emails', e));
+        .catch((e) =>
+          this.logger.error('Failed to send notification emails', e),
+        );
     }
   }
 
@@ -228,7 +266,8 @@ export class SubmissionProcessor extends WorkerHost {
       if (q?.type !== 'FILE_UPLOAD') continue;
       const val = answers[q.id];
       if (!val) continue;
-      if (Array.isArray(val)) fileIds.push(...val.filter((v) => typeof v === 'string'));
+      if (Array.isArray(val))
+        fileIds.push(...val.filter((v) => typeof v === 'string'));
       else if (typeof val === 'string') fileIds.push(val);
     }
 
@@ -250,11 +289,18 @@ export class SubmissionProcessor extends WorkerHost {
         ),
       );
     } catch (err) {
-      this.logger.error(`Failed to link/verify files for submission ${submissionId}`, err as any);
+      this.logger.error(
+        `Failed to link/verify files for submission ${submissionId}`,
+        err,
+      );
     }
   }
 
-  private async enqueueWebhooks(formId: string, submissionId: string, answers: any) {
+  private async enqueueWebhooks(
+    formId: string,
+    submissionId: string,
+    answers: any,
+  ) {
     const webhooks = await this.prisma.reader.formWebhook.findMany({
       where: { formId, isActive: true },
       select: { id: true },
@@ -275,7 +321,10 @@ export class SubmissionProcessor extends WorkerHost {
         this.webhookQueue.add(
           'deliver-webhook',
           { webhookId: webhook.id, submissionId, payload },
-          { ...defaultJobOptions, jobId: `webhook-${webhook.id}-${submissionId}` },
+          {
+            ...defaultJobOptions,
+            jobId: `webhook-${webhook.id}-${submissionId}`,
+          },
         ),
       ),
     );
@@ -312,7 +361,9 @@ function gradeQuiz(questions: any[], answers: Record<string, any>) {
     if (q.type === 'SINGLE_CHOICE' || q.type === 'DROPDOWN') {
       if (typeof given === 'string' && correct.has(given)) score += pts;
     } else if (q.type === 'MULTI_CHOICE') {
-      const chosen = Array.isArray(given) ? given.filter((g) => typeof g === 'string') : [];
+      const chosen = Array.isArray(given)
+        ? given.filter((g) => typeof g === 'string')
+        : [];
       // Exact set match: every correct option chosen, nothing extra.
       const allChosen = [...correct].every((c) => chosen.includes(c));
       const noExtras = chosen.every((c) => correct.has(c));
@@ -357,11 +408,18 @@ function buildSubjectIdentity(
   },
   questions: any[],
   answers: Record<string, any>,
-): { displayName: string; attributes: Record<string, any>; externalId: string | null } {
+): {
+  displayName: string;
+  attributes: Record<string, any>;
+  externalId: string | null;
+} {
   const idByKey = new Map<string, string>();
   for (const question of questions ?? []) {
     if (!question || typeof question.id !== 'string') continue;
-    const key = typeof question.key === 'string' && question.key ? question.key : question.id;
+    const key =
+      typeof question.key === 'string' && question.key
+        ? question.key
+        : question.id;
     if (!idByKey.has(key)) idByKey.set(key, question.id);
   }
 
@@ -381,7 +439,9 @@ function buildSubjectIdentity(
     if (value !== undefined) attributes[key] = value;
   }
 
-  const rawExternal = identityConfig.externalId ? valueOf(identityConfig.externalId) : undefined;
+  const rawExternal = identityConfig.externalId
+    ? valueOf(identityConfig.externalId)
+    : undefined;
 
   return {
     // A nameless record is unusable in a search list, so fall back to something

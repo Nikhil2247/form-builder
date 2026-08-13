@@ -116,10 +116,16 @@ export function applyRules(input: ApplyRulesInput): ApplyRulesResult {
       errors.push({ ruleId: rule.id, target: rule.target, message: error });
       // Fail closed: contributes nothing, so the target stays hidden unless
       // another rule shows it.
-      showEvaluations.set(rule.target, showEvaluations.get(rule.target) ?? false);
+      showEvaluations.set(
+        rule.target,
+        showEvaluations.get(rule.target) ?? false,
+      );
       continue;
     }
-    showEvaluations.set(rule.target, (showEvaluations.get(rule.target) ?? false) || truthy(value));
+    showEvaluations.set(
+      rule.target,
+      (showEvaluations.get(rule.target) ?? false) || truthy(value),
+    );
   }
   for (const [target, visible] of showEvaluations) {
     if (!visible) hidden.add(target);
@@ -146,7 +152,8 @@ export function applyRules(input: ApplyRulesInput): ApplyRulesResult {
       violations.push({
         ruleId: rule.id,
         target: rule.target,
-        message: 'This entry could not be validated. Please contact the form owner.',
+        message:
+          'This entry could not be validated. Please contact the form owner.',
       });
       continue;
     }
