@@ -37,6 +37,11 @@ export const validationSchema = Joi.object({
   MAX_FILE_SIZE_MB: Joi.number().default(25),
   PRESIGNED_URL_TTL_SECONDS: Joi.number().default(900),
   CORS_ORIGINS: Joi.string().default('http://localhost:3001'),
+  // Parent domain for the refresh cookie, e.g. `.example.org`. Required in any
+  // deployment where the web app and the API are on different hostnames —
+  // without it the cookie is host-only to the API and the frontend's edge proxy
+  // cannot see the session. Omit locally, where both share `localhost`.
+  COOKIE_DOMAIN: Joi.string().optional(),
   CLOUDFLARE_TURNSTILE_SECRET: Joi.string().optional(),
   SMTP_HOST: Joi.string().optional(),
   SMTP_PORT: Joi.number().default(587),

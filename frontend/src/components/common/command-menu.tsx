@@ -39,7 +39,12 @@ export function CommandMenu() {
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key.toLowerCase() === 'k' && (event.metaKey || event.ctrlKey)) {
+      // `key` is typed as a plain string, but it is genuinely absent on some
+      // synthetic keydowns — password managers and Chrome's autofill both
+      // dispatch them — and an unguarded `.toLowerCase()` there throws out of a
+      // document-level listener, which surfaces as an uncaught TypeError on
+      // pages that have nothing to do with the command menu.
+      if (event.key?.toLowerCase() === 'k' && (event.metaKey || event.ctrlKey)) {
         event.preventDefault();
         toggle();
       }

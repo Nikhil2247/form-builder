@@ -65,7 +65,7 @@ env:
   PM2_WEB: formbuilder-web
 
   API_PORT: ${{ vars.API_PORT || '3100' }}
-  WEB_PORT: ${{ vars.WEB_PORT || '3000' }}
+  WEB_PORT: ${{ vars.WEB_PORT || '4100' }}
 
 jobs:
   # ==========================================

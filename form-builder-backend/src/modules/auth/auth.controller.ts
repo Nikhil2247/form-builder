@@ -20,9 +20,45 @@ import { ForgotPasswordDto } from './dto/forgot-password.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import { VerifyMfaDto, VerifyMfaLoginDto } from './dto/verify-mfa.dto';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
-import type { Response, Request } from 'express';
+import type { CookieOptions, Response, Request } from 'express';
 
 const COOKIE_NAME = 'refresh_token';
+
+/**
+ * The refresh cookie's attributes, in one place so that `res.cookie` and
+ * `res.clearCookie` cannot drift apart. A `clearCookie` whose domain or path
+ * does not match the cookie that was set deletes nothing at all, silently, and
+ * the browser goes on presenting a token the API has already revoked.
+ *
+ * COOKIE_DOMAIN is the load-bearing one in a split-host deployment. Left unset,
+ * this is a host-only cookie: set by `formsapi.example.org`, and therefore
+ * invisible to `forms.example.org`. That is harmless in local development,
+ * where the API and the web app share the `localhost` host and cookies ignore
+ * the port — which is exactly why this defect cannot reproduce there. In
+ * production it means `proxy.ts`, which gates every dashboard route on the mere
+ * PRESENCE of this cookie, can never see it: login succeeds, the API sets the
+ * cookie on the API host, and the very next navigation to /dashboard is bounced
+ * straight back to /login?next=%2Fdashboard, forever. Set it to the registrable
+ * domain both hosts share, e.g. `.example.org`.
+ *
+ * sameSite is 'lax' rather than 'strict'. Both hosts sit under one registrable
+ * domain, so the XHRs are same-site under either value; what 'strict'
+ * additionally withholds is the cookie on arrival from OFF-site — an invite or
+ * password-reset link opened from a mail client. That top-level navigation
+ * would carry no cookie, so `proxy.ts` would send an already-signed-in user to
+ * /login. 'lax' still withholds it from cross-site POSTs, which is the CSRF
+ * case that actually matters for /auth/refresh.
+ */
+function refreshCookieOptions(): CookieOptions {
+  const domain = process.env.COOKIE_DOMAIN?.trim();
+  return {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === 'production',
+    sameSite: 'lax',
+    path: '/',
+    ...(domain ? { domain } : {}),
+  };
+}
 
 @Controller('auth')
 export class AuthController {
@@ -43,9 +79,7 @@ export class AuthController {
    */
   private setRefreshTokenCookie(res: Response, token: string, expiresAt: Date) {
     res.cookie(COOKIE_NAME, token, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'strict',
+      ...refreshCookieOptions(),
       expires: expiresAt,
     });
   }
@@ -165,7 +199,7 @@ export class AuthController {
       // the cookie's PRESENCE as "this browser has a session": leaving a dead
       // one in place sent signed-out visitors from /login to /dashboard, which
       // then sent them back to /login, forever.
-      res.clearCookie(COOKIE_NAME);
+      res.clearCookie(COOKIE_NAME, refreshCookieOptions());
       throw err;
     }
 
@@ -184,7 +218,7 @@ export class AuthController {
     if (refreshToken) {
       await this.authService.logout(refreshToken);
     }
-    res.clearCookie(COOKIE_NAME);
+    res.clearCookie(COOKIE_NAME, refreshCookieOptions());
     return { message: 'Logged out successfully' };
   }
 
