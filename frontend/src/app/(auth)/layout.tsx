@@ -1,5 +1,4 @@
 import React from 'react';
-import Link from 'next/link';
 import { Layers } from 'lucide-react';
 
 export default function AuthLayout({
