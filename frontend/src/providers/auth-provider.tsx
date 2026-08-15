@@ -53,9 +53,17 @@ export function useSessionBootstrap() {
  * bounced to a login screen because some previous tab's session expired, and
  * their page load must not cost an auth round trip — these are the highest
  * traffic routes in the product and nothing on them is personalised.
+ *
+ * The exception is a follow-up entry (`/a/{slug}?subject=...`), reached only
+ * from "Add entry" on a record a signed-in user already has open. The API
+ * requires that caller to be identified, so skipping the bootstrap there
+ * would strand a genuinely signed-in worker with no access token in memory
+ * and a "you must be signed in" rejection despite an active session.
  */
-function isPublicRunner(pathname: string) {
-  return pathname.startsWith('/f/') || pathname.startsWith('/a/');
+function isPublicRunner(pathname: string, search: string) {
+  if (pathname.startsWith('/f/')) return true;
+  if (pathname.startsWith('/a/')) return !new URLSearchParams(search).has('subject');
+  return false;
 }
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
@@ -65,7 +73,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   // Seeded from the first pathname this mounts at. A respondent on /f/... is
   // `ready` immediately with no session, which is the correct answer for them.
-  const [ready, setReady] = useState(() => isPublicRunner(pathname));
+  const [ready, setReady] = useState(() =>
+    isPublicRunner(pathname, typeof window === 'undefined' ? '' : window.location.search),
+  );
 
   useEffect(() => {
     if (ready) return;
@@ -89,7 +99,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       // sees the previous session's data.
       queryClient.clear();
 
-      if (isPublicRunner(pathname) || pathname.startsWith('/login')) return;
+      if (
+        isPublicRunner(pathname, typeof window === 'undefined' ? '' : window.location.search) ||
+        pathname.startsWith('/login')
+      )
+        return;
 
       toast.error('Your session has expired', {
         description: 'Please sign in again to continue.',

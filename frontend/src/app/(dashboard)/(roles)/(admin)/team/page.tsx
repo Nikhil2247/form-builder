@@ -233,6 +233,7 @@ export default function TeamPage() {
       id: 'role',
       header: 'Role',
       width: 'w-28',
+      hideBelow: 'sm',
       cell: (invite) => <StatusBadge status={invite.role} />,
     },
     {

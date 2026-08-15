@@ -59,6 +59,7 @@ export default function TrashPage() {
       id: 'deletedAt',
       header: 'Deleted',
       width: 'w-40',
+      hideBelow: 'sm',
       cell: (form) => (
         <span className="text-muted-foreground">
           <RelativeTime value={form.deletedAt} />

@@ -129,6 +129,7 @@ function IntegrationsContent() {
       id: "status",
       header: 'Status',
       width: 'w-32',
+      hideBelow: 'sm',
       cell: (hook) => (
         <span
           title={

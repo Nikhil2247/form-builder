@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { API_BASE_URL } from '@/lib/config';
+import { getAccessToken } from '@/lib/api';
+import { useSessionBootstrap } from '@/providers/auth-provider';
 
 /**
  * A form-app session, from the respondent's side.
@@ -134,9 +136,18 @@ function shallowEqual(
 }
 
 async function call<T>(path: string, init?: RequestInit): Promise<T> {
+  // A follow-up session (`subjectId` set) is rejected server-side for anyone
+  // the API cannot identify as signed in — without this header a respondent
+  // who is genuinely logged in still reads as anonymous, and "add an entry to
+  // an existing record" fails with a sign-in prompt despite an active session.
+  const token = getAccessToken();
   const res = await fetch(`${API_BASE_URL}${path}`, {
     ...init,
-    headers: { 'Content-Type': 'application/json', ...(init?.headers ?? {}) },
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...(init?.headers ?? {}),
+    },
     credentials: 'include',
   });
 
@@ -193,7 +204,19 @@ export function useAppSession(publicSlug: string, options: OpenSessionOptions = 
   const periodId = options.periodId;
   const stepKeysParam = options.stepKeys?.join(',');
 
+  // A follow-up session (`subjectId` set) needs the caller's access token on
+  // the very first request that opens it. `AuthProvider` only recovers that
+  // token from the refresh cookie for this route once it decides the visit is
+  // not anonymous — so opening the session before that exchange settles would
+  // race it and send the request with no token regardless of `subjectId`
+  // being present, landing on the same "must be signed in" rejection this was
+  // meant to fix. `bootstrapReady` is true synchronously for every other
+  // public-app visit, so this costs nothing there.
+  const { ready: bootstrapReady } = useSessionBootstrap();
+
   useEffect(() => {
+    if (subjectId && !bootstrapReady) return;
+
     let cancelled = false;
     fp.current = fingerprint();
 
@@ -229,7 +252,7 @@ export function useAppSession(publicSlug: string, options: OpenSessionOptions = 
     return () => {
       cancelled = true;
     };
-  }, [publicSlug, applyDrafts, subjectId, periodId, stepKeysParam]);
+  }, [publicSlug, applyDrafts, subjectId, periodId, stepKeysParam, bootstrapReady]);
 
   // Clear pending saves on unmount so a debounce cannot fire into a dead component.
   useEffect(() => {

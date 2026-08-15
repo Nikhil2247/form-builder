@@ -40,7 +40,7 @@ export function DashboardLayout({ children }: { children: React.ReactNode }) {
       {/* Main content area — shifts right based on sidebar width on desktop */}
       <main
         className={cn(
-          'flex flex-1 flex-col h-screen overflow-hidden min-w-0 transition-all duration-300 ease-in-out',
+          'flex flex-1 flex-col h-screen min-h-0 min-w-0 overflow-hidden transition-all duration-300 ease-in-out',
           // Desktop: push content based on sidebar state
           isCollapsed ? 'md:ml-16' : 'md:ml-64',
         )}
@@ -48,10 +48,13 @@ export function DashboardLayout({ children }: { children: React.ReactNode }) {
         {/* Top Header — hidden on builder page */}
         {!isBuilderPage && <Header />}
 
-        {/* Page Content */}
+        {/* Page Content — `min-h-0` overrides the flex default of
+            `min-height: auto`, which otherwise sizes this to its content
+            instead of the space actually left by the header, and shows up as
+            a second scrollbar on any page tall enough to hit it. */}
         <div
           className={cn(
-            'flex-1 overflow-y-auto',
+            'min-h-0 flex-1 overflow-y-auto',
             !isBuilderPage && 'p-4 sm:p-6 lg:p-8',
           )}
         >

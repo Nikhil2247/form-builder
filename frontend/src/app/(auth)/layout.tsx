@@ -8,10 +8,10 @@ export default function AuthLayout({
   children: React.ReactNode;
 }) {
   return (
-    <div className="min-h-screen flex items-center justify-center bg-muted/30">
-      <div className="w-full h-screen lg:grid lg:min-h-[600px] lg:grid-cols-2 xl:min-h-[800px]">
+    <div className="h-screen overflow-hidden bg-muted/30">
+      <div className="h-full w-full lg:grid lg:grid-cols-2">
         {/* Left Side - Brand / Visual */}
-        <div className="hidden bg-primary lg:flex flex-col justify-between p-12 text-primary-foreground">
+        <div className="hidden h-full overflow-y-auto bg-primary lg:flex flex-col justify-between p-12 text-primary-foreground">
           <div className="flex items-center gap-2 text-xl font-bold">
             <div className="bg-primary-foreground text-primary p-2 rounded-xl">
               <Layers size={24} strokeWidth={2.5} />
@@ -32,7 +32,7 @@ export default function AuthLayout({
         </div>
 
         {/* Right Side - Auth Forms */}
-        <div className="flex items-center justify-center p-8 sm:p-12 h-full">
+        <div className="flex h-full items-center justify-center overflow-y-auto p-8 sm:p-12">
           <div className="w-full max-w-[400px]">
             {children}
           </div>

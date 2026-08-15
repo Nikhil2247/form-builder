@@ -1,13 +1,11 @@
 name: Deploy to VPS
 
 # Modelled on the placeintern deploy pipeline and targeting the same VPS, with
-# four differences that are NOT cosmetic — read them before editing:
+# three differences that are NOT cosmetic — read them before editing:
 #
-#   1. THREE PM2 processes, not two. This backend runs a separate queue worker
-#      (`PROCESS_ROLE=worker node dist/worker`). If it is not deployed, the API
-#      still answers and submissions still return 202 — they just never get
-#      processed. That is the worst failure shape available here, because
-#      nothing is obviously broken.
+#   1. The backend runs as a SINGLE PM2 process (`dist/main.js`). There is no
+#      separate queue worker deployed here — if one gets added later, it needs
+#      its own pm2 reload/start step, mirroring the one below.
 #   2. The frontend is Next.js, not Vite. It is a SERVER, started with
 #      `next start`; there is no static `dist/` to hand to `serve`.
 #   3. Migrations must be able to FAIL the deploy. The reference pipeline ends
@@ -27,7 +25,7 @@ on:
         default: false
         type: boolean
       deploy_backend:
-        description: 'Deploy backend (API + worker)'
+        description: 'Deploy backend'
         required: false
         default: true
         type: boolean
@@ -57,12 +55,12 @@ env:
   FRONTEND_DIR: frontend
   REPO_URL: 'github.com/${{ github.repository }}.git'
 
-  # PM2 process names. Changing one of these orphans the running process under
-  # its old name — the reload falls through to `pm2 start` and you end up with
-  # two copies competing for the same port or queue.
-  PM2_API: formbuilder-api
-  PM2_WORKER: formbuilder-worker
-  PM2_WEB: formbuilder-web
+  # PM2 process names — must match what is actually running on the VPS.
+  # Changing one of these orphans the running process under its old name — the
+  # reload falls through to `pm2 start` and you end up with two copies
+  # competing for the same port.
+  PM2_API: form-builder-backend
+  PM2_WEB: form-frontend
 
   API_PORT: ${{ vars.API_PORT || '3100' }}
   WEB_PORT: ${{ vars.WEB_PORT || '4100' }}
@@ -142,14 +140,12 @@ jobs:
       - name: Build application
         run: npx nest build
 
-      # Both entrypoints must exist before we go anywhere near the server. A
-      # missing dist/worker.js only shows up at `pm2 start`, by which point the
-      # API has already been reloaded and the deploy is half-applied.
-      - name: Verify both entrypoints were emitted
+      # Must exist before we go anywhere near the server — a missing entrypoint
+      # only shows up at `pm2 start`, by which point the deploy is half-applied.
+      - name: Verify entrypoint was emitted
         run: |
-          test -f dist/main.js   || { echo "::error::dist/main.js missing";   exit 1; }
-          test -f dist/worker.js || { echo "::error::dist/worker.js missing"; exit 1; }
-          echo "API and worker entrypoints present."
+          test -f dist/main.js || { echo "::error::dist/main.js missing"; exit 1; }
+          echo "API entrypoint present."
 
   # ==========================================
   # BUILD FRONTEND  (the gate)
@@ -191,7 +187,7 @@ jobs:
           NEXT_PUBLIC_API_URL: ${{ vars.NEXT_PUBLIC_API_URL || 'http://localhost:3100/v1' }}
 
   # ==========================================
-  # DEPLOY BACKEND  (API + worker)
+  # DEPLOY BACKEND
   # ==========================================
   # NOTE ON `always()` + `!= 'failure'`: the backend deploys on EVERY push to
   # main, including frontend-only ones, and that is deliberate. Both deploy jobs
@@ -265,32 +261,9 @@ jobs:
             echo "==> Building"
             npx nest build
             test -f dist/main.js
-            test -f dist/worker.js
 
-            # ── Worker first, then API ────────────────────────────────────────
-            # Order matters. The worker is the consumer; the API is the producer.
-            # Reloading the consumer first means that for the few seconds both
-            # are mid-restart, jobs queue up in Redis rather than being consumed
-            # by OLD worker code that may not understand a payload the NEW API
-            # is about to start producing.
-            #
-            # kill-timeout 30s gives BullMQ time to finish in-flight jobs:
-            # worker.ts wires SIGTERM/SIGINT to app.close(), which drains rather
-            # than dropping them. Killing at PM2's 1.6s default would abandon
-            # jobs mid-processing.
-            echo "==> Reloading worker (${{ env.PM2_WORKER }})"
-            pm2 reload ${{ env.PM2_WORKER }} --update-env 2>/dev/null || \
-              PROCESS_ROLE=worker pm2 start dist/worker.js \
-                --name ${{ env.PM2_WORKER }} \
-                --kill-timeout 30000 \
-                --time
-
-            echo "==> Reloading API (${{ env.PM2_API }})"
-            pm2 reload ${{ env.PM2_API }} --update-env 2>/dev/null || \
-              PROCESS_ROLE=api pm2 start dist/main.js \
-                --name ${{ env.PM2_API }} \
-                --kill-timeout 10000 \
-                --time
+            echo "Reloading PM2 process..."
+            pm2 reload ${{ env.PM2_API }} --update-env || pm2 start dist/main.js --name ${{ env.PM2_API }}
 
             echo "==> Waiting for readiness"
             # /v1/health/ready checks Postgres, Redis, the queues and object
@@ -308,27 +281,12 @@ jobs:
                 echo
                 echo "--- api logs ---"
                 pm2 logs ${{ env.PM2_API }} --lines 80 --nostream || true
-                echo "--- worker logs ---"
-                pm2 logs ${{ env.PM2_WORKER }} --lines 40 --nostream || true
                 exit 1
               fi
               echo "waiting for API readiness... ($RETRY_COUNT/$MAX_RETRIES)"
               sleep 5
             done
             echo "Readiness OK."
-
-            # The worker serves /metrics from its own bare listener on
-            # METRICS_PORT (default 9464) because it has no HTTP server. This is
-            # the only way to prove the worker actually came up — PM2 reporting
-            # "online" only means the process exists.
-            echo "==> Checking worker is alive"
-            if curl -sf "http://localhost:${{ vars.METRICS_PORT || '9464' }}/metrics" > /dev/null 2>&1; then
-              echo "Worker metrics endpoint responding."
-            else
-              echo "::warning::Worker metrics endpoint not responding on ${{ vars.METRICS_PORT || '9464' }}. \
-            The worker may be down, or METRICS_PORT may differ. Check: pm2 logs ${{ env.PM2_WORKER }}"
-              pm2 describe ${{ env.PM2_WORKER }} | grep -E "status|restarts" || true
-            fi
 
             pm2 save
             echo "==> Backend deployment complete."
@@ -337,7 +295,7 @@ jobs:
         if: failure()
         run: |
           echo "::error::Backend deployment failed for ${{ github.sha }}."
-          echo "The API and worker may be in a partially-reloaded state."
+          echo "The API may be in a partially-reloaded state."
           echo "Check on the server: pm2 list && pm2 logs ${{ env.PM2_API }} --lines 100"
 
   # ==========================================
@@ -404,13 +362,14 @@ jobs:
             # Next.js is a server, not a folder of static files. `next start`
             # serves the .next build — it cannot be replaced with `serve`,
             # because /f/[id] and /a/[slug] are dynamically rendered and the
-            # nonce CSP is applied per request in src/proxy.ts.
+            # nonce CSP is applied per request in src/proxy.ts. PORT is exported
+            # before both the reload and the start fallback: `--update-env`
+            # only picks up a changed env var from the shell it is invoked in,
+            # and `next start` reads PORT at process start, not from the build.
             echo "==> Reloading web (${{ env.PM2_WEB }})"
-            pm2 reload ${{ env.PM2_WEB }} --update-env 2>/dev/null || \
-              pm2 start npm \
-                --name ${{ env.PM2_WEB }} \
-                --time \
-                -- run start
+            export PORT=${{ env.WEB_PORT }}
+            pm2 reload ${{ env.PM2_WEB }} --update-env || \
+              PORT=${{ env.WEB_PORT }} pm2 start npm --name ${{ env.PM2_WEB }} -- start
 
             echo "==> Waiting for the site to answer"
             MAX_RETRIES=12
@@ -451,7 +410,7 @@ jobs:
             echo ""
             echo "| Component | Result |"
             echo "|---|---|"
-            echo "| Backend (API + worker) | ${{ needs.deploy-backend.result }} |"
+            echo "| Backend | ${{ needs.deploy-backend.result }} |"
             echo "| Frontend | ${{ needs.deploy-frontend.result }} |"
             echo ""
             echo "**Commit:** \`${{ github.sha }}\`"

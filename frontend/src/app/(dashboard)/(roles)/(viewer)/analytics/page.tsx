@@ -108,6 +108,7 @@ export default function AnalyticsPage() {
       header: 'Views',
       numeric: true,
       width: 'w-28',
+      hideBelow: 'sm',
       cell: (form) => form.views.toLocaleString(),
     },
     {
@@ -115,6 +116,7 @@ export default function AnalyticsPage() {
       header: 'Responses',
       numeric: true,
       width: 'w-28',
+      hideBelow: 'sm',
       cell: (form) => form.submissions.toLocaleString(),
     },
     {

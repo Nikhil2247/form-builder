@@ -217,6 +217,18 @@ const HIDE_BELOW: Record<NonNullable<DataTableColumn<any>['hideBelow']>, string>
   xl: 'hidden xl:table-cell',
 };
 
+/**
+ * The mirror image of `HIDE_BELOW`: visible exactly while the real column
+ * cell is hidden. Used to surface a dropped column's value as an inline chip
+ * under the row header instead of just discarding it below the breakpoint.
+ */
+const SHOW_BELOW: Record<NonNullable<DataTableColumn<any>['hideBelow']>, string> = {
+  sm: 'sm:hidden',
+  md: 'md:hidden',
+  lg: 'lg:hidden',
+  xl: 'xl:hidden',
+};
+
 export function DataTable<T>({
   columns,
   data,
@@ -318,6 +330,11 @@ export function DataTable<T>({
 
   // Total column count including the selection checkbox, for colSpan.
   const columnCount = columns.length + (selection ? 1 : 0);
+
+  // Columns dropped below some breakpoint would otherwise just vanish on a
+  // phone — their value surfaces instead as a chip under the row header,
+  // shown exactly while the real `<td>` is hidden (see `SHOW_BELOW`).
+  const collapsedColumns = columns.filter((column) => column.hideBelow && !column.isRowHeader);
 
   const activate = (row: T, event: React.MouseEvent | React.KeyboardEvent) => {
     if (onRowClick) {
@@ -438,6 +455,21 @@ export function DataTable<T>({
               )}
             >
               {column.cell(row, index)}
+              {column.isRowHeader && collapsedColumns.length > 0 && (
+                <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs font-normal text-muted-foreground">
+                  {collapsedColumns.map((hidden) => (
+                    <span
+                      key={hidden.id}
+                      className={cn('inline-flex items-center gap-1', SHOW_BELOW[hidden.hideBelow!])}
+                    >
+                      {typeof hidden.header === 'string' && (
+                        <span className="text-foreground/70">{hidden.header}:</span>
+                      )}
+                      {hidden.cell(row, index)}
+                    </span>
+                  ))}
+                </div>
+              )}
             </Cell>
           );
         })}

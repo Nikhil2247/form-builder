@@ -134,6 +134,7 @@ export default function FormsListPage() {
       id: 'status',
       header: 'Status',
       width: 'w-32',
+      hideBelow: 'sm',
       cell: (form) => <StatusBadge status={form.status} dot />,
     },
     {
@@ -141,6 +142,7 @@ export default function FormsListPage() {
       header: 'Responses',
       numeric: true,
       width: 'w-28',
+      hideBelow: 'sm',
       cell: (form) => (form._count?.submissions ?? 0).toLocaleString(),
     },
     {

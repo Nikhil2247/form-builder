@@ -167,6 +167,7 @@ export default function FormDetailPage() {
             header: 'Score',
             numeric: true,
             width: 'w-24',
+            hideBelow: 'sm',
             cell: (submission: Submission) =>
               submission.maxQuizScore
                 ? `${submission.quizScore ?? 0} / ${submission.maxQuizScore}`

@@ -3,7 +3,7 @@
 import React, { useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { BookTemplate, Layers, Loader2, TrendingUp } from 'lucide-react';
+import { BookTemplate, LayoutGrid, Layers, List, Loader2, TrendingUp } from 'lucide-react';
 import { toastError } from '@/lib/errors';
 
 import { Card } from '@/components/ui/card';
@@ -13,6 +13,7 @@ import {
   ButtonLink,
   PageHeader,
   PageShell,
+  DataTable,
   DataTablePagination,
   StatusBadge,
   EmptyState,
@@ -20,6 +21,7 @@ import {
   Toolbar,
   SearchInput,
   FilterSelect,
+  type DataTableColumn,
 } from '@/components/shared';
 import { Can } from '@/components/auth/RoleGuard';
 import { usePermissions } from '@/hooks/use-auth';
@@ -32,6 +34,7 @@ export default function TemplatesPage() {
 
   const pager = usePagination({ filterKeys: ['category'] });
   const [usingId, setUsingId] = useState<string | null>(null);
+  const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
 
   const { data, isLoading, isFetching, error, refetch } = useTemplates({
     page: pager.page,
@@ -69,6 +72,88 @@ export default function TemplatesPage() {
     ...(categories.data ?? []).map((category) => ({ value: category, label: category })),
   ];
 
+  const emptyState = (
+    <EmptyState
+      icon={BookTemplate}
+      variant="inline"
+      title={pager.search || pager.filters.category ? 'No templates match' : 'No templates available'}
+      description={
+        pager.search || pager.filters.category
+          ? 'Try a different search term or category.'
+          : 'Templates published for your organization will appear here.'
+      }
+      action={
+        pager.search || pager.filters.category ? (
+          <Button variant="outline" size="sm" onClick={pager.reset}>
+            Clear filters
+          </Button>
+        ) : undefined
+      }
+    />
+  );
+
+  const templateColumns: DataTableColumn<Template>[] = [
+    {
+      id: 'name',
+      header: 'Template',
+      isRowHeader: true,
+      className: 'max-w-0',
+      cell: (template) => (
+        <div className="flex items-center gap-3">
+          <span className="flex size-8 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground">
+            <BookTemplate className="size-4" strokeWidth={1.5} />
+          </span>
+          <div className="min-w-0">
+            <div className="truncate font-medium text-foreground">{template.name}</div>
+            <div className="truncate text-xs text-muted-foreground">
+              {template.description || 'No description'}
+            </div>
+          </div>
+        </div>
+      ),
+    },
+    {
+      id: 'category',
+      header: 'Category',
+      width: 'w-36',
+      hideBelow: 'sm',
+      cell: (template) =>
+        template.category ? (
+          <StatusBadge status={template.category} label={template.category} tone="neutral" />
+        ) : (
+          <span className="text-muted-foreground">—</span>
+        ),
+    },
+    {
+      id: 'usageCount',
+      header: 'Used',
+      numeric: true,
+      width: 'w-28',
+      hideBelow: 'sm',
+      cell: (template) => (template.usageCount ?? 0).toLocaleString(),
+    },
+    {
+      id: 'actions',
+      header: <span className="sr-only">Actions</span>,
+      width: 'w-40',
+      className: 'text-right',
+      headerClassName: 'text-right',
+      cell: (template) =>
+        can('template:use') && (
+          <Button
+            variant="outline"
+            size="sm"
+            className="gap-1.5"
+            onClick={() => useTemplate(template)}
+            disabled={usingId !== null}
+          >
+            {usingId === template.id && <Loader2 className="size-3.5 animate-spin" />}
+            {usingId === template.id ? 'Creating…' : 'Use template'}
+          </Button>
+        ),
+    },
+  ];
+
   return (
     <PageShell>
       <PageHeader
@@ -83,7 +168,36 @@ export default function TemplatesPage() {
         }
       />
 
-      <Toolbar>
+      <Toolbar
+        end={
+          <div
+            role="group"
+            aria-label="View mode"
+            className="flex items-center gap-1 rounded-lg border border-border p-0.5"
+          >
+            {(
+              [
+                ['list', List, 'Table view'],
+                ['grid', LayoutGrid, 'Card view'],
+              ] as const
+            ).map(([mode, Icon, label]) => (
+              <button
+                key={mode}
+                onClick={() => setViewMode(mode)}
+                aria-label={label}
+                aria-pressed={viewMode === mode}
+                className={`rounded-md p-1.5 transition-colors ${
+                  viewMode === mode
+                    ? 'bg-muted text-foreground'
+                    : 'text-muted-foreground hover:text-foreground'
+                }`}
+              >
+                <Icon className="size-4" />
+              </button>
+            ))}
+          </div>
+        }
+      >
         <SearchInput
           value={pager.search}
           onChange={pager.setSearch}
@@ -100,7 +214,19 @@ export default function TemplatesPage() {
         )}
       </Toolbar>
 
-      {error ? (
+      {viewMode === 'list' ? (
+        <DataTable
+          caption="Templates available to your organization"
+          columns={templateColumns}
+          data={templates}
+          getRowId={(template) => template.id}
+          isLoading={isLoading || isFetching}
+          error={error}
+          onRetry={() => refetch()}
+          empty={emptyState}
+          pagination={pager.paginationProps(total, 'templates')}
+        />
+      ) : error ? (
         <ErrorState title="Could not load templates" error={error} onRetry={() => refetch()} />
       ) : isLoading ? (
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
@@ -109,22 +235,9 @@ export default function TemplatesPage() {
           ))}
         </div>
       ) : templates.length === 0 ? (
-        <EmptyState
-          icon={BookTemplate}
-          title={pager.search || pager.filters.category ? 'No templates match' : 'No templates available'}
-          description={
-            pager.search || pager.filters.category
-              ? 'Try a different search term or category.'
-              : 'Templates published for your organization will appear here.'
-          }
-          action={
-            pager.search || pager.filters.category ? (
-              <Button variant="outline" size="sm" onClick={pager.reset}>
-                Clear filters
-              </Button>
-            ) : undefined
-          }
-        />
+        <div className="rounded-xl border border-dashed border-border-strong bg-card">
+          {emptyState}
+        </div>
       ) : (
         <div className="space-y-4">
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
