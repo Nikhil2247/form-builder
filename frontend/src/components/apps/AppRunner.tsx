@@ -115,7 +115,7 @@ function SubjectContextCard({
     .slice(0, 4);
 
   return (
-    <Card className="flex flex-wrap items-center gap-x-6 gap-y-2 p-4">
+    <Card className="flex flex-row flex-wrap items-center gap-x-6 gap-y-2 p-4">
       <div className="min-w-0 flex-1">
         <p className="text-xs text-muted-foreground">Recording for</p>
         <p className="truncate text-base font-semibold text-foreground">

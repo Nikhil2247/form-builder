@@ -14,6 +14,8 @@ import {
 import { cn } from '@/lib/utils';
 import { buttonVariants } from '@/components/ui/button';
 import {
+  ArrowButton,
+  ArrowLink,
   CallToAction,
   Marked,
   PageHero,
@@ -128,12 +130,8 @@ export default function TemplatesPage() {
         lead="Each of these is a form or app with its questions, logic and settings already in place. Open one, change what does not fit, and publish — rather than starting from an empty canvas and rediscovering which features you needed."
         actions={
           <>
-            <Link href="/signup" className={buttonVariants({ size: 'lg' })}>
-              Browse them in the app
-            </Link>
-            <Link href="/docs/quickstart" className={buttonVariants({ variant: 'outline', size: 'lg' })}>
-              Or build one from scratch
-            </Link>
+            <ArrowButton href="/signup">Browse them in the app</ArrowButton>
+            <ArrowLink href="/docs/quickstart">Or build one from scratch</ArrowLink>
           </>
         }
       />
@@ -158,7 +156,7 @@ export default function TemplatesPage() {
                   'motion-reduce:transition-none motion-reduce:hover:translate-y-0',
                 )}
               >
-                <div className="mb-5 flex size-11 items-center justify-center rounded-xl bg-primary/10 text-primary">
+                <div className="mb-5 flex size-11 items-center justify-center rounded-xl bg-brand-blush text-brand-ember">
                   <Icon className="size-5" strokeWidth={1.75} aria-hidden />
                 </div>
 

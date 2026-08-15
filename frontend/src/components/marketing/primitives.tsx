@@ -1,9 +1,8 @@
 import React from 'react';
 import Link from 'next/link';
-import type { LucideIcon } from 'lucide-react';
+import { ArrowRight, type LucideIcon } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
-import { buttonVariants } from '@/components/ui/button';
 import {
   CountUp,
   HandUnderline,
@@ -84,14 +83,20 @@ export function GridPattern({
   );
 }
 
-/** Soft brand-coloured light behind a hero. Sits under the grid, not over it. */
+/**
+ * Soft brand-coloured light behind a hero. Sits under the grid, not over it.
+ *
+ * Carries the same ember→amber wash as `.bg-brand-gradient` rather than a
+ * navy tint — a hero lit in the product's action colour reads as generic
+ * SaaS, not as this brand, which is the orange side of the palette.
+ */
 export function Glow({ className }: { className?: string }) {
   return (
     <div
       aria-hidden
       className={cn(
         'pointer-events-none absolute left-1/2 top-0 h-[26rem] w-[52rem] -translate-x-1/2',
-        '-translate-y-1/3 rounded-full bg-primary/10 blur-3xl',
+        '-translate-y-1/3 rounded-full bg-brand-gradient opacity-20 blur-3xl',
         className,
       )}
     />
@@ -124,7 +129,12 @@ export function Section({
         // `isolate` gives the pattern a stacking context to sit inside, so it
         // cannot escape behind the page background.
         'relative isolate overflow-hidden border-b border-border/60 py-20 last:border-b-0 sm:py-24',
-        tone === 'muted' && 'bg-muted/40',
+        // `bg-muted/40` was nearly identical to the page background here — the
+        // semantic `muted` token is a two-percent neutral step, deliberately
+        // subtle for app chrome, but that meant alternating bands were
+        // invisible on a marketing page. The brand blush tint gives the same
+        // alternation a colour to read, in both themes.
+        tone === 'muted' && 'bg-brand-blush/35 dark:bg-brand-navy-light/[0.08]',
         className,
       )}
     >
@@ -191,6 +201,12 @@ export function SectionHeading({
 /**
  * The emphasised word in a heading, with the hand-drawn underline beneath it.
  *
+ * Only ever appears inside `PageHero`'s title, on top of the ember→amber
+ * gradient — so the word itself stays the same dark ink as the rest of the
+ * heading (ember text on an ember background is the one combination that
+ * cannot be read) and the emphasis is carried entirely by a bright underline
+ * instead.
+ *
  * `inline-block` is load-bearing: the underline is absolutely positioned
  * against this element, so it needs to be the containing block and needs a
  * height. The word also gets a little bottom padding so a descender in the
@@ -198,10 +214,81 @@ export function SectionHeading({
  */
 export function Marked({ children }: { children: React.ReactNode }) {
   return (
-    <span className="relative inline-block pb-1 text-primary">
+    <span className="relative inline-block pb-1 text-foreground">
       {children}
-      <HandUnderline className="text-primary/45" />
+      <HandUnderline className="text-white/80 dark:text-brand-ember/60" />
     </span>
+  );
+}
+
+/**
+ * The signature call-to-action: a pill with an arrow set in its own circular
+ * chip, rather than a plain filled rectangle.
+ *
+ * Borrowed from vibha.org's own buttons — the chip is what makes the arrow
+ * read as a button's built-in affordance instead of a decoration bolted onto
+ * the label, and it is the one shape this marketing site uses for its most
+ * important actions rather than the square corners the product's `<Button>`
+ * uses everywhere else.
+ */
+export function ArrowButton({
+  href,
+  children,
+  variant = 'solid',
+}: {
+  href: string;
+  children: React.ReactNode;
+  /** `solid` for the primary action in a group, `outline` for the one beside it. */
+  variant?: 'solid' | 'outline';
+}) {
+  return (
+    <Link
+      href={href}
+      className={cn(
+        'group/arrow inline-flex items-center gap-3 rounded-full py-1.5 pr-6 pl-1.5 text-sm font-semibold',
+        'transition-colors duration-200',
+        variant === 'solid'
+          ? 'bg-brand-ember text-white hover:bg-brand-ember/90'
+          : 'border border-border bg-card text-foreground hover:border-brand-ember/50',
+      )}
+    >
+      <span
+        aria-hidden
+        className={cn(
+          'flex size-7 shrink-0 items-center justify-center rounded-full',
+          'transition-transform duration-200 group-hover/arrow:translate-x-0.5',
+          variant === 'solid' ? 'bg-white/20 text-white' : 'bg-brand-ember text-white',
+        )}
+      >
+        <ArrowRight className="size-3.5" strokeWidth={2.5} />
+      </span>
+      {children}
+    </Link>
+  );
+}
+
+/**
+ * A quieter link for a secondary action: a label and an arrow at the end of a
+ * line that stretches on hover, rather than another button competing with the
+ * one next to it.
+ */
+export function ArrowLink({ href, children }: { href: string; children: React.ReactNode }) {
+  return (
+    <Link
+      href={href}
+      className="group/link inline-flex items-center gap-3 text-sm font-semibold text-foreground"
+    >
+      {children}
+      <span
+        aria-hidden
+        className="relative h-px w-9 bg-current transition-[width] duration-200 group-hover/link:w-14"
+      >
+        <ArrowRight
+          className="absolute top-1/2 -right-1 size-3 -translate-y-1/2"
+          strokeWidth={2.5}
+        />
+      </span>
+    </Link>
   );
 }
 
@@ -217,35 +304,92 @@ export function PageHero({
   title,
   lead,
   actions,
+  visual,
   children,
 }: {
   eyebrow?: string;
   title: React.ReactNode;
   lead?: React.ReactNode;
   actions?: React.ReactNode;
+  /**
+   * An illustrative panel for the right-hand column. Passing one turns the
+   * hero into two columns — copy on the left, something concrete to look at
+   * on the right — instead of one centered block of text. Omit it on pages
+   * that have nothing worth showing yet rather than filling the space with
+   * decoration.
+   */
+  visual?: React.ReactNode;
   children?: React.ReactNode;
 }) {
   return (
-    <section className="relative isolate overflow-hidden border-b border-border/60 bg-muted/40">
-      <Glow />
-      <GridPattern fade="top" />
+    <section className="relative isolate overflow-hidden border-b border-border/60 bg-background">
+      {/* The full ember→amber wash, at the same strength vibha.org's own hero
+          runs it. A dark-mode hero this bright would fight the rest of the
+          page, so it fades back to a faint tint instead of disappearing. */}
+      <div
+        aria-hidden
+        className="absolute inset-0 bg-brand-gradient opacity-90 dark:opacity-[0.14]"
+      />
+      {/* A single bright corner rather than flat colour edge to edge — what a
+          photo-backed hero gets for free from its own exposure, this gets from
+          a radial wash instead. Light mode only: the gradient is already
+          nearly invisible in dark mode, so this would have nothing to lift. */}
+      <div
+        aria-hidden
+        className="absolute inset-0 bg-[radial-gradient(ellipse_65%_55%_at_15%_100%,rgba(255,255,255,0.4),transparent_70%)] dark:hidden"
+      />
 
-      <div className="container relative mx-auto max-w-6xl px-4 py-20 sm:px-6 sm:py-28 lg:px-8">
+      <div
+        className={cn(
+          'container relative mx-auto max-w-6xl px-4 py-20 sm:px-6 sm:py-28 lg:px-8',
+          visual && 'grid items-center gap-12 lg:grid-cols-[1.1fr_1fr] lg:gap-16',
+        )}
+      >
         {/* Not scroll-triggered — this is above the fold, so it plays on load
             rather than waiting for a scroll that may never come. */}
-        <Reveal className="max-w-3xl" distance={16}>
+        <Reveal className={cn(!visual && 'max-w-3xl')} distance={16}>
           {eyebrow && <Eyebrow>{eyebrow}</Eyebrow>}
           <h1 className="font-display text-4xl font-bold tracking-tight text-foreground sm:text-5xl lg:text-6xl">
             {title}
           </h1>
           {lead && (
-            <p className="mt-6 text-lg leading-relaxed text-muted-foreground sm:text-xl">{lead}</p>
+            <p className="mt-6 text-lg leading-relaxed text-foreground/70 sm:text-xl">{lead}</p>
           )}
           {actions && <div className="mt-10 flex flex-wrap items-center gap-3">{actions}</div>}
         </Reveal>
+
+        {visual && (
+          <Reveal distance={16} delay={0.1}>
+            {visual}
+          </Reveal>
+        )}
         {children}
       </div>
     </section>
+  );
+}
+
+/**
+ * The frame for a hero's illustrative panel — one consistent card so each
+ * page's illustration reads as a window onto the product rather than a
+ * differently-shaped graphic per page.
+ */
+export function MockPanel({
+  children,
+  className,
+}: {
+  children: React.ReactNode;
+  className?: string;
+}) {
+  return (
+    <div
+      className={cn(
+        'rounded-2xl border border-border/60 bg-card p-5 shadow-overlay sm:p-6',
+        className,
+      )}
+    >
+      {children}
+    </div>
   );
 }
 
@@ -267,7 +411,7 @@ export function FeatureCard({
 }) {
   const body = (
     <>
-      <div className="mb-5 flex size-11 items-center justify-center rounded-xl bg-primary/10 text-primary">
+      <div className="mb-5 flex size-11 items-center justify-center rounded-xl bg-brand-blush text-brand-ember">
         <Icon className="size-5" strokeWidth={1.75} aria-hidden />
       </div>
       <h3 className="mb-2 font-semibold text-foreground">{title}</h3>
@@ -412,13 +556,11 @@ export function CallToAction({
           {title}
         </h2>
         <p className="mt-4 text-lg leading-relaxed text-muted-foreground">{lead}</p>
-        <div className="mt-8 flex flex-wrap items-center justify-center gap-3">
-          <Link href="/signup" className={buttonVariants({ size: 'lg' })}>
-            Get started
-          </Link>
-          <Link href="/docs" className={buttonVariants({ variant: 'outline', size: 'lg' })}>
+        <div className="mt-8 flex flex-wrap items-center justify-center gap-4">
+          <ArrowButton href="/signup">Get started</ArrowButton>
+          <ArrowButton href="/docs" variant="outline">
             Read the documentation
-          </Link>
+          </ArrowButton>
         </div>
       </Reveal>
     </Section>

@@ -68,6 +68,11 @@ export const DOC_SECTIONS: DocSection[] = [
         summary: 'Multi-page forms, and the stacked, conversational and grid layouts.',
       },
       {
+        title: 'Build a form, step by step',
+        href: '/docs/forms/examples',
+        summary: 'Three complete forms built field by field — an intake form, a monitoring visit, and a scored assessment.',
+      },
+      {
         title: 'Conditional logic',
         href: '/docs/forms/logic',
         summary: 'Show and hide questions based on what someone has already answered.',
@@ -76,6 +81,16 @@ export const DOC_SECTIONS: DocSection[] = [
         title: 'Rules and calculations',
         href: '/docs/forms/rules',
         summary: 'Calculated fields, conditional requiredness, and validation that spans questions.',
+      },
+      {
+        title: 'Operators reference',
+        href: '/docs/forms/rules/operators',
+        summary: 'Every operator the rules engine supports, grouped, each with a worked example.',
+      },
+      {
+        title: 'Worked rule examples',
+        href: '/docs/forms/rules/examples',
+        summary: 'Complete rules explained line by line, and the templates the rule editor starts from.',
       },
       {
         title: 'Form settings',
@@ -150,6 +165,11 @@ export const DOC_SECTIONS: DocSection[] = [
         title: 'Steps',
         href: '/docs/apps/steps',
         summary: 'Ordering forms, repeating them, and making them conditional.',
+      },
+      {
+        title: 'Build an app, step by step',
+        href: '/docs/apps/examples',
+        summary: 'A complete worked example: a record type, a registration step, and a repeatable visit step that reads back an earlier answer.',
       },
       {
         title: 'Records and timeline',

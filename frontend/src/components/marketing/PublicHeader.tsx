@@ -114,7 +114,10 @@ export function PublicHeader() {
             <>
               <Link
                 href={home}
-                className={cn(buttonVariants({ variant: 'default', size: 'sm' }), 'hidden gap-1.5 sm:inline-flex')}
+                className={cn(
+                  buttonVariants({ variant: 'default', size: 'sm' }),
+                  'hidden gap-1.5 rounded-full sm:inline-flex',
+                )}
               >
                 <LayoutDashboard className="size-3.5" strokeWidth={2} />
                 Dashboard
@@ -182,7 +185,10 @@ export function PublicHeader() {
               >
                 Log in
               </Link>
-              <Link href="/signup" className={buttonVariants({ variant: 'default', size: 'sm' })}>
+              <Link
+                href="/signup"
+                className={cn(buttonVariants({ variant: 'default', size: 'sm' }), 'rounded-full')}
+              >
                 Get Started
               </Link>
             </>
@@ -216,14 +222,18 @@ export function PublicHeader() {
                   <>
                     <SheetClose
                       render={<Link href={home} />}
-                      className={buttonVariants({ variant: 'default', size: 'sm', className: 'gap-1.5' })}
+                      className={buttonVariants({
+                        variant: 'default',
+                        size: 'sm',
+                        className: 'gap-1.5 rounded-full',
+                      })}
                     >
                       <LayoutDashboard className="size-3.5" strokeWidth={2} />
                       Dashboard
                     </SheetClose>
                     <SheetClose
                       render={<Link href="/profile" />}
-                      className={buttonVariants({ variant: 'outline', size: 'sm' })}
+                      className={buttonVariants({ variant: 'outline', size: 'sm', className: 'rounded-full' })}
                     >
                       Profile and security
                     </SheetClose>
@@ -232,13 +242,13 @@ export function PublicHeader() {
                   <>
                     <SheetClose
                       render={<Link href="/signup" />}
-                      className={buttonVariants({ variant: 'default', size: 'sm' })}
+                      className={buttonVariants({ variant: 'default', size: 'sm', className: 'rounded-full' })}
                     >
                       Get Started
                     </SheetClose>
                     <SheetClose
                       render={<Link href="/login" />}
-                      className={buttonVariants({ variant: 'outline', size: 'sm' })}
+                      className={buttonVariants({ variant: 'outline', size: 'sm', className: 'rounded-full' })}
                     >
                       Log in
                     </SheetClose>

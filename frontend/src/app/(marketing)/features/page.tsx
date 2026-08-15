@@ -4,6 +4,7 @@ import {
   BarChart3,
   Braces,
   Building2,
+  Calculator,
   CalendarClock,
   FileSpreadsheet,
   FileText,
@@ -21,14 +22,16 @@ import {
   Webhook,
 } from 'lucide-react';
 
-import { buttonVariants } from '@/components/ui/button';
 import {
+  ArrowButton,
+  ArrowLink,
   CallToAction,
   CardGrid,
   FactGrid,
   FeatureCard,
   FeatureRow,
   Marked,
+  MockPanel,
   PageHero,
   RevealGroup,
   RevealItem,
@@ -92,13 +95,54 @@ export default function FeaturesPage() {
         lead="Most form tools stop at fields and a submit button. Formora adds the parts a working data-collection process actually needs: rules that compute and validate across questions, reference data managed in one place, versioned publishing, and a way to follow the same subject across many forms over time."
         actions={
           <>
-            <Link href="/signup" className={buttonVariants({ size: 'lg' })}>
-              Get started
-            </Link>
-            <Link href="/docs" className={buttonVariants({ variant: 'outline', size: 'lg' })}>
-              Read the documentation
-            </Link>
+            <ArrowButton href="/signup">Get started</ArrowButton>
+            <ArrowLink href="/docs">Read the documentation</ArrowLink>
           </>
+        }
+        visual={
+          <MockPanel className="mx-auto max-w-md lg:max-w-none">
+            <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+              Everything a working process needs
+            </p>
+
+            <ul className="mt-4 space-y-3">
+              {[
+                {
+                  icon: Calculator,
+                  label: 'Rules that compute and validate',
+                  sub: 'Calculated fields, cross-field checks',
+                },
+                {
+                  icon: ListTree,
+                  label: 'Managed option lists',
+                  sub: 'Cascading dropdowns, lookups and auto-fill',
+                },
+                {
+                  icon: Layers,
+                  label: 'Versioned publishing',
+                  sub: 'Every response reads against the version it saw',
+                },
+                {
+                  icon: Building2,
+                  label: 'Data apps',
+                  sub: 'One subject, many forms, over time',
+                },
+              ].map((item) => (
+                <li
+                  key={item.label}
+                  className="flex items-start gap-3 rounded-xl border border-border bg-muted/20 p-3.5"
+                >
+                  <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-brand-blush text-brand-ember">
+                    <item.icon className="size-4" strokeWidth={1.75} aria-hidden />
+                  </span>
+                  <div>
+                    <p className="text-sm font-medium text-foreground">{item.label}</p>
+                    <p className="text-xs text-muted-foreground">{item.sub}</p>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          </MockPanel>
         }
       />
 

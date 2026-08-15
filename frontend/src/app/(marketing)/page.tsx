@@ -11,13 +11,15 @@ import {
   Webhook,
 } from 'lucide-react';
 
-import { buttonVariants } from '@/components/ui/button';
 import {
+  ArrowButton,
+  ArrowLink,
   CallToAction,
   CardGrid,
   Eyebrow,
   FeatureCard,
   Marked,
+  MockPanel,
   PageHero,
   Reveal,
   RevealGroup,
@@ -79,13 +81,43 @@ export default function LandingPage() {
         lead="Formora is a form builder for work where the answers matter — monitoring visits, intake, assessments, field surveys. Questions can calculate and validate each other, dropdowns draw on reference data you manage in one place, and every response stays readable against the exact version of the form it was filled on."
         actions={
           <>
-            <Link href="/signup" className={buttonVariants({ size: 'lg' })}>
-              Start building
-            </Link>
-            <Link href="/features" className={buttonVariants({ variant: 'outline', size: 'lg' })}>
-              See what it does
-            </Link>
+            <ArrowButton href="/signup">Start building</ArrowButton>
+            <ArrowLink href="/features">See what it does</ArrowLink>
           </>
+        }
+        visual={
+          <MockPanel className="mx-auto max-w-md lg:max-w-none">
+            <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+              What the rules engine sees
+            </p>
+
+            <div className="mt-4 space-y-3">
+              <div className="rounded-xl border border-border bg-muted/30 p-3.5">
+                <p className="text-sm font-medium text-foreground">Household size</p>
+                <p className="mt-0.5 text-xs text-muted-foreground">Number · 7</p>
+              </div>
+
+              <div className="flex items-start gap-2.5 rounded-xl border border-dashed border-brand-ember/40 bg-brand-blush/30 p-3.5">
+                <Calculator className="mt-0.5 size-4 shrink-0 text-brand-ember" strokeWidth={2} />
+                <p className="text-xs leading-relaxed text-foreground">
+                  <span className="font-mono font-semibold text-brand-ember">rule</span>
+                  {'  '}household_size &gt; 6 → require additional_id
+                </p>
+              </div>
+
+              <div className="rounded-xl border border-brand-ember/50 bg-card p-3.5 shadow-card">
+                <div className="flex items-center justify-between gap-3">
+                  <p className="text-sm font-medium text-foreground">Additional ID</p>
+                  <span className="shrink-0 rounded-full bg-brand-blush px-2 py-0.5 text-[11px] font-semibold text-brand-ember">
+                    Required
+                  </span>
+                </div>
+                <p className="mt-0.5 text-xs text-muted-foreground">
+                  Turned on the moment the rule above matched
+                </p>
+              </div>
+            </div>
+          </MockPanel>
         }
       />
 

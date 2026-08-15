@@ -175,7 +175,7 @@ export default function PricingPage() {
                   {plan.name}
                 </h2>
                 {plan.featured && (
-                  <span className="rounded-full bg-primary/10 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide text-primary">
+                  <span className="rounded-full bg-brand-blush px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide text-brand-ember">
                     Most teams
                   </span>
                 )}

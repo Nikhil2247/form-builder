@@ -2,8 +2,9 @@ import type { Metadata } from 'next';
 import Link from 'next/link';
 import { Eye, GitCommitHorizontal, Lock, Ruler } from 'lucide-react';
 
-import { buttonVariants } from '@/components/ui/button';
 import {
+  ArrowButton,
+  ArrowLink,
   CallToAction,
   CardGrid,
   FeatureCard,
@@ -117,13 +118,9 @@ export default function AboutPage() {
           title="Questions, or something not working?"
           lead="The documentation covers most of it. For anything else there is a person at the other end."
         />
-        <Reveal className="flex flex-wrap gap-3">
-          <Link href="/contact" className={buttonVariants({ size: 'lg' })}>
-            Contact us
-          </Link>
-          <Link href="/docs" className={buttonVariants({ variant: 'outline', size: 'lg' })}>
-            Read the documentation
-          </Link>
+        <Reveal className="flex flex-wrap items-center gap-4">
+          <ArrowButton href="/contact">Contact us</ArrowButton>
+          <ArrowLink href="/docs">Read the documentation</ArrowLink>
         </Reveal>
       </Section>
 
