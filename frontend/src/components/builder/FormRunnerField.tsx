@@ -89,6 +89,8 @@ export interface FormRunnerFieldProps {
   index?: number;
   /** Public slug, needed to fetch options for a list-backed question. */
   formSlug?: string;
+  /** Builder preview fallback for a list-backed question — see `ChoiceListField`. */
+  orgId?: string;
   /** The parent question's current answer, when this one cascades. */
   parentValue?: string;
   /** The parent question's label, for the "choose X first" message. */
@@ -149,6 +151,7 @@ export function FormRunnerField({
   formId,
   index,
   formSlug,
+  orgId,
   parentValue,
   parentLabel,
   className,
@@ -277,6 +280,7 @@ export function FormRunnerField({
                 hasProblem={hasProblem}
                 formId={formId}
                 formSlug={formSlug}
+                orgId={orgId}
                 parentValue={parentValue}
                 parentLabel={parentLabel}
                 required={required}
@@ -370,6 +374,7 @@ interface ControlProps {
   hasProblem: boolean;
   formId: string;
   formSlug?: string;
+  orgId?: string;
   parentValue?: string;
   parentLabel?: string;
   required: boolean;
@@ -384,6 +389,7 @@ function QuestionControl({
   hasProblem,
   formId,
   formSlug,
+  orgId,
   parentValue,
   parentLabel,
   required,
@@ -401,6 +407,7 @@ function QuestionControl({
         onChange={onChange}
         onBlur={shared.onBlur as () => void}
         formSlug={formSlug}
+        orgId={orgId}
         parentValue={parentValue}
         parentLabel={parentLabel}
         controlId={shared.id as string}

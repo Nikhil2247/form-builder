@@ -127,10 +127,16 @@ export function LeftTreePanel({ onAddQuestion, onAddPage, onClose }: LeftTreePan
   const selectQuestion = useBuilderStore((s) => s.selectQuestion);
 
   const focusQuestion = (id: string) => {
+    // `selectQuestion` may switch the active page (see builder-store), which
+    // mounts a different set of cards. Deferred a frame so the query runs
+    // against the page that is actually on screen after that switch, not the
+    // one being navigated away from.
     selectQuestion(id);
-    document
-      .querySelector(`[data-question-id="${id}"]`)
-      ?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    requestAnimationFrame(() => {
+      document
+        .querySelector(`[data-question-id="${id}"]`)
+        ?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    });
   };
 
   return (

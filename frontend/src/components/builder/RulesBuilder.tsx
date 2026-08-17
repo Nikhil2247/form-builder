@@ -157,7 +157,7 @@ function RulesPanel({ form, setForm, allowReferences }: RulesBuilderProps) {
     <div className="mx-auto max-w-3xl space-y-5 px-4 sm:px-6 lg:px-8">
       <PanelSection
         title="Rules"
-        description="Calculate a value, show or require a question conditionally, or reject a submission. Checked with the same compiler that runs at publish."
+        description="Calculate a value, show or require a question based on an earlier answer, or reject a submission. Checked live, the same way publishing checks it, so a green tick here means it will publish."
         action={
           <div className="flex flex-wrap items-center gap-2">
             <NativeSelect
@@ -260,8 +260,8 @@ function CompileStatus({
       <div className="flex items-center gap-2 rounded-xl border border-border bg-card px-4 py-2.5">
         <CheckCircle2 className="size-4 shrink-0 text-success" strokeWidth={1.75} />
         <p className="text-xs text-muted-foreground">
-          {ruleCount === 1 ? 'This rule compiles' : `All ${ruleCount} rules compile`} and will
-          publish.
+          {ruleCount === 1 ? 'This rule is set up correctly' : `All ${ruleCount} rules are set up correctly`}{' '}
+          and will publish.
         </p>
       </div>
     );
@@ -275,7 +275,7 @@ function CompileStatus({
       <div className="flex items-center gap-2">
         <AlertTriangle className="size-4 shrink-0 text-destructive" strokeWidth={1.75} />
         <p className="text-xs font-semibold text-destructive">
-          These rules will not publish until they are fixed.
+          These rules have a problem and will not publish until it is fixed.
         </p>
       </div>
       {formErrors.length > 0 && (
@@ -328,7 +328,7 @@ function RuleCard({
             Rule {index + 1}
           </span>
           <Badge variant={errors.length > 0 ? 'destructive' : 'secondary'} className="font-mono">
-            {rule.target || 'no target'}
+            {rule.target || 'no question chosen'}
           </Badge>
           <span className="truncate font-mono text-xs text-muted-foreground">
             {formatExpr(rule.expr)}

@@ -21,6 +21,7 @@ import { gridSpanOf } from '@/types/form';
 import type { FormConfig, FormQuestion, FormSubmission } from '@/types/form';
 
 import { FormRunnerField } from './FormRunnerField';
+import { RichText } from './RichText';
 import { cardVariantClass } from './FormThemeScope';
 
 export type RunnerLayoutMode = 'DOCUMENT' | 'CONVERSATIONAL' | 'GRID';
@@ -54,10 +55,15 @@ interface FormRunnerProps {
   allowReferences?: boolean;
   /**
    * Public slug. Present only on the real form — a list-backed question fetches
-   * its options against it, and the builder preview has no published slug to
-   * fetch with, so it says so rather than rendering an empty dropdown.
+   * its options against it.
    */
   formSlug?: string;
+  /**
+   * Organization id, passed only by the builder's own Preview. With no
+   * `formSlug` yet, a list-backed question falls back to fetching real items
+   * straight from the list (authenticated) instead of rendering a placeholder.
+   */
+  orgId?: string;
   /** Rendered above the questions — cover image, logo, title. */
   header?: React.ReactNode;
   /**
@@ -133,6 +139,7 @@ export function FormRunner({
   requiresPassword = false,
   allowReferences = false,
   formSlug,
+  orgId,
   header,
   hideChrome = false,
   issues: externalIssues,
@@ -732,7 +739,7 @@ export function FormRunner({
         (header ?? (
           <Card className={cn('space-y-2 bg-card p-6', cardClass)}>
             <h1 className="text-2xl font-bold text-foreground">{form.title}</h1>
-            {form.description && <p className="text-sm text-muted-foreground">{form.description}</p>}
+            <RichText html={form.description} className="text-muted-foreground" />
           </Card>
         ))}
 
@@ -776,9 +783,7 @@ export function FormRunner({
         {currentPageMeta && (currentPageMeta.title || currentPageMeta.description) && (
           <div className="space-y-1">
             <h2 className="text-lg font-bold text-foreground">{currentPageMeta.title}</h2>
-            {currentPageMeta.description && (
-              <p className="text-sm text-muted-foreground">{currentPageMeta.description}</p>
-            )}
+            <RichText html={currentPageMeta.description} className="text-muted-foreground" />
           </div>
         )}
 
@@ -802,11 +807,7 @@ export function FormRunner({
                   <h3 className="text-base font-semibold tracking-tight text-foreground">
                     {q.label}
                   </h3>
-                  {q.description && (
-                    <p className="text-[0.8125rem] leading-relaxed text-muted-foreground">
-                      {q.description}
-                    </p>
-                  )}
+                  <RichText html={q.description} className="text-[0.8125rem] text-muted-foreground" />
                   <div className="!mt-3 h-px w-full bg-border" />
                 </div>
               );
@@ -823,6 +824,7 @@ export function FormRunner({
                 index={questionNumber}
                 formId={form.id}
                 formSlug={formSlug}
+                orgId={orgId}
                 parentValue={typeof parentAnswer === 'string' ? parentAnswer : undefined}
                 parentLabel={parent?.label}
                 value={effectiveAnswers[q.id]}
@@ -847,11 +849,7 @@ export function FormRunner({
                       {heading.title}
                     </h3>
                   )}
-                  {heading.description && (
-                    <p className="text-[0.8125rem] leading-relaxed text-muted-foreground">
-                      {heading.description}
-                    </p>
-                  )}
+                  <RichText html={heading.description} className="text-[0.8125rem] text-muted-foreground" />
                 </div>
                 {field}
               </React.Fragment>

@@ -9,6 +9,7 @@ import {
   Copy,
   GitBranch,
   GripVertical,
+  Heading as HeadingIcon,
   Key,
   PenTool,
   Plus,
@@ -17,7 +18,7 @@ import {
   UploadCloud,
   X,
 } from 'lucide-react';
-import { cn } from '@/lib/utils';
+import { cn, selectAllOnFocus } from '@/lib/utils';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -28,6 +29,7 @@ import { useBuilderStore, useFormSnapshot, useQuestion } from '@/store/builder-s
 import { gridSpanOf } from '@/types/form';
 import type { FormQuestion, QuestionOption, QuestionWidth } from '@/types/form';
 import { OptionsSourcePicker } from './OptionsSourcePicker';
+import { RichTextEditor } from './RichTextEditor';
 
 /**
  * One question on the canvas.
@@ -75,6 +77,7 @@ function EnterpriseFieldCardImpl({ id, index }: EnterpriseFieldCardProps) {
   );
 
   const isGridLayout = useBuilderStore((s) => s.settings.layoutMode === 'GRID');
+  const pages = useBuilderStore((s) => s.pages);
 
   const patchQuestion = useBuilderStore((s) => s.patchQuestion);
   const deleteQuestion = useBuilderStore((s) => s.deleteQuestion);
@@ -162,11 +165,138 @@ function EnterpriseFieldCardImpl({ id, index }: EnterpriseFieldCardProps) {
   // ours (delete during drag, for instance).
   if (!question) return null;
 
+  const isSection = question.type === 'SECTION_HEADER';
   const isChoice = (CHOICE_TYPES as readonly string[]).includes(question.type);
   const required = question.validation?.required ?? false;
   // A matrix or a long answer takes the whole row whatever the author picks, so
   // offering the toggle would be offering a control that does nothing.
   const isAlwaysFullWidth = gridSpanOf({ type: question.type, width: 'HALF' }) === 2;
+
+  // Only worth showing once there is more than one page to move a field to —
+  // a single-page form has nothing for this control to offer.
+  const pageSelect = pages.length > 1 && (
+    <select
+      aria-label="Move to page"
+      title="Move to page"
+      value={question.pageNumber ?? 1}
+      onClick={(e) => e.stopPropagation()}
+      onChange={(e) => {
+        e.stopPropagation();
+        patch({ pageNumber: Number(e.target.value) });
+      }}
+      className="h-7 shrink-0 rounded-md border border-border bg-background px-1.5 text-[11px]
+                 text-muted-foreground hover:border-border-strong focus-visible:outline-none"
+    >
+      {pages.map((p) => (
+        <option key={p.pageNumber} value={p.pageNumber}>
+          {p.title || `Page ${p.pageNumber}`}
+        </option>
+      ))}
+    </select>
+  );
+
+  const dragHandle = (
+    <button
+      {...attributes}
+      {...listeners}
+      type="button"
+      aria-label={isSection ? 'Reorder section' : `Reorder question ${index + 1}`}
+      className="shrink-0 cursor-grab rounded-md p-1 text-muted-foreground
+                 hover:bg-muted hover:text-foreground active:cursor-grabbing"
+    >
+      <GripVertical className="size-4" />
+    </button>
+  );
+
+  const duplicateDeleteButtons = (
+    <div className="flex items-center">
+      <Button
+        variant="ghost"
+        size="icon-sm"
+        title={isSection ? 'Duplicate section' : 'Duplicate question'}
+        aria-label={isSection ? 'Duplicate section' : 'Duplicate question'}
+        onClick={(e) => {
+          e.stopPropagation();
+          duplicateQuestion(id);
+        }}
+        className="text-muted-foreground hover:text-foreground"
+      >
+        <Copy className="size-3.5" />
+      </Button>
+      <Button
+        variant="ghost"
+        size="icon-sm"
+        title={isSection ? 'Delete section' : 'Delete question'}
+        aria-label={isSection ? 'Delete section' : 'Delete question'}
+        onClick={(e) => {
+          e.stopPropagation();
+          deleteQuestion(id);
+        }}
+        className="text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+      >
+        <Trash2 className="size-3.5" />
+      </Button>
+    </div>
+  );
+
+  if (isSection) {
+    return (
+      <div ref={setNodeRef} style={style} data-question-id={id} className="group/field">
+        <Card
+          onClick={() => !isSelected && selectQuestion(id)}
+          className={cn(
+            'space-y-3 border-dashed bg-muted/20 p-4 transition-shadow',
+            isSelected
+              ? 'border-foreground/25 ring-1 ring-foreground/15'
+              : 'hover:border-border-strong',
+          )}
+        >
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex min-w-0 flex-1 items-center gap-2">
+              {dragHandle}
+              <HeadingIcon className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
+              <Input
+                value={question.label}
+                onChange={(e) => patch({ label: e.target.value })}
+                onFocus={selectAllOnFocus}
+                placeholder="Section title"
+                aria-label="Section title"
+                className="h-8 min-w-0 flex-1 border-0 bg-transparent px-1 text-base font-semibold shadow-none
+                           focus-visible:border-b focus-visible:border-foreground/30 focus-visible:ring-0"
+              />
+            </div>
+            <div className="flex shrink-0 items-center gap-2">
+              {pageSelect}
+              {duplicateDeleteButtons}
+            </div>
+          </div>
+
+          <RichTextEditor
+            value={question.description ?? ''}
+            onChange={(html) => patch({ description: html })}
+            ariaLabel="Section description"
+            placeholder="Section description (optional)"
+            className="pl-1"
+          />
+        </Card>
+
+        <div
+          className="flex justify-center py-1 opacity-0 transition-opacity
+                     focus-within:opacity-100 group-hover/field:opacity-100"
+        >
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => addQuestion('SHORT_TEXT', id)}
+            className="h-7 gap-1 rounded-full bg-background text-xs shadow-card"
+          >
+            <Plus className="size-3" />
+            Add field below
+          </Button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div ref={setNodeRef} style={style} data-question-id={id} className="group/field">
@@ -182,16 +312,7 @@ function EnterpriseFieldCardImpl({ id, index }: EnterpriseFieldCardProps) {
         {/* ── Header ─────────────────────────────────────────────────────── */}
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border pb-3">
           <div className="flex min-w-0 flex-1 items-center gap-2">
-            <button
-              {...attributes}
-              {...listeners}
-              type="button"
-              aria-label={`Reorder question ${index + 1}`}
-              className="shrink-0 cursor-grab rounded-md p-1 text-muted-foreground
-                         hover:bg-muted hover:text-foreground active:cursor-grabbing"
-            >
-              <GripVertical className="size-4" />
-            </button>
+            {dragHandle}
 
             <span className="tabular shrink-0 text-xs font-semibold text-muted-foreground">
               Q{index + 1}
@@ -200,6 +321,7 @@ function EnterpriseFieldCardImpl({ id, index }: EnterpriseFieldCardProps) {
             <Input
               value={question.label}
               onChange={(e) => patch({ label: e.target.value })}
+              onFocus={selectAllOnFocus}
               placeholder="Question text"
               aria-label={`Question ${index + 1} label`}
               className="h-8 min-w-0 flex-1 border-0 bg-transparent px-1 text-sm font-medium shadow-none
@@ -255,6 +377,8 @@ function EnterpriseFieldCardImpl({ id, index }: EnterpriseFieldCardProps) {
               />
             )}
 
+            {pageSelect}
+
             <div className="flex items-center gap-2">
               <Switch
                 id={`required-${id}`}
@@ -268,34 +392,7 @@ function EnterpriseFieldCardImpl({ id, index }: EnterpriseFieldCardProps) {
               </Label>
             </div>
 
-            <div className="flex items-center">
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                title="Duplicate question"
-                aria-label="Duplicate question"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  duplicateQuestion(id);
-                }}
-                className="text-muted-foreground hover:text-foreground"
-              >
-                <Copy className="size-3.5" />
-              </Button>
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                title="Delete question"
-                aria-label="Delete question"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  deleteQuestion(id);
-                }}
-                className="text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
-              >
-                <Trash2 className="size-3.5" />
-              </Button>
-            </div>
+            {duplicateDeleteButtons}
           </div>
         </div>
 
@@ -365,7 +462,6 @@ function EnterpriseFieldCardImpl({ id, index }: EnterpriseFieldCardProps) {
             onToggleCorrect={handleToggleCorrect}
             onAddOption={handleAddOption}
             onRemoveOption={handleRemoveOption}
-            onPatch={patch}
           />
         </div>
       </Card>
@@ -430,7 +526,6 @@ interface PreviewProps {
   onToggleCorrect: (optionId: string) => void;
   onAddOption: () => void;
   onRemoveOption: (optionId: string) => void;
-  onPatch: (patch: Partial<NonNullable<ReturnType<typeof useQuestion>>>) => void;
 }
 
 function QuestionPreview({
@@ -441,9 +536,19 @@ function QuestionPreview({
   onToggleCorrect,
   onAddOption,
   onRemoveOption,
-  onPatch,
 }: PreviewProps) {
   if (isChoice) {
+    // Options come from the managed list picked above — the manual option
+    // rows below would be dead data nobody reads, so there is nothing to edit
+    // here.
+    if (question.optionsSource) {
+      return (
+        <p className="text-xs text-muted-foreground">
+          Respondents will pick from the selected list. There are no manual options to edit.
+        </p>
+      );
+    }
+
     return (
       <div className="max-w-md space-y-1.5">
         {question.options?.map((option) => (
@@ -476,6 +581,7 @@ function QuestionPreview({
             <Input
               value={option.label}
               onChange={(e) => onOptionLabel(option.id, e.target.value)}
+              onFocus={selectAllOnFocus}
               aria-label="Option label"
               className="h-8 border-transparent bg-background text-sm shadow-none hover:border-input focus-visible:border-input"
             />
@@ -610,16 +716,6 @@ function QuestionPreview({
             </tbody>
           </table>
         </div>
-      );
-
-    case 'SECTION_HEADER':
-      return (
-        <Input
-          value={question.placeholder ?? ''}
-          onChange={(e) => onPatch({ placeholder: e.target.value })}
-          placeholder="Section description…"
-          className="w-full border-0 bg-transparent px-0 text-sm text-muted-foreground shadow-none focus-visible:border-b focus-visible:ring-0"
-        />
       );
 
     default:

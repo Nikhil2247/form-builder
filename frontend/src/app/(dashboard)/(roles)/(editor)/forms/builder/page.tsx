@@ -60,6 +60,8 @@ import { Modal } from '@/components/shared';
 import { EnterpriseNavbar } from '@/components/builder/EnterpriseNavbar';
 import { LeftTreePanel } from '@/components/builder/LeftTreePanel';
 import { EnterpriseFieldCard } from '@/components/builder/EnterpriseFieldCard';
+import { RichTextEditor } from '@/components/builder/RichTextEditor';
+import { PageTabsBar } from '@/components/builder/PageTabsBar';
 import { FormRunner } from '@/components/builder/FormRunner';
 import { FormThemeScope } from '@/components/builder/FormThemeScope';
 import { LogicBuilder } from '@/components/builder/LogicBuilder';
@@ -67,6 +69,7 @@ import { RulesBuilder } from '@/components/builder/RulesBuilder';
 import { FormSettingsPanel } from '@/components/builder/FormSettingsPanel';
 import { fetchApi, unwrap } from '@/lib/api';
 import { toastError } from '@/lib/errors';
+import { selectAllOnFocus } from '@/lib/utils';
 import { useOrgId } from '@/hooks/use-auth';
 import { useFormAutosave } from '@/hooks/use-form-autosave';
 import {
@@ -75,6 +78,7 @@ import {
   useBuilderStore,
   useFormConfigAdapter,
   useFormSnapshot,
+  usePageQuestionIds,
   useQuestionOrder,
 } from '@/store/builder-store';
 import type { FormConfig, FormLayoutMode, QuestionType } from '@/types/form';
@@ -154,6 +158,9 @@ function FormBuilderInner() {
 
   const meta = useBuilderMeta();
   const order = useQuestionOrder();
+  const pages = useBuilderStore((s) => s.pages);
+  const activePage = useBuilderStore((s) => s.activePage);
+  const visibleIds = usePageQuestionIds(activePage);
 
   const load = useBuilderStore((s) => s.load);
   const reset = useBuilderStore((s) => s.reset);
@@ -163,8 +170,31 @@ function FormBuilderInner() {
   const addQuestion = useBuilderStore((s) => s.addQuestion);
   const moveQuestion = useBuilderStore((s) => s.moveQuestion);
   const addPage = useBuilderStore((s) => s.addPage);
+  const updatePage = useBuilderStore((s) => s.updatePage);
+  const setActivePage = useBuilderStore((s) => s.setActivePage);
   const setActiveView = useBuilderStore((s) => s.setActiveView);
   const markPublished = useBuilderStore((s) => s.markPublished);
+
+  /**
+   * Appends after the last question on the active page, rather than after
+   * whatever question was last selected — anywhere in the form. That
+   * `selectedQuestionId` version is why "Add question" used to insert a new
+   * field mid-form instead of at the bottom.
+   */
+  const appendToActivePage = useCallback(
+    (type: QuestionType) => {
+      const state = useBuilderStore.getState();
+      let lastIdOnPage: string | undefined;
+      for (let i = state.order.length - 1; i >= 0; i--) {
+        if (state.byId[state.order[i]]?.pageNumber === state.activePage) {
+          lastIdOnPage = state.order[i];
+          break;
+        }
+      }
+      return addQuestion(type, lastIdOnPage, state.activePage);
+    },
+    [addQuestion],
+  );
 
   const [isPreviewOpen, setIsPreviewOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
@@ -493,10 +523,10 @@ function FormBuilderInner() {
         >
           <LeftTreePanel
             onAddQuestion={(type) => {
-              addQuestion(type);
+              appendToActivePage(type);
               setIsLeftPanelOpen(false);
             }}
-            onAddPage={addPage}
+            onAddPage={() => setActivePage(addPage())}
             onClose={() => setIsLeftPanelOpen(false)}
           />
         </div>
@@ -518,13 +548,40 @@ function FormBuilderInner() {
                 <Input
                   value={meta.title}
                   onChange={(e) => setTitle(e.target.value)}
+                  onFocus={selectAllOnFocus}
                   aria-label="Form title"
                   placeholder="Form title"
                   className="h-auto rounded-none border-0 bg-transparent px-0 text-xl font-semibold shadow-none
                              focus-visible:border-b-2 focus-visible:border-foreground/30 focus-visible:ring-0"
                 />
-                <FormDescriptionInput onChange={setDescription} />
+                <FormDescriptionEditor onChange={setDescription} />
               </Card>
+
+              {/* Only once there is more than one page — a single-page form
+                  looks exactly as it always has. */}
+              {pages.length > 1 && (
+                <div className="space-y-3">
+                  <PageTabsBar />
+                  <Card className="space-y-3 p-5">
+                    <Input
+                      value={pages.find((p) => p.pageNumber === activePage)?.title ?? ''}
+                      onChange={(e) => updatePage(activePage, { title: e.target.value })}
+                      onFocus={selectAllOnFocus}
+                      aria-label="Page title"
+                      placeholder={`Page ${activePage}`}
+                      className="h-auto rounded-none border-0 bg-transparent px-0 text-base font-semibold shadow-none
+                                 focus-visible:border-b-2 focus-visible:border-foreground/30 focus-visible:ring-0"
+                    />
+                    <RichTextEditor
+                      key={activePage}
+                      value={pages.find((p) => p.pageNumber === activePage)?.description ?? ''}
+                      onChange={(html) => updatePage(activePage, { description: html })}
+                      ariaLabel="Page description"
+                      placeholder="Add a page description (optional)"
+                    />
+                  </Card>
+                </div>
+              )}
 
               {order.length === 0 ? (
                 <div className="space-y-4 rounded-xl border border-dashed border-border-strong bg-card p-12 text-center">
@@ -539,9 +596,21 @@ function FormBuilderInner() {
                       to search.
                     </p>
                   </div>
-                  <Button onClick={() => addQuestion('SHORT_TEXT')} className="gap-2">
+                  <Button onClick={() => appendToActivePage('SHORT_TEXT')} className="gap-2">
                     <Plus className="size-4" />
                     Add your first question
+                  </Button>
+                </div>
+              ) : visibleIds.length === 0 ? (
+                <div className="space-y-3 rounded-xl border border-dashed border-border-strong bg-card p-8 text-center">
+                  <p className="text-sm font-semibold">No questions on this page yet</p>
+                  <Button
+                    variant="outline"
+                    onClick={() => appendToActivePage('SHORT_TEXT')}
+                    className="gap-2"
+                  >
+                    <Plus className="size-4" />
+                    Add a question
                   </Button>
                 </div>
               ) : (
@@ -553,10 +622,10 @@ function FormBuilderInner() {
                   onDragEnd={handleDragEnd}
                   onDragCancel={() => setDraggingId(null)}
                 >
-                  <SortableContext items={order} strategy={verticalListSortingStrategy}>
+                  <SortableContext items={visibleIds} strategy={verticalListSortingStrategy}>
                     <div className="space-y-2">
-                      {order.map((id, index) => (
-                        <EnterpriseFieldCard key={id} id={id} index={index} />
+                      {visibleIds.map((id) => (
+                        <EnterpriseFieldCard key={id} id={id} index={order.indexOf(id)} />
                       ))}
                     </div>
                   </SortableContext>
@@ -570,7 +639,7 @@ function FormBuilderInner() {
                 </DndContext>
               )}
 
-              {order.length > 0 && (
+              {visibleIds.length > 0 && (
                 <div className="pt-2 text-center">
                   <Button
                     variant="outline"
@@ -630,10 +699,7 @@ function FormBuilderInner() {
                   key={item.type}
                   value={`${item.label} ${item.keywords}`}
                   onSelect={() => {
-                    const newId = addQuestion(
-                      item.type,
-                      useBuilderStore.getState().selectedQuestionId,
-                    );
+                    const newId = appendToActivePage(item.type);
                     setIsPaletteOpen(false);
                     // Bring the new card into view — adding from the palette
                     // while scrolled up gave no feedback at all.
@@ -712,6 +778,10 @@ function PreviewPanel() {
   // `allowReferences` has to match, or a preview would accept a cross-form
   // reference that publish then rejects.
   const allowReferences = useBuilderStore((s) => s.allowReferences);
+  // Lets a list-backed question fetch its real options here — there is no
+  // published form slug yet, so without this it could only say which list it
+  // was bound to, not show it.
+  const orgId = useOrgId();
 
   return (
     <FormThemeScope
@@ -726,6 +796,7 @@ function PreviewPanel() {
         form={form}
         layoutMode={layoutMode === 'PORTAL' ? 'DOCUMENT' : layoutMode}
         allowReferences={allowReferences}
+        orgId={orgId}
         onSubmitResponse={() => {
           toast.success('Preview submission — no data was stored.');
         }}
@@ -735,28 +806,19 @@ function PreviewPanel() {
 }
 
 /**
- * The description field keeps its value locally and pushes to the store on a
- * debounce. Unlike the title (which the navbar mirrors live) nothing else
- * displays it, so there is no reason for each keystroke to touch global state.
+ * The description field reads its initial value once — the store's own
+ * revision-scoped snapshot is for the panels that render the whole document,
+ * and subscribing this to it would re-mount the editor on every keystroke.
  */
-function FormDescriptionInput({ onChange }: { onChange: (value: string) => void }) {
+function FormDescriptionEditor({ onChange }: { onChange: (value: string) => void }) {
   const initial = useBuilderStore.getState().description;
-  const [value, setValue] = useState(initial);
-
-  useEffect(() => {
-    if (value === useBuilderStore.getState().description) return;
-    const timer = setTimeout(() => onChange(value), 250);
-    return () => clearTimeout(timer);
-  }, [value, onChange]);
 
   return (
-    <Input
-      value={value}
-      onChange={(e) => setValue(e.target.value)}
-      aria-label="Form description"
+    <RichTextEditor
+      value={initial}
+      onChange={onChange}
+      ariaLabel="Form description"
       placeholder="Add a short description (optional)"
-      className="rounded-none border-0 bg-transparent px-0 text-sm text-muted-foreground shadow-none
-                 focus-visible:border-b focus-visible:border-border-strong focus-visible:ring-0"
     />
   );
 }

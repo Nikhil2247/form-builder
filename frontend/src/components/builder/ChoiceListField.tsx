@@ -38,6 +38,12 @@ export interface ChoiceListFieldProps {
   onBlur: () => void;
   /** Public form slug; absent in the builder preview. */
   formSlug?: string;
+  /**
+   * Builder preview fallback. With no `formSlug` yet, this lets the preview
+   * fetch real items from the list directly (authenticated, VIEWER role)
+   * instead of showing a "not published yet" placeholder.
+   */
+  orgId?: string;
   /** The parent question's current answer, when this one cascades. */
   parentValue?: string;
   /** Human label of the parent question, for the waiting message. */
@@ -66,6 +72,7 @@ export function ChoiceListField({
   onChange,
   onBlur,
   formSlug,
+  orgId,
   parentValue,
   parentLabel,
   controlId,
@@ -80,6 +87,7 @@ export function ChoiceListField({
 
   const { items, isLoading, error, awaitingParent } = useChoiceItems({
     formSlug,
+    orgId,
     question,
     parentValue,
     search,
@@ -88,13 +96,14 @@ export function ChoiceListField({
   const searchable = (source?.searchable ?? false) || items.length >= SEARCHABLE_THRESHOLD || !!search;
 
   // ── States that are not "here are your options" ──────────────────────────
-  if (!formSlug) {
-    // The builder preview holds no published slug, so there is nothing to query.
-    // Saying so beats an empty control the author will read as a bug.
+  if (!formSlug && !orgId) {
+    // Neither a published slug nor an authenticated org to fall back on —
+    // there is truly nothing to query. Saying so beats an empty control the
+    // author would read as a bug.
     return (
       <Notice id={describedBy}>
-        Options come from the <strong>{source?.listSlug}</strong> list. They appear on the published
-        form.
+        Options come from the <strong>{source?.listSlug}</strong> list. They&rsquo;ll appear once
+        the form is published.
       </Notice>
     );
   }

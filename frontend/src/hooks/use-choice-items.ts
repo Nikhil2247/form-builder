@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 
 import { API_BASE_URL } from '@/lib/config';
+import { fetchApi, unwrap } from '@/lib/api';
 import type { FormQuestion } from '@/types/form';
 
 /**
@@ -24,6 +25,17 @@ import type { FormQuestion } from '@/types/form';
  * ── Search ─────────────────────────────────────────────────────────────────
  * Debounced, because a school registry is far too large to send whole. Below
  * the page size the whole set arrives in one request and filtering is local.
+ *
+ * ── The builder preview ────────────────────────────────────────────────────
+ * The builder has no published `formSlug` to query the public endpoint with —
+ * that endpoint is deliberately scoped by (form, question), not by list, so it
+ * cannot be reached at all before the form is published. When an `orgId` is
+ * supplied instead, this falls back to the authenticated
+ * `/organizations/:orgId/choice-lists/:slug/items` endpoint (VIEWER role,
+ * already used by the "Choice lists" management screens), reading the list
+ * directly by its slug. That is a real, working preview of the actual items —
+ * not the placeholder text ("options come from the X list") this used to
+ * leave the author looking at.
  */
 
 export interface ChoiceItem {
@@ -47,13 +59,16 @@ const SEARCH_DEBOUNCE_MS = 250;
 
 export function useChoiceItems({
   formSlug,
+  orgId,
   question,
   parentValue,
   search,
   enabled = true,
 }: {
-  /** Public form slug. Absent in the builder preview, where nothing is fetched. */
+  /** Public form slug — the real, respondent-facing path. */
   formSlug?: string;
+  /** Builder preview fallback, used only when `formSlug` is absent. */
+  orgId?: string;
   question: FormQuestion;
   /** The parent question's current answer, when this one cascades. */
   parentValue?: string;
@@ -87,16 +102,32 @@ export function useChoiceItems({
 
   // Every input the request depends on, in one string, so the effect below has
   // a single primitive dependency rather than an object that changes identity
-  // on every render.
+  // on every render. `mode` picks which endpoint answers it — the public one
+  // when this is a real, published form; the authenticated per-list one when
+  // it is the builder preview (no `formSlug` yet, but an `orgId` to fall back
+  // on).
   const requestKey = useMemo(() => {
-    if (!enabled || !formSlug || !source || awaitingParent) return null;
-    return JSON.stringify({
-      formSlug,
-      questionId: question.id,
-      parent: parentValue ?? '',
-      q: debouncedSearch,
-    });
-  }, [enabled, formSlug, source, awaitingParent, question.id, parentValue, debouncedSearch]);
+    if (!enabled || !source || awaitingParent) return null;
+    if (formSlug) {
+      return JSON.stringify({
+        mode: 'public',
+        formSlug,
+        questionId: question.id,
+        parent: parentValue ?? '',
+        q: debouncedSearch,
+      });
+    }
+    if (orgId) {
+      return JSON.stringify({
+        mode: 'preview',
+        orgId,
+        listSlug: source.listSlug,
+        parent: parentValue ?? '',
+        q: debouncedSearch,
+      });
+    }
+    return null;
+  }, [enabled, formSlug, orgId, source, awaitingParent, question.id, parentValue, debouncedSearch]);
 
   // Guards against an out-of-order response overwriting a newer one — a slow
   // request for "Koh" must not land after the one for "Kohima".
@@ -109,22 +140,33 @@ export function useChoiceItems({
     // previous parent's options before it landed.
     if (!requestKey) return;
 
-    const { formSlug: slug, questionId, parent, q } = JSON.parse(requestKey);
+    const parsed = JSON.parse(requestKey);
     latestRequest.current = requestKey;
     const controller = new AbortController();
 
-    const params = new URLSearchParams({ question: questionId, limit: String(PAGE_SIZE) });
-    if (parent) params.set('parent', parent);
-    if (q) params.set('q', q);
+    const params = new URLSearchParams({ limit: String(PAGE_SIZE) });
+    if (parsed.parent) params.set('parent', parsed.parent);
+    if (parsed.q) params.set('q', parsed.q);
 
-    fetch(`${API_BASE_URL}/public-forms/${encodeURIComponent(slug)}/choice-items?${params}`, {
-      signal: controller.signal,
-    })
-      .then(async (res) => {
-        if (!res.ok) throw new Error('Could not load the options for this question.');
-        const body = await res.json();
-        return (body.data ?? body) as { items: ChoiceItem[] };
-      })
+    const request =
+      parsed.mode === 'public'
+        ? (() => {
+            params.set('question', parsed.questionId);
+            return fetch(
+              `${API_BASE_URL}/public-forms/${encodeURIComponent(parsed.formSlug)}/choice-items?${params}`,
+              { signal: controller.signal },
+            ).then(async (res) => {
+              if (!res.ok) throw new Error('Could not load the options for this question.');
+              const body = await res.json();
+              return (body.data ?? body) as { items: ChoiceItem[] };
+            });
+          })()
+        : fetchApi(
+            `/organizations/${parsed.orgId}/choice-lists/${encodeURIComponent(parsed.listSlug)}/items?${params}`,
+            { signal: controller.signal },
+          ).then((body) => unwrap<{ items: ChoiceItem[] }>(body));
+
+    request
       .then((payload) => {
         if (latestRequest.current !== requestKey) return;
         setResult({

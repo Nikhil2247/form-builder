@@ -259,3 +259,55 @@ describe('load', () => {
     expect(useBuilderStore.getState().byId['a'].label).toBe('A');
   });
 });
+
+describe('pages', () => {
+  beforeEach(() => useBuilderStore.getState().reset());
+
+  it('addQuestion resolves the page from the explicit arg, then from afterId, then defaults to 1', () => {
+    useBuilderStore.getState().load(sample(1)); // q0 on page 1
+    useBuilderStore.getState().addPage(); // page 2
+
+    const explicit = useBuilderStore.getState().addQuestion('SHORT_TEXT', undefined, 2);
+    expect(useBuilderStore.getState().byId[explicit].pageNumber).toBe(2);
+
+    const inherited = useBuilderStore.getState().addQuestion('SHORT_TEXT', explicit);
+    expect(useBuilderStore.getState().byId[inherited].pageNumber).toBe(2);
+
+    const defaulted = useBuilderStore.getState().addQuestion('SHORT_TEXT');
+    expect(useBuilderStore.getState().byId[defaulted].pageNumber).toBe(1);
+  });
+
+  it('addQuestion and selectQuestion sync activePage to the question they touch', () => {
+    useBuilderStore.getState().load(sample(1));
+    useBuilderStore.getState().addPage();
+
+    const onPageTwo = useBuilderStore.getState().addQuestion('SHORT_TEXT', undefined, 2);
+    expect(useBuilderStore.getState().activePage).toBe(2);
+
+    useBuilderStore.getState().selectQuestion('q0'); // page 1
+    expect(useBuilderStore.getState().activePage).toBe(1);
+
+    useBuilderStore.getState().selectQuestion(onPageTwo);
+    expect(useBuilderStore.getState().activePage).toBe(2);
+  });
+
+  it('addPage returns the new page number so a caller can switch to it', () => {
+    useBuilderStore.getState().load(sample(1));
+    const second = useBuilderStore.getState().addPage();
+    const third = useBuilderStore.getState().addPage();
+
+    expect(second).toBe(2);
+    expect(third).toBe(3);
+    expect(useBuilderStore.getState().pages.map((p) => p.pageNumber)).toEqual([1, 2, 3]);
+  });
+
+  it('load always resets activePage to 1', () => {
+    useBuilderStore.getState().load(sample(1));
+    useBuilderStore.getState().addPage();
+    useBuilderStore.getState().setActivePage(2);
+    expect(useBuilderStore.getState().activePage).toBe(2);
+
+    useBuilderStore.getState().load(sample(1));
+    expect(useBuilderStore.getState().activePage).toBe(1);
+  });
+});

@@ -80,6 +80,16 @@ export interface BuilderState {
 
   // ── Editor session ────────────────────────────────────────────────────────
   selectedQuestionId: string | null;
+  /**
+   * Which page the canvas currently shows and where new fields land.
+   *
+   * Synced automatically whenever a question is selected, created or
+   * duplicated (see `selectQuestion`/`addQuestion`/`duplicateQuestion`), so
+   * switching to a question on another page — from the outline, the palette,
+   * or "Add field below" — always brings its page into view instead of
+   * leaving the card filtered out of the active tab.
+   */
+  activePage: number;
   activeView: 'BUILDER' | 'LOGIC';
   status: 'DRAFT' | 'PUBLISHED' | 'CLOSED' | 'ARCHIVED';
   isDirty: boolean;
@@ -129,7 +139,12 @@ export interface BuilderState {
   patchSettings: (patch: Partial<FormSettings>) => void;
   setPendingPassword: (password: string | null) => void;
 
-  addQuestion: (type: QuestionType, afterId?: string | null) => string;
+  /**
+   * `pageNumber`, when given, wins outright. Otherwise the new question
+   * inherits `afterId`'s page, and falls back to page 1 only when neither is
+   * available (a brand-new question with no anchor at all).
+   */
+  addQuestion: (type: QuestionType, afterId?: string | null, pageNumber?: number) => string;
   /** Partial update — merges into the existing question. */
   patchQuestion: (id: string, patch: Partial<FormQuestion>) => void;
   replaceQuestion: (question: FormQuestion) => void;
@@ -137,7 +152,8 @@ export interface BuilderState {
   deleteQuestion: (id: string) => void;
   moveQuestion: (activeId: string, overId: string) => void;
 
-  addPage: () => void;
+  /** Returns the new page's number, so a caller can switch to it immediately. */
+  addPage: () => number;
   updatePage: (pageNumber: number, patch: Partial<FormPage>) => void;
   deletePage: (pageNumber: number) => void;
 
@@ -150,6 +166,7 @@ export interface BuilderState {
   deleteLogicRule: (id: string) => void;
 
   selectQuestion: (id: string | null) => void;
+  setActivePage: (pageNumber: number) => void;
   setActiveView: (view: 'BUILDER' | 'LOGIC') => void;
   /**
    * Record a successful save.
@@ -224,7 +241,7 @@ function newId(prefix: string) {
   return `${prefix}_${random}${idCounter.toString(36)}`;
 }
 
-function createQuestion(type: QuestionType): FormQuestion {
+function createQuestion(type: QuestionType, pageNumber = 1): FormQuestion {
   return {
     id: newId('q'),
     type,
@@ -238,7 +255,7 @@ function createQuestion(type: QuestionType): FormQuestion {
     // column and looked identical to DOCUMENT. AUTO lets `gridSpanOf` pair
     // narrow fields up and give wide ones the whole row.
     width: 'AUTO',
-    pageNumber: 1,
+    pageNumber,
     options: CHOICE_TYPES.includes(type)
       ? [
           { id: newId('opt'), label: 'Option 1', value: 'option_1' },
@@ -268,6 +285,7 @@ function emptyState() {
     settings: { ...DEFAULT_SETTINGS },
     pendingPassword: null,
     selectedQuestionId: null,
+    activePage: 1,
     activeView: 'BUILDER' as const,
     status: 'DRAFT' as const,
     isDirty: false,
@@ -338,6 +356,7 @@ export const useBuilderStore = create<BuilderState>()((set, get) => ({
       settings: { ...DEFAULT_SETTINGS, slug: form.slug ?? '', ...(meta?.settings ?? {}) },
       pendingPassword: null,
       selectedQuestionId: order[0] ?? null,
+      activePage: 1,
       status: meta?.status ?? (form.status as BuilderState['status']) ?? 'DRAFT',
       hasUnpublishedChanges: meta?.hasUnpublishedChanges ?? false,
       isDirty: false,
@@ -377,8 +396,9 @@ export const useBuilderStore = create<BuilderState>()((set, get) => ({
   setPendingPassword: (pendingPassword) =>
     set((s) => ({ pendingPassword, isDirty: true, revision: s.revision + 1 })),
 
-  addQuestion: (type, afterId) => {
-    const question = createQuestion(type);
+  addQuestion: (type, afterId, pageNumber) => {
+    const resolvedPage = pageNumber ?? (afterId ? get().byId[afterId]?.pageNumber : undefined) ?? 1;
+    const question = createQuestion(type, resolvedPage);
     set((s) => {
       const order = [...s.order];
       const at = afterId ? order.indexOf(afterId) : -1;
@@ -389,6 +409,7 @@ export const useBuilderStore = create<BuilderState>()((set, get) => ({
         order,
         byId: { ...s.byId, [question.id]: question },
         selectedQuestionId: question.id,
+        activePage: resolvedPage,
         isDirty: true,
         revision: s.revision + 1,
       };
@@ -440,6 +461,7 @@ export const useBuilderStore = create<BuilderState>()((set, get) => ({
         order,
         byId: { ...s.byId, [copy.id]: copy },
         selectedQuestionId: copy.id,
+        activePage: copy.pageNumber ?? s.activePage,
         isDirty: true,
         revision: s.revision + 1,
       };
@@ -478,15 +500,15 @@ export const useBuilderStore = create<BuilderState>()((set, get) => ({
       return { order, isDirty: true, revision: s.revision + 1 };
     }),
 
-  addPage: () =>
-    set((s) => {
-      const pageNumber = Math.max(0, ...s.pages.map((p) => p.pageNumber)) + 1;
-      return {
-        pages: [...s.pages, { pageNumber, title: `Page ${pageNumber}`, description: '' }],
-        isDirty: true,
-        revision: s.revision + 1,
-      };
-    }),
+  addPage: () => {
+    const pageNumber = Math.max(0, ...get().pages.map((p) => p.pageNumber)) + 1;
+    set((s) => ({
+      pages: [...s.pages, { pageNumber, title: `Page ${pageNumber}`, description: '' }],
+      isDirty: true,
+      revision: s.revision + 1,
+    }));
+    return pageNumber;
+  },
 
   updatePage: (pageNumber, patch) =>
     set((s) => ({
@@ -529,7 +551,17 @@ export const useBuilderStore = create<BuilderState>()((set, get) => ({
       revision: s.revision + 1,
     })),
 
-  selectQuestion: (selectedQuestionId) => set({ selectedQuestionId }),
+  selectQuestion: (selectedQuestionId) =>
+    set((s) => ({
+      selectedQuestionId,
+      // Selecting a question on another page must bring that page into view —
+      // otherwise the outline, the palette's scroll-into-view, and "Add field
+      // below" all point at a card the active tab has filtered out.
+      activePage: selectedQuestionId
+        ? (s.byId[selectedQuestionId]?.pageNumber ?? s.activePage)
+        : s.activePage,
+    })),
+  setActivePage: (activePage) => set({ activePage }),
   setActiveView: (activeView) => set({ activeView }),
 
   markSaved: (savedRevision, meta) =>
@@ -584,6 +616,17 @@ export function useQuestionOrder(): string[] {
 
 export function useQuestionCount(): number {
   return useBuilderStore((s) => s.order.length);
+}
+
+/**
+ * Ids belonging to one page, in form order. Shallow-compared like
+ * `useQuestionOrder`, so the canvas re-renders only when the set of ids on
+ * this page actually changes — not on every keystroke elsewhere in the form.
+ */
+export function usePageQuestionIds(pageNumber: number): string[] {
+  return useBuilderStore(
+    useShallow((s) => s.order.filter((id) => (s.byId[id]?.pageNumber ?? 1) === pageNumber)),
+  );
 }
 
 export interface QuestionOutlineRow {

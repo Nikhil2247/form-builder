@@ -84,13 +84,13 @@ export function OptionsSourcePicker({ question, questions, onChange }: OptionsSo
         <ModeButton
           active={!source}
           icon={PencilLine}
-          label="Type them in"
+          label="Type your own options"
           onClick={() => onChange(undefined)}
         />
         <ModeButton
           active={!!source}
           icon={Database}
-          label="From a list"
+          label="Choose from a list"
           onClick={() => {
             if (source) return;
             const first = lists[0];
@@ -117,7 +117,7 @@ export function OptionsSourcePicker({ question, questions, onChange }: OptionsSo
         <div className="space-y-3">
           <label className="block space-y-1">
             <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-              List
+              Which list
             </span>
             <NativeSelect
               size="sm"
@@ -149,12 +149,13 @@ export function OptionsSourcePicker({ question, questions, onChange }: OptionsSo
           {selectedList?.parentList && (
             <label className="block space-y-1">
               <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                Filtered by
+                Narrow down by an earlier answer
               </span>
               {parentCandidates.length === 0 ? (
                 <p className="text-xs text-muted-foreground">
-                  This list cascades from <strong>{selectedList.parentList.name}</strong>. Add a
-                  question bound to that list <em>above</em> this one to filter it.
+                  This list narrows down based on <strong>{selectedList.parentList.name}</strong>.
+                  Add a question using that list <em>earlier</em> in the form so respondents can
+                  pick it first.
                 </p>
               ) : (
                 <NativeSelect
@@ -166,7 +167,7 @@ export function OptionsSourcePicker({ question, questions, onChange }: OptionsSo
                   }
                 >
                   <NativeSelectOption value="">
-                    Show everything (no filter)
+                    Show everything (don&rsquo;t narrow down)
                   </NativeSelectOption>
                   {parentCandidates.map((candidate) => (
                     <NativeSelectOption key={candidate.key} value={candidate.key}>
@@ -181,7 +182,7 @@ export function OptionsSourcePicker({ question, questions, onChange }: OptionsSo
           {(selectedList?.metadataSchema?.length ?? 0) > 0 && (
             <label className="block space-y-1">
               <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                Show instead of the name
+                What respondents see for each option
               </span>
               <NativeSelect
                 size="sm"
@@ -189,7 +190,7 @@ export function OptionsSourcePicker({ question, questions, onChange }: OptionsSo
                 value={source.displayField ?? ''}
                 onChange={(e) => setSource({ displayField: e.target.value || undefined })}
               >
-                <NativeSelectOption value="">Name</NativeSelectOption>
+                <NativeSelectOption value="">Item name (default)</NativeSelectOption>
                 {selectedList?.metadataSchema?.map((column) => (
                   <NativeSelectOption key={column.key} value={column.key}>
                     {column.label}
@@ -200,8 +201,9 @@ export function OptionsSourcePicker({ question, questions, onChange }: OptionsSo
           )}
 
           <p className="text-xs leading-relaxed text-muted-foreground">
-            Options come from this list when the form is published. A rule can also read the
-            list&rsquo;s other columns — that is how a code fills itself in from the name.
+            Respondents choose from this list once the form is published. You can also set up a
+            rule to fill in another field automatically from their pick — for example, showing a
+            code as soon as they choose a name.
           </p>
         </div>
       )}
