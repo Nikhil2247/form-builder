@@ -3,6 +3,7 @@
 import React, { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { FormRunner, type RunnerLayoutMode } from '@/components/builder/FormRunner';
+import { RichText } from '@/components/builder/RichText';
 import { FormThemeScope, cardVariantClass } from '@/components/builder/FormThemeScope';
 import { FormConfig, FormTheme } from '@/types/form';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -346,13 +347,13 @@ function FormHeader({
         <h1 className="text-2xl font-bold leading-tight tracking-tight text-foreground sm:text-[1.75rem]">
           {title}
         </h1>
-        {description && (
-          // `whitespace-pre-line` so an author's paragraph breaks survive. They
-          // type them into a textarea and they were being collapsed to one run.
-          <p className="whitespace-pre-line text-sm leading-relaxed text-muted-foreground">
-            {description}
-          </p>
-        )}
+        {/* `whitespace-pre-line` still matters for a description saved before
+            rich-text formatting existed — a bare string with literal newlines
+            and no HTML at all — so those paragraph breaks keep surviving too. */}
+        <RichText
+          html={description}
+          className="whitespace-pre-line text-sm text-muted-foreground"
+        />
       </div>
     </div>
   );
