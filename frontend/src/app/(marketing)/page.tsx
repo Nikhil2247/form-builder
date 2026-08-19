@@ -29,7 +29,7 @@ import {
 } from '@/components/marketing/primitives';
 
 export const metadata: Metadata = {
-  title: 'Formora — forms, rules and records for teams that collect real data',
+  title: 'ImpactLens — forms, rules and records for teams that collect real data',
   description:
     'Build forms with a real rules engine, managed option lists and versioned publishing. Follow the same subject across many forms over time with data apps.',
 };
@@ -78,7 +78,7 @@ export default function LandingPage() {
             Collect data that <Marked>holds up</Marked> afterwards
           </>
         }
-        lead="Formora is a form builder for work where the answers matter — monitoring visits, intake, assessments, field surveys. Questions can calculate and validate each other, dropdowns draw on reference data you manage in one place, and every response stays readable against the exact version of the form it was filled on."
+        lead="ImpactLens is a form builder for work where the answers matter — monitoring visits, intake, assessments, field surveys. Questions can calculate and validate each other, dropdowns draw on reference data you manage in one place, and every response stays readable against the exact version of the form it was filled on."
         actions={
           <>
             <ArrowButton href="/signup">Start building</ArrowButton>

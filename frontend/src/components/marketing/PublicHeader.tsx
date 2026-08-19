@@ -3,7 +3,7 @@
 import React from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { Layers, LayoutDashboard, LogOut, Menu, User } from 'lucide-react';
+import { LayoutDashboard, LogOut, Menu, User } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
 import { buttonVariants } from '@/components/ui/button';
@@ -31,7 +31,7 @@ const NAV_LINKS = [
  * The marketing site's header.
  *
  * Signed-out visitors see Log in / Get Started. A signed-in visitor browsing
- * the marketing site — someone who followed a link back to formora.com, or
+ * the marketing site — someone who followed a link back to impactlens.app, or
  * just has two tabs open — sees the same identity the dashboard shows them
  * (Header.tsx) plus a direct way back in, rather than being offered a second
  * account creation flow for the account they are already signed into.
@@ -67,11 +67,19 @@ export function PublicHeader() {
   return (
     <header className="sticky top-0 z-50 w-full border-b border-border/60 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80">
       <div className="container mx-auto flex h-16 items-center justify-between gap-4 px-4 sm:px-6 lg:px-8">
-        <Link href="/" className="flex shrink-0 items-center gap-2.5 transition-opacity hover:opacity-80">
-          <div className="flex size-8 items-center justify-center rounded-xl bg-primary text-primary-foreground shadow-sm">
-            <Layers size={18} strokeWidth={2.5} />
-          </div>
-          <span className="font-display text-lg font-bold tracking-tight">Formora</span>
+        <Link href="/" className="flex shrink-0 items-center transition-opacity hover:opacity-80">
+          {/* The large lockup carries the wordmark and tagline itself, so
+              there's no separate text span to keep in sync with it. */}
+          {/* eslint-disable-next-line @next/next/no-img-element -- next/image's
+              optimizer 400s on local SVGs unless `dangerouslyAllowSVG` is set;
+              not worth loosening for a static decorative logotype. */}
+          <img
+            src="/logos/impactlens-logo-large.svg"
+            alt="ImpactLens"
+            width={180}
+            height={58}
+            className="h-18 w-auto"
+          />
         </Link>
 
         <nav aria-label="Main" className="hidden md:flex md:items-center md:gap-1">

@@ -6,7 +6,7 @@ export default function TermsPage() {
     <LegalLayout title="Terms and Conditions" lastUpdated="July 30, 2026">
       <h2>1. Introduction</h2>
       <p>
-        Welcome to Formora. These Terms and Conditions govern your use of our platform and services. By accessing or using our services, you agree to be bound by these terms. If you disagree with any part of the terms, you may not access the service.
+        Welcome to ImpactLens. These Terms and Conditions govern your use of our platform and services. By accessing or using our services, you agree to be bound by these terms. If you disagree with any part of the terms, you may not access the service.
       </p>
 
       <h2>2. Use of Service</h2>
@@ -20,10 +20,10 @@ export default function TermsPage() {
         respondents: what you ask for, the basis on which you ask for it, and what you tell
         respondents about it. You must ensure your data collection practices comply with all
         applicable local, state, national and international laws, including GDPR and CCPA where
-        they apply to you. Formora acts as a data processor on behalf of form creators.
+        they apply to you. ImpactLens acts as a data processor on behalf of form creators.
       </p>
       <p>
-        <strong>Data you must not collect through Formora.</strong> The platform is not built or
+        <strong>Data you must not collect through ImpactLens.</strong> The platform is not built or
         certified for protected health information under HIPAA, and we do not sign Business
         Associate Agreements. Nor is it built to receive cardholder data — do not create forms that
         collect full payment card numbers. See our <a href="/compliance">security page</a> for the
@@ -32,7 +32,7 @@ export default function TermsPage() {
 
       <h2>4. Acceptable Use</h2>
       <p>
-        You may not use Formora to collect data unlawfully, to impersonate another organization, to
+        You may not use ImpactLens to collect data unlawfully, to impersonate another organization, to
         run phishing or credential-harvesting forms, to distribute malware through file uploads, or
         to send unsolicited bulk messages. You may not attempt to access data belonging to another
         organization, probe or load-test the service without our written agreement, or use it in a
@@ -49,12 +49,12 @@ export default function TermsPage() {
 
       <h2>6. Intellectual Property</h2>
       <p>
-        The service and its original content (excluding content provided by users), features, and functionality are and will remain the exclusive property of Formora Inc and its licensors. Our trademarks and trade dress may not be used in connection with any product or service without the prior written consent of Formora Inc.
+        The service and its original content (excluding content provided by users), features, and functionality are and will remain the exclusive property of ImpactLens Inc and its licensors. Our trademarks and trade dress may not be used in connection with any product or service without the prior written consent of ImpactLens Inc.
       </p>
 
       <h2>7. Subscriptions and Billing</h2>
       <p>
-        Some parts of the Service are billed on a subscription basis. You will be billed in advance on a recurring and periodic basis (monthly or annually). Billing cycles are set on a regular basis. At the end of each billing cycle, your subscription will automatically renew unless you cancel it or Formora cancels it.
+        Some parts of the Service are billed on a subscription basis. You will be billed in advance on a recurring and periodic basis (monthly or annually). Billing cycles are set on a regular basis. At the end of each billing cycle, your subscription will automatically renew unless you cancel it or ImpactLens cancels it.
       </p>
 
       <h2>8. Termination</h2>
@@ -64,12 +64,12 @@ export default function TermsPage() {
 
       <h2>9. Limitation of Liability</h2>
       <p>
-        In no event shall Formora Inc, nor its directors, employees, partners, agents, suppliers, or affiliates, be liable for any indirect, incidental, special, consequential or punitive damages, including without limitation, loss of profits, data, use, goodwill, or other intangible losses, resulting from your access to or use of or inability to access or use the Service.
+        In no event shall ImpactLens Inc, nor its directors, employees, partners, agents, suppliers, or affiliates, be liable for any indirect, incidental, special, consequential or punitive damages, including without limitation, loss of profits, data, use, goodwill, or other intangible losses, resulting from your access to or use of or inability to access or use the Service.
       </p>
 
       <h2>10. Contact Us</h2>
       <p>
-        If you have any questions about these Terms, please contact us at legal@formora.app, or
+        If you have any questions about these Terms, please contact us at legal@impactlens.app, or
         through our <a href="/contact">contact page</a>.
       </p>
     </LegalLayout>

@@ -1,7 +1,8 @@
 'use client';
 
-import React from 'react';
+import React, { useMemo, useState } from 'react';
 import Link from 'next/link';
+import dynamic from 'next/dynamic';
 import {
   ArrowRight,
   BarChart2,
@@ -14,7 +15,6 @@ import {
   Radio,
 } from 'lucide-react';
 
-import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import {
@@ -27,20 +27,40 @@ import {
   ErrorState,
   RelativeTime,
   DataTable,
+  FilterSelect,
   type DataTableColumn,
   ButtonLink,
 } from '@/components/shared';
 import { formatCompact, formatDuration } from '@/components/shared/formatters';
 import { Can } from '@/components/auth/RoleGuard';
 import { useUser, usePermissions } from '@/hooks/use-auth';
-import { useOrgSummary, useTopForms, type TopForm } from '@/hooks/use-analytics';
+import { useOrgSummary, useOrgTimeseries, useTopForms, type TopForm } from '@/hooks/use-analytics';
 import { useForms, type Form } from '@/hooks/use-forms';
+
+/**
+ * `recharts` is the heaviest thing on this route and nothing above the chart
+ * needs it, so the summary tiles paint without waiting on it. Rendered only
+ * once there is activity to plot, which also means an empty organization never
+ * downloads a charting library at all.
+ */
+const ActivityChart = dynamic(() => import('@/components/analytics/ActivityChart'), {
+  loading: () => <Skeleton className="h-64 w-full" />,
+});
+
+const RANGE_OPTIONS = [
+  { value: '7', label: 'Last 7 days' },
+  { value: '30', label: 'Last 30 days' },
+  { value: '90', label: 'Last 90 days' },
+];
 
 export default function DashboardPage() {
   const { data: session } = useUser();
   const { can } = usePermissions();
+  const [range, setRange] = useState('30');
+  const days = Number(range);
 
   const summary = useOrgSummary(30);
+  const series = useOrgTimeseries(days);
   const topForms = useTopForms(5);
   // Five most recently edited forms. Sorting is done server-side; the previous
   // version fetched page 1 unsorted and called it "Recent".
@@ -50,6 +70,41 @@ export default function DashboardPage() {
   const orgName = session?.activeOrganization?.name;
 
   const s = summary.data;
+
+  /**
+   * The API returns rows only for days that saw activity. Charting those
+   * directly compressed a month of data into three bars and drew a straight
+   * line between them, implying activity that did not happen. Fill the gaps
+   * with explicit zeroes.
+   */
+  const chartData = useMemo(() => {
+    const byDate = new Map<string, { submissions: number; views: number }>();
+    for (const row of series.data ?? []) {
+      const key = new Date(row.date).toISOString().slice(0, 10);
+      byDate.set(key, { submissions: row.submissions ?? 0, views: row.views ?? 0 });
+    }
+
+    const points: Array<{ date: string; label: string; submissions: number; views: number }> = [];
+    const cursor = new Date();
+    cursor.setUTCHours(0, 0, 0, 0);
+    cursor.setUTCDate(cursor.getUTCDate() - (days - 1));
+
+    for (let i = 0; i < days; i += 1) {
+      const key = cursor.toISOString().slice(0, 10);
+      const entry = byDate.get(key);
+      points.push({
+        date: key,
+        label: cursor.toLocaleDateString(undefined, { day: 'numeric', month: 'short' }),
+        submissions: entry?.submissions ?? 0,
+        views: entry?.views ?? 0,
+      });
+      cursor.setUTCDate(cursor.getUTCDate() + 1);
+    }
+
+    return points;
+  }, [series.data, days]);
+
+  const hasActivity = chartData.some((point) => point.submissions > 0 || point.views > 0);
 
   return (
     <PageShell>
@@ -127,6 +182,38 @@ export default function DashboardPage() {
         </StatGrid>
       )}
 
+      <Card className="space-y-4 p-5">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h2 className="text-sm font-semibold">Activity</h2>
+            <p className="text-xs text-muted-foreground">
+              Daily views and responses across your organization&apos;s forms.
+            </p>
+          </div>
+          <FilterSelect
+            label="Date range"
+            value={range}
+            onChange={(value) => value && setRange(value)}
+            options={RANGE_OPTIONS}
+          />
+        </div>
+
+        {series.isLoading ? (
+          <Skeleton className="h-64 w-full" />
+        ) : series.error ? (
+          <ErrorState error={series.error} onRetry={() => series.refetch()} variant="inline" />
+        ) : !hasActivity ? (
+          <EmptyState
+            variant="inline"
+            icon={BarChart2}
+            title="No activity in this period"
+            description="Publish a form and share its link — views and responses will appear here."
+          />
+        ) : (
+          <ActivityChart data={chartData} />
+        )}
+      </Card>
+
       <div className="grid gap-5 lg:grid-cols-5">
         <section className="space-y-3 lg:col-span-3">
           <div className="flex items-center justify-between">
@@ -167,8 +254,8 @@ export default function DashboardPage() {
         <section className="space-y-3 lg:col-span-2">
           <div className="flex items-center justify-between">
             <h2 className="text-sm font-semibold">Most responses</h2>
-            <ButtonLink variant="link" size="sm" className="gap-1" href="/analytics">
-              Analytics <ArrowRight className="size-3" />
+            <ButtonLink variant="link" size="sm" className="gap-1" href="/submissions">
+              Responses <ArrowRight className="size-3" />
             </ButtonLink>
           </div>
 

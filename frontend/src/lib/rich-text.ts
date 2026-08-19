@@ -99,3 +99,23 @@ export function isRichTextEmpty(html: string | undefined | null): boolean {
   const text = html.replace(/<[^>]*>/g, '').replace(/&nbsp;/g, ' ').trim();
   return text.length === 0;
 }
+
+/**
+ * One-line plain-text preview of rich text, for table cells and cards where
+ * rendering actual bullets/bold would break the layout. Regex-based rather
+ * than `DOMParser` so it also works during server rendering.
+ */
+export function richTextToPlainText(html: string | undefined | null): string {
+  if (!html) return '';
+  return html
+    .replace(/<(br|\/p|\/div|\/li)\s*\/?>/gi, ' ')
+    .replace(/<[^>]*>/g, '')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#0?39;/g, "'")
+    .replace(/\s+/g, ' ')
+    .trim();
+}

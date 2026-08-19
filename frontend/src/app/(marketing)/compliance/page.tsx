@@ -27,7 +27,7 @@ import {
 export const metadata: Metadata = {
   title: 'Security',
   description:
-    'The security measures Formora implements, stated plainly — and an explicit list of the certifications we do not hold.',
+    'The security measures ImpactLens implements, stated plainly — and an explicit list of the certifications we do not hold.',
 };
 
 /**
@@ -35,7 +35,7 @@ export const metadata: Metadata = {
  * ═══════════════════════════════════════════════════════════════════════════
  *
  * ── Why this page was rewritten, and why it matters more than the others ──
- * The previous version of this page asserted, in headings, that Formora is
+ * The previous version of this page asserted, in headings, that ImpactLens is
  * "HIPAA Compliant" with Business Associate Agreements available, holds a
  * "SOC 2 Type II" certification renewed by annual third-party audit, meets
  * "WCAG 2.1 AA" out of the box, and offers "EU data residency options" and
@@ -65,7 +65,7 @@ const NOT_HELD = [
   {
     term: 'HIPAA / BAA',
     detail:
-      'We do not sign Business Associate Agreements and are not a HIPAA-compliant processor. Do not put protected health information into Formora.',
+      'We do not sign Business Associate Agreements and are not a HIPAA-compliant processor. Do not put protected health information into ImpactLens.',
   },
   {
     term: 'ISO 27001',
@@ -222,10 +222,10 @@ export default function CompliancePage() {
             <p className="text-sm leading-relaxed text-muted-foreground">
               Write to{' '}
               <a
-                href="mailto:security@formora.app"
+                href="mailto:security@impactlens.app"
                 className="font-medium text-primary hover:underline"
               >
-                security@formora.app
+                security@impactlens.app
               </a>{' '}
               with the steps to reproduce, what you were able to access, and how you found it. We
               will acknowledge within two working days and keep you updated until it is closed.

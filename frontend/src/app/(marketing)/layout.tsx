@@ -1,6 +1,5 @@
 import React from 'react';
 import Link from 'next/link';
-import { Layers } from 'lucide-react';
 
 import { PublicHeader } from '@/components/marketing/PublicHeader';
 
@@ -25,10 +24,17 @@ export default function MarketingLayout({
         <div className="container mx-auto flex flex-col justify-between gap-10 px-4 sm:px-6 md:flex-row lg:px-8">
           <div className="flex max-w-xs flex-col gap-4">
             <div className="flex items-center gap-2.5">
-              <div className="flex size-8 items-center justify-center rounded-xl bg-primary text-primary-foreground">
-                <Layers size={18} strokeWidth={2.5} />
-              </div>
-              <span className="font-display font-bold tracking-tight">Formora</span>
+              {/* eslint-disable-next-line @next/next/no-img-element -- next/image's
+                  optimizer 400s on local SVGs unless `dangerouslyAllowSVG` is set;
+                  not worth loosening for a static decorative logotype. */}
+              <img
+                src="/logos/impactlens-icon-small.svg"
+                alt=""
+                width={32}
+                height={32}
+                className="size-8 rounded-xl"
+              />
+              <span className="font-display font-bold tracking-tight">ImpactLens</span>
             </div>
             <p className="text-sm leading-relaxed text-muted-foreground">
               Forms with a rules engine, managed reference data and versioned publishing — for
@@ -62,7 +68,7 @@ export default function MarketingLayout({
         </div>
 
         <div className="container mx-auto mt-16 flex flex-col items-center justify-between gap-4 border-t border-border/50 px-4 pt-8 text-sm text-muted-foreground sm:px-6 md:flex-row lg:px-8">
-          <span>© {new Date().getFullYear()} Formora. All rights reserved.</span>
+          <span>© {new Date().getFullYear()} ImpactLens. All rights reserved.</span>
           <div className="flex gap-6">
             <Link href="/login" className="hover:text-foreground">Sign in</Link>
             <Link href="/signup" className="hover:text-foreground">Create a workspace</Link>

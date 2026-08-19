@@ -7,10 +7,10 @@ import { DocsToc } from '@/components/docs/DocsToc';
 export const metadata: Metadata = {
   title: {
     default: 'Documentation',
-    template: '%s · Formora docs',
+    template: '%s · ImpactLens docs',
   },
   description:
-    'How to use Formora: building forms, conditional logic and rules, option lists, data apps, responses, and administration.',
+    'How to use ImpactLens: building forms, conditional logic and rules, option lists, data apps, responses, and administration.',
 };
 
 /**

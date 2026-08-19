@@ -92,7 +92,7 @@ export default function FeaturesPage() {
             A form builder that can hold a <Marked>real process</Marked>
           </>
         }
-        lead="Most form tools stop at fields and a submit button. Formora adds the parts a working data-collection process actually needs: rules that compute and validate across questions, reference data managed in one place, versioned publishing, and a way to follow the same subject across many forms over time."
+        lead="Most form tools stop at fields and a submit button. ImpactLens adds the parts a working data-collection process actually needs: rules that compute and validate across questions, reference data managed in one place, versioned publishing, and a way to follow the same subject across many forms over time."
         actions={
           <>
             <ArrowButton href="/signup">Get started</ArrowButton>

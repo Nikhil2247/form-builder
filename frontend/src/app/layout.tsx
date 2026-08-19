@@ -36,8 +36,8 @@ const merienda = Merienda({
 
 export const metadata: Metadata = {
   title: {
-    default: 'FormBuilder — Enterprise Form Suite',
-    template: '%s · FormBuilder',
+    default: 'ImpactLens — Enterprise Form Suite',
+    template: '%s · ImpactLens',
   },
   description:
     'Build, publish, and analyse forms with conditional logic, versioning, and team collaboration.',

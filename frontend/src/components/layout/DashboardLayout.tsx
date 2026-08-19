@@ -24,6 +24,25 @@ export function DashboardLayout({ children }: { children: React.ReactNode }) {
   const isBuilderPage = pathname === '/forms/builder' || pathname.startsWith('/forms/builder?');
   const isInvitePage = pathname.startsWith('/invite');
 
+  // The shell below is a fixed `h-screen` box with its own scroll region (the
+  // `overflow-y-auto` div a few lines down) — that's meant to be the only
+  // thing that scrolls. But `<body>` has no height ceiling of its own, so if
+  // its rendered content ends up even a pixel taller than the viewport (an
+  // unstyled portal, a browser rounding a fractional `100vh`, a scrollbar
+  // temporarily changing the available width), the document scrolls too and
+  // you get two scrollbars fighting each other. Locking the document's own
+  // overflow while this shell is mounted makes that structurally impossible
+  // rather than chasing whatever the pixel happened to come from.
+  React.useEffect(() => {
+    if (isInvitePage) return;
+    const { style } = document.documentElement;
+    const previousOverflow = style.overflow;
+    style.overflow = 'hidden';
+    return () => {
+      style.overflow = previousOverflow;
+    };
+  }, [isInvitePage]);
+
   if (isInvitePage) {
     return (
       <div className="min-h-screen bg-background text-foreground">

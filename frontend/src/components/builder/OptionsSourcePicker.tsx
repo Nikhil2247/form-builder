@@ -199,12 +199,6 @@ export function OptionsSourcePicker({ question, questions, onChange }: OptionsSo
               </NativeSelect>
             </label>
           )}
-
-          <p className="text-xs leading-relaxed text-muted-foreground">
-            Respondents choose from this list once the form is published. You can also set up a
-            rule to fill in another field automatically from their pick — for example, showing a
-            code as soon as they choose a name.
-          </p>
         </div>
       )}
     </div>

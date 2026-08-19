@@ -48,7 +48,7 @@ function Shell({ children }: { children: React.ReactNode }) {
         {children}
       </div>
       <p className="mt-8 flex items-center gap-2 text-sm text-muted-foreground">
-        Powered by <span className="font-bold text-foreground">FormBuilder</span>
+        Powered by <span className="font-bold text-foreground">ImpactLens</span>
       </p>
     </div>
   );
@@ -202,7 +202,7 @@ function AcceptInviteContent() {
             <>You&rsquo;ve been invited to join </>
           )}
           <strong className="text-foreground">{invitation.organizationName}</strong> on
-          FormBuilder.
+          ImpactLens.
         </p>
 
         <div className="mb-6 flex items-center justify-between gap-4 rounded-xl border border-border bg-muted p-4 text-left">

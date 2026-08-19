@@ -8,7 +8,6 @@
 
 import {
   Activity,
-  BarChart2,
   Bell,
   BookMarked,
   BookTemplate,
@@ -82,7 +81,6 @@ export const workspaceNav: NavGroup = {
     },
     { title: 'Forms', href: '/forms', icon: FileBox, permissions: ['form:view'] },
     { title: 'Responses', href: '/submissions', icon: Inbox, permissions: ['submission:view'] },
-    { title: 'Analytics', href: '/analytics', icon: BarChart2, permissions: ['analytics:view'] },
     { title: 'Templates', href: '/templates', icon: BookTemplate, permissions: ['template:view'] },
   ],
 };

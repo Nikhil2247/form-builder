@@ -46,25 +46,25 @@ const ROUTES = [
   {
     icon: LifeBuoy,
     title: 'Support',
-    address: 'support@formora.app',
+    address: 'support@impactlens.app',
     body: 'Something is broken, behaving oddly, or you cannot work out how to make it do what you need.',
   },
   {
     icon: Users,
     title: 'Sales and plans',
-    address: 'sales@formora.app',
+    address: 'sales@impactlens.app',
     body: 'Higher limits, several workspaces, invoicing, or a non-profit and education discount.',
   },
   {
     icon: ShieldAlert,
     title: 'Security',
-    address: 'security@formora.app',
+    address: 'security@impactlens.app',
     body: 'Reporting a vulnerability. Please include the steps to reproduce it, and give us a reasonable window to fix it before disclosing.',
   },
   {
     icon: Mail,
     title: 'Everything else',
-    address: 'hello@formora.app',
+    address: 'hello@impactlens.app',
     body: 'Partnerships, press, or anything that does not fit the boxes above.',
   },
 ];

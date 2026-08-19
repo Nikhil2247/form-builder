@@ -41,7 +41,6 @@ const PROTECTED_PREFIXES = [
   '/dashboard',
   '/forms',
   '/submissions',
-  '/analytics',
   '/templates',
   '/apps',
   '/records',

@@ -18,7 +18,7 @@ import {
 export const metadata: Metadata = {
   title: 'About',
   description:
-    'Why Formora exists: the awkward middle ground between a form tool that is too simple and a data system that takes six months to configure.',
+    'Why ImpactLens exists: the awkward middle ground between a form tool that is too simple and a data system that takes six months to configure.',
 };
 
 /**
@@ -46,7 +46,7 @@ export default function AboutPage() {
             Built for the forms that <Marked>carry weight</Marked>
           </>
         }
-        lead="Formora exists for the awkward middle ground: work too structured for a simple form tool, but nowhere near big enough to justify a data system that takes six months and a consultant to configure."
+        lead="ImpactLens exists for the awkward middle ground: work too structured for a simple form tool, but nowhere near big enough to justify a data system that takes six months and a consultant to configure."
       />
 
       <Section pattern>

@@ -15,6 +15,7 @@ import {
   type DataTableColumn,
 } from '@/components/shared';
 import { useTrashedForms, useRestoreForm, type Form } from '@/hooks/use-forms';
+import { richTextToPlainText } from '@/lib/rich-text';
 
 /** Matches the API's soft-delete retention window. */
 const RETENTION_DAYS = 30;
@@ -42,7 +43,7 @@ export default function TrashPage() {
         <div className="min-w-0">
           <div className="truncate font-medium text-foreground">{form.title}</div>
           <div className="truncate text-xs text-muted-foreground">
-            {form.description || 'No description'}
+            {richTextToPlainText(form.description) || 'No description'}
           </div>
         </div>
       ),

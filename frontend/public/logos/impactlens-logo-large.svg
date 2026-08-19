@@ -1,0 +1,30 @@
+<svg width="620" height="180" viewBox="0 0 620 180" xmlns="http://www.w3.org/2000/svg">
+<defs>
+  <linearGradient id="bladeGradL1" x1="0" y1="0" x2="1" y2="1">
+    <stop offset="0" stop-color="#244862"/>
+    <stop offset="1" stop-color="#46738C"/>
+  </linearGradient>
+  <linearGradient id="bladeGradL2" x1="0" y1="0" x2="1" y2="1">
+    <stop offset="0" stop-color="#46738C"/>
+    <stop offset="1" stop-color="#F3723D"/>
+  </linearGradient>
+  <linearGradient id="bladeGradL3" x1="0" y1="0" x2="1" y2="1">
+    <stop offset="0" stop-color="#F3723D"/>
+    <stop offset="1" stop-color="#F9B620"/>
+  </linearGradient>
+</defs>
+
+<g transform="translate(80,90) scale(1.3)">
+  <g fill="url(#bladeGradL1)"><path d="M0 -6 L36 -20 Q42 0 36 20 L0 6 Z"/></g>
+  <g transform="rotate(60)" fill="url(#bladeGradL2)"><path d="M0 -6 L36 -20 Q42 0 36 20 L0 6 Z"/></g>
+  <g transform="rotate(120)" fill="url(#bladeGradL3)"><path d="M0 -6 L36 -20 Q42 0 36 20 L0 6 Z"/></g>
+  <g transform="rotate(180)" fill="url(#bladeGradL1)"><path d="M0 -6 L36 -20 Q42 0 36 20 L0 6 Z"/></g>
+  <g transform="rotate(240)" fill="url(#bladeGradL2)"><path d="M0 -6 L36 -20 Q42 0 36 20 L0 6 Z"/></g>
+  <g transform="rotate(300)" fill="url(#bladeGradL3)"><path d="M0 -6 L36 -20 Q42 0 36 20 L0 6 Z"/></g>
+  <circle r="9" fill="#F9F6F0"/>
+</g>
+
+<text x="182" y="90" font-family="Arial, Helvetica, sans-serif" font-size="56" font-weight="700" fill="#244862">Impact<tspan fill="#F3723D">Lens</tspan></text>
+<text x="184" y="118" font-family="Arial, Helvetica, sans-serif" font-size="17" letter-spacing="2.2" fill="#46738C">SMARTER FORMS. STRONGER SCHOOLS.</text>
+<text x="184" y="140" font-family="Arial, Helvetica, sans-serif" font-size="13" letter-spacing="1.5" fill="#7F8A98">A VIBHA INITIATIVE</text>
+</svg>

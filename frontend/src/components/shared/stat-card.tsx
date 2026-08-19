@@ -40,10 +40,10 @@ export function StatCard({
 }: StatCardProps) {
   if (isLoading) {
     return (
-      <div className={cn('rounded-xl border border-border bg-card p-4 shadow-card', className)}>
-        <Skeleton className="h-3 w-20" />
-        <Skeleton className="mt-3 h-7 w-24" />
-        <Skeleton className="mt-2 h-3 w-16" />
+      <div className={cn('rounded-lg border border-border bg-card p-3 shadow-card', className)}>
+        <Skeleton className="h-3 w-16" />
+        <Skeleton className="mt-2 h-6 w-20" />
+        <Skeleton className="mt-1.5 h-2.5 w-14" />
       </div>
     );
   }
@@ -56,21 +56,21 @@ export function StatCard({
   return (
     <div
       className={cn(
-        'rounded-xl border border-border bg-card p-4 shadow-card transition-colors hover:border-border-strong',
+        'rounded-lg border border-border bg-card p-3 shadow-card transition-colors hover:border-border-strong',
         className,
       )}
     >
-      <div className="flex items-start justify-between gap-3">
+      <div className="flex items-start justify-between gap-2">
         <span className="text-xs font-medium text-muted-foreground">{label}</span>
         {Icon && (
-          <span className="flex size-7 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground">
-            <Icon className="size-3.5" strokeWidth={1.5} />
+          <span className="flex size-6 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground">
+            <Icon className="size-3" strokeWidth={1.5} />
           </span>
         )}
       </div>
 
-      <div className="mt-2.5 flex items-baseline gap-2">
-        <span className="tabular text-2xl font-semibold tracking-tight text-foreground">
+      <div className="mt-1.5 flex items-baseline gap-1.5">
+        <span className="tabular text-xl font-semibold tracking-tight text-foreground">
           {value ?? '—'}
         </span>
         {hasDelta && (
@@ -91,7 +91,7 @@ export function StatCard({
         )}
       </div>
 
-      {hint && <p className="mt-1 text-xs text-muted-foreground">{hint}</p>}
+      {hint && <p className="mt-0.5 truncate text-xs text-muted-foreground">{hint}</p>}
     </div>
   );
 }
@@ -105,6 +105,6 @@ export function StatGrid({
   className?: string;
 }) {
   return (
-    <div className={cn('grid grid-cols-2 gap-3 lg:grid-cols-4', className)}>{children}</div>
+    <div className={cn('grid grid-cols-2 gap-2.5 lg:grid-cols-4', className)}>{children}</div>
   );
 }

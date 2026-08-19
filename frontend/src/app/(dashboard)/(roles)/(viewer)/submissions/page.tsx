@@ -1,134 +1,116 @@
 'use client';
 
-import React, { useState } from 'react';
+import React from 'react';
 import Link from 'next/link';
-import { Inbox, User } from 'lucide-react';
+import { Download, Eye, FileBox, Inbox, Loader2 } from 'lucide-react';
+import { toast } from 'sonner';
 
-import { Button } from '@/components/ui/button';
+import { Button, buttonVariants } from '@/components/ui/button';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import {
   ButtonLink,
   PageHeader,
   PageShell,
   DataTable,
-  StatusBadge,
   EmptyState,
   Toolbar,
   SearchInput,
+  FilterSelect,
   RelativeTime,
-  Duration,
   type DataTableColumn,
 } from '@/components/shared';
-import { SubmissionDetailPanel } from '@/components/submissions/SubmissionDetailPanel';
-import { SubmissionBulkActions } from '@/components/submissions/SubmissionBulkActions';
+import { Can } from '@/components/auth/RoleGuard';
 import { usePagination } from '@/hooks/use-pagination';
-import { usePermissions } from '@/hooks/use-auth';
-import { useOrgSubmissions, type Submission } from '@/hooks/use-submissions';
+import { useForms, type Form } from '@/hooks/use-forms';
+import { useExportSubmissions } from '@/hooks/use-submissions';
+import { richTextToPlainText } from '@/lib/rich-text';
+
+const STATUS_OPTIONS = [
+  { value: 'ALL', label: 'All statuses' },
+  { value: 'DRAFT', label: 'Draft' },
+  { value: 'PUBLISHED', label: 'Published' },
+  { value: 'CLOSED', label: 'Closed' },
+  { value: 'ARCHIVED', label: 'Archived' },
+];
 
 /**
- * Rows rendered at once by the virtualizer's viewport, before scrolling.
+ * Every form in the organization, ranked by how many responses it has.
  *
- * The table is virtualized because the page size goes up to 100 and this list
- * is the one place in the product where an operator genuinely wants a long
- * page — triaging spam means scanning, not paging. See the note on
- * `DataTableVirtualization` for why it is opt-in rather than the default.
+ * This used to be a single flat table of every response across every form —
+ * useful for nothing in particular, since a respondent's answer only means
+ * something in the context of the form that asked it. Picking a form here
+ * goes straight to that form's own Responses tab, where the answers actually
+ * live.
  */
-const TABLE_VIEWPORT = 'min(38rem, calc(100vh - 22rem))';
-/** px. Two lines of text plus the avatar and the row padding. */
-const ROW_HEIGHT = 57;
-
 export default function OrgSubmissionsPage() {
-  const pager = usePagination();
-  const { atLeast } = usePermissions();
-  const [detailId, setDetailId] = useState<string | null>(null);
-  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const pager = usePagination({ filterKeys: ['status'] });
 
-  // Mirrors the API's `@RequiredRole('EDITOR')` on the annotate, delete and
-  // bulk routes. Checked with the role ladder rather than a capability because
-  // that is exactly what the server checks — a capability that mapped to a
-  // different set of roles would show controls that 403.
-  const canModerate = atLeast('EDITOR');
-
-  const { data, isLoading, isFetching, error, refetch } = useOrgSubmissions({
+  const { data, isLoading, isFetching, error, refetch } = useForms({
     page: pager.page,
     limit: pager.pageSize,
+    status: pager.filters.status,
     search: pager.search,
+    sort: pager.sort ?? 'updatedAt',
+    direction: pager.direction,
   });
 
-  const submissions = data?.submissions ?? [];
+  const forms = data?.forms ?? [];
   const total = data?.pagination?.total ?? 0;
 
-  const columns: DataTableColumn<Submission>[] = [
+  const columns: DataTableColumn<Form>[] = [
     {
-      id: 'respondent',
-      header: 'Respondent',
+      id: 'title',
+      header: 'Form',
       isRowHeader: true,
-      cell: (submission) => {
-        const respondent = submission.respondent;
-        const name = respondent
-          ? `${respondent.firstName ?? ''} ${respondent.lastName ?? ''}`.trim()
-          : '';
-
-        return (
-          <div className="flex items-center gap-2.5">
-            <span className="flex size-7 shrink-0 items-center justify-center rounded-full bg-muted text-muted-foreground">
-              <User className="size-3.5" strokeWidth={1.5} />
-            </span>
-            <div className="min-w-0">
-              <div className="truncate font-medium text-foreground">
-                {name || respondent?.email || 'Anonymous'}
-              </div>
-              {name && respondent?.email && (
-                <div className="truncate text-xs text-muted-foreground">{respondent.email}</div>
-              )}
+      sortable: true,
+      sortKey: 'title',
+      className: 'max-w-0',
+      cell: (form) => (
+        <div className="flex items-center gap-3">
+          <span className="flex size-8 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground">
+            <FileBox className="size-4" strokeWidth={1.5} />
+          </span>
+          <div className="min-w-0">
+            <div className="truncate font-medium text-foreground">{form.title}</div>
+            <div className="truncate text-xs text-muted-foreground">
+              {richTextToPlainText(form.description) || 'No description'}
             </div>
           </div>
-        );
-      },
+        </div>
+      ),
     },
     {
-      id: 'form',
-      header: 'Form',
-      hideBelow: 'sm',
-      cell: (submission) =>
-        submission.form ? (
-          <Link
-            href={`/forms/${submission.form.id}`}
-            className="truncate underline-offset-2 hover:underline"
-            // The row is itself clickable; keep the two actions distinct.
-            onClick={(e) => e.stopPropagation()}
-          >
-            {submission.form.title}
-          </Link>
-        ) : (
-          <span className="text-muted-foreground">—</span>
-        ),
-    },
-    {
-      id: 'status',
-      header: 'Status',
-      width: 'w-32',
-      hideBelow: 'md',
-      cell: (submission) => <StatusBadge status={submission.status ?? 'SUBMITTED'} dot />,
-    },
-    {
-      id: 'completionTimeMs',
-      header: 'Time taken',
+      id: 'submissions',
+      header: 'Responses',
       numeric: true,
       width: 'w-28',
-      hideBelow: 'lg',
-      // The API reports milliseconds. The old page divided by 1000 and appended
-      // "s", so a four-minute response read "247s".
-      cell: (submission) => <Duration ms={submission.completionTimeMs} />,
+      cell: (form) => (form._count?.submissions ?? 0).toLocaleString(),
     },
     {
-      id: 'submittedAt',
-      header: 'Submitted',
+      id: 'updatedAt',
+      header: 'Last edited',
+      sortable: true,
+      sortKey: 'updatedAt',
       width: 'w-40',
-      cell: (submission) => (
+      hideBelow: 'md',
+      cell: (form) => (
         <span className="text-muted-foreground">
-          <RelativeTime value={submission.submittedAt} />
+          <RelativeTime value={form.updatedAt} />
         </span>
       ),
+    },
+    {
+      id: 'actions',
+      header: <span className="sr-only">Actions</span>,
+      width: 'w-24',
+      className: 'text-right',
+      headerClassName: 'text-right',
+      cell: (form) => <RowActions form={form} />,
     },
   ];
 
@@ -136,66 +118,52 @@ export default function OrgSubmissionsPage() {
     <PageShell>
       <PageHeader
         title="Responses"
-        description="Every response collected across your organization's forms."
+        description="Pick a form to see who responded and what they said."
       />
 
       <Toolbar>
         <SearchInput
           value={pager.search}
           onChange={pager.setSearch}
-          placeholder="Search responses…"
-          aria-label="Search responses"
+          placeholder="Search forms…"
+          aria-label="Search forms"
+        />
+        <FilterSelect
+          label="Status"
+          value={pager.filters.status ?? 'ALL'}
+          onChange={(value) => pager.setFilter('status', value === 'ALL' ? null : value)}
+          options={STATUS_OPTIONS}
         />
       </Toolbar>
 
       <DataTable
-        caption="All responses"
+        caption="Forms in your organization, with their response counts"
         columns={columns}
-        data={submissions}
-        getRowId={(submission) => submission.id}
+        data={forms}
+        getRowId={(form) => form.id}
         isLoading={isLoading || isFetching}
         error={error}
         onRetry={() => refetch()}
-        onRowClick={(submission) => setDetailId(submission.id)}
-        pagination={pager.paginationProps(total, 'responses')}
-        // Only offered to a role that can act on a selection. Ticking rows with
-        // nothing to do with them is a dead end, and the bulk API would 403.
-        selection={
-          canModerate
-            ? {
-                selectedIds,
-                onChange: setSelectedIds,
-                selectAllLabel: 'Select all responses on this page',
-                rowLabel: (submission) =>
-                  `Select response from ${submission.respondent?.email ?? 'anonymous respondent'}`,
-              }
-            : undefined
-        }
-        virtual={{ height: TABLE_VIEWPORT, estimateRowHeight: ROW_HEIGHT }}
-        toolbar={
-          selectedIds.length > 0 ? (
-            <SubmissionBulkActions
-              selectedIds={selectedIds}
-              onClear={() => setSelectedIds([])}
-            />
-          ) : undefined
-        }
+        rowHref={(form) => `/forms/${form.id}`}
+        sort={pager.sort ? { key: pager.sort, direction: pager.direction } : undefined}
+        onSortChange={pager.setSort}
+        pagination={pager.paginationProps(total, 'forms')}
         empty={
           <EmptyState
             variant="inline"
             icon={Inbox}
-            title={pager.search ? 'No responses match your search' : 'No responses yet'}
+            title={
+              pager.search || pager.filters.status
+                ? 'No forms match your filters'
+                : 'No forms yet'
+            }
             description={
-              pager.search
-                ? 'Try a different search term.'
-                : 'Once someone completes one of your published forms, it will appear here.'
+              pager.search || pager.filters.status
+                ? 'Try a different search term or clear the status filter.'
+                : 'Create a form and publish it to start collecting responses.'
             }
             action={
-              pager.search ? (
-                <Button variant="outline" size="sm" onClick={pager.reset}>
-                  Clear search
-                </Button>
-              ) : (
+              pager.search || pager.filters.status ? undefined : (
                 <ButtonLink variant="outline" size="sm" href="/forms">
                   Go to forms
                 </ButtonLink>
@@ -204,18 +172,60 @@ export default function OrgSubmissionsPage() {
           />
         }
       />
-
-      <SubmissionDetailPanel
-        submissionId={detailId}
-        open={!!detailId}
-        onOpenChange={(open) => !open && setDetailId(null)}
-        canModerate={canModerate}
-        // A deleted row is gone from the next page of results, so leaving it
-        // ticked would arm the bulk bar with an id the server will now reject —
-        // and, because the bulk API is all-or-nothing, that would block every
-        // other row in the selection too.
-        onDeleted={(id) => setSelectedIds((ids) => ids.filter((value) => value !== id))}
-      />
     </PageShell>
+  );
+}
+
+/** View and export, right on the row — the two things anyone opening this page wants to do with a form's responses. */
+function RowActions({ form }: { form: Form }) {
+  const exportSubmissions = useExportSubmissions(form.id, form.title);
+  const hasResponses = (form._count?.submissions ?? 0) > 0;
+
+  async function handleExport(format: 'csv' | 'json') {
+    try {
+      const result = await exportSubmissions.mutateAsync(format);
+      toast.success(`Downloaded ${result.filename}`);
+    } catch {
+      // Reported globally.
+    }
+  }
+
+  return (
+    <div className="flex items-center justify-end gap-1">
+      <Link
+        href={`/forms/${form.id}`}
+        title={`View responses to ${form.title}`}
+        className={buttonVariants({ variant: 'ghost', size: 'icon-sm' })}
+      >
+        <Eye className="size-4" />
+        <span className="sr-only">View responses to {form.title}</span>
+      </Link>
+
+      <Can permission="submission:export">
+        <DropdownMenu>
+          <DropdownMenuTrigger
+            disabled={!hasResponses || exportSubmissions.isPending}
+            aria-label={`Export responses to ${form.title}`}
+            render={
+              <Button variant="ghost" size="icon-sm">
+                {exportSubmissions.isPending ? (
+                  <Loader2 className="size-4 animate-spin" />
+                ) : (
+                  <Download className="size-4" />
+                )}
+              </Button>
+            }
+          />
+          <DropdownMenuContent align="end">
+            <DropdownMenuItem onClick={() => handleExport('csv')} className="cursor-pointer">
+              Download CSV
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={() => handleExport('json')} className="cursor-pointer">
+              Download JSON
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </Can>
+    </div>
   );
 }

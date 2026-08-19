@@ -4,11 +4,9 @@ import React, { useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import {
-  BarChart2,
   Clock,
   Copy,
   Edit,
-  Eye,
   FileBox,
   Inbox,
   LayoutGrid,
@@ -52,6 +50,7 @@ import { Can } from '@/components/auth/RoleGuard';
 import { usePermissions } from '@/hooks/use-auth';
 import { usePagination } from '@/hooks/use-pagination';
 import { useForms, useCreateForm, useDeleteForm, useCloneForm, type Form } from '@/hooks/use-forms';
+import { richTextToPlainText } from '@/lib/rich-text';
 
 const STATUS_OPTIONS = [
   { value: 'ALL', label: 'All statuses' },
@@ -124,7 +123,7 @@ export default function FormsListPage() {
           <div className="min-w-0">
             <div className="truncate font-medium text-foreground">{form.title}</div>
             <div className="truncate text-xs text-muted-foreground">
-              {form.description || 'No description'}
+              {richTextToPlainText(form.description) || 'No description'}
             </div>
           </div>
         </div>
@@ -382,12 +381,6 @@ function RowActions({
         <DropdownMenuItem render={<Link href={`/forms/${form.id}`} />} className="cursor-pointer">
           <Inbox className="mr-2 size-3.5" /> Responses
         </DropdownMenuItem>
-        <DropdownMenuItem
-          render={<Link href={`/forms/${form.id}?tab=analytics`} />}
-          className="cursor-pointer"
-        >
-          <BarChart2 className="mr-2 size-3.5" /> Analytics
-        </DropdownMenuItem>
         {can('form:edit') && (
           <DropdownMenuItem
             render={<Link href={`/forms/builder?id=${form.id}`} />}
@@ -445,7 +438,9 @@ function FormCard({
           </h3>
         </Link>
         {form.description && (
-          <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">{form.description}</p>
+          <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">
+            {richTextToPlainText(form.description)}
+          </p>
         )}
       </div>
 

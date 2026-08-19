@@ -1,7 +1,6 @@
 'use client';
 
 import React, { useMemo, useState } from 'react';
-import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import {
   CheckCircle2,
@@ -44,6 +43,8 @@ import {
 import { formatCompact, formatDuration } from '@/components/shared/formatters';
 import { SubmissionDetailsDialog } from '@/components/submissions/SubmissionDetailsDialog';
 import { ExportJobsPanel } from '@/components/exports/ExportJobsPanel';
+import { RichText } from '@/components/builder/RichText';
+import { isRichTextEmpty } from '@/lib/rich-text';
 import { Can } from '@/components/auth/RoleGuard';
 import { usePagination } from '@/hooks/use-pagination';
 import { useForm } from '@/hooks/use-forms';
@@ -202,7 +203,11 @@ export default function FormDetailPage() {
         back="/forms"
         breadcrumbs={[{ label: 'Forms', href: '/forms' }, { label: form?.title ?? '' }]}
         title={form?.title ?? ''}
-        description={form?.description || undefined}
+        description={
+          form?.description && !isRichTextEmpty(form.description) ? (
+            <RichText html={form.description} />
+          ) : undefined
+        }
         badge={form && <StatusBadge status={form.status} dot />}
         actions={
           <>

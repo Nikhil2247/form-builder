@@ -16,7 +16,7 @@ export default function PrivacyPage() {
 
       <h2>3. Data Processing for Form Respondents</h2>
       <p>
-        When you respond to a form created by one of our users, Formora acts as a data processor. The creator of the form is the data controller. We only process respondent data according to the instructions of the form creator. If you have questions about a specific form, please contact the form creator directly.
+        When you respond to a form created by one of our users, ImpactLens acts as a data processor. The creator of the form is the data controller. We only process respondent data according to the instructions of the form creator. If you have questions about a specific form, please contact the form creator directly.
       </p>
 
       <h2>4. Data Security</h2>
@@ -45,7 +45,7 @@ export default function PrivacyPage() {
         deletion of your personal information, and the rights to portability and to object to or
         restrict processing. Much of this you can exercise yourself from within the product —
         profile details, response export and response deletion. For anything else, write to
-        privacy@formora.app and we will respond within the period the applicable law allows.
+        privacy@impactlens.app and we will respond within the period the applicable law allows.
       </p>
       <p>
         If you are a respondent rather than an account holder, the organization that created the
@@ -64,13 +64,13 @@ export default function PrivacyPage() {
 
       <h2>8. Cookies and Tracking</h2>
       <p>
-        Formora uses strictly necessary cookies for authentication and session management. We do
+        ImpactLens uses strictly necessary cookies for authentication and session management. We do
         not use advertising cookies and do not track individuals across other websites.
       </p>
 
       <h2>9. Contact Us</h2>
       <p>
-        Questions about this Privacy Policy can go to privacy@formora.app, or through our{' '}
+        Questions about this Privacy Policy can go to privacy@impactlens.app, or through our{' '}
         <a href="/contact">contact page</a>.
       </p>
     </LegalLayout>

@@ -33,7 +33,7 @@ export const DOC_SECTIONS: DocSection[] = [
       {
         title: 'Overview',
         href: '/docs',
-        summary: 'What Formora does, and which part of it you need.',
+        summary: 'What ImpactLens does, and which part of it you need.',
       },
       {
         title: 'Quickstart',

@@ -3,7 +3,7 @@
 import React, { useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { ChevronDown, PanelLeft, PanelLeftClose, Squircle, X } from 'lucide-react';
+import { ChevronDown, PanelLeft, PanelLeftClose, X } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
 import { useSidebarStore } from '@/store/sidebar-store';
@@ -55,21 +55,31 @@ export function Sidebar() {
         <div className="flex h-14 shrink-0 items-center justify-between gap-2 border-b border-sidebar-border px-3">
           <Link
             href="/dashboard"
-            className="flex min-w-0 items-center gap-2.5 rounded-md"
-            aria-label="FormBuilder home"
+            className="flex h-8 min-w-0 items-center rounded-md"
+            aria-label="ImpactLens home"
           >
-            <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-sidebar-primary text-sidebar-primary-foreground">
-              <Squircle className="size-4" strokeWidth={2.5} />
-            </span>
+            {/* One image, not an icon-box plus a text span: the medium
+                logotype already bakes in the wordmark. Collapsing is done by
+                clipping the wrapper down to the icon's own width (the mark
+                sits in the first ~64 of the SVG's 300 viewBox units) rather
+                than swapping images, so it's the same crop the eye already
+                knows from the expanded state. */}
             <span
               className={cn(
-                'min-w-0 overflow-hidden transition-opacity duration-150',
-                isCollapsed && 'md:w-0 md:opacity-0',
+                'flex h-8 w-[134px] shrink-0 items-center overflow-hidden transition-[width] duration-150',
+                isCollapsed && 'md:w-8',
               )}
             >
-              <span className="block truncate text-sm font-semibold leading-tight">
-                FormBuilder
-              </span>
+              {/* eslint-disable-next-line @next/next/no-img-element -- next/image's
+                  optimizer 400s on local SVGs unless `dangerouslyAllowSVG` is set;
+                  not worth loosening for a static decorative logotype. */}
+              <img
+                src="/logos/impactlens-logo-medium.svg"
+                alt=""
+                width={134}
+                height={32}
+                className="h-8 w-[134px] max-w-none shrink-0"
+              />
             </span>
           </Link>
 

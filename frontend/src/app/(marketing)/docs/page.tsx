@@ -19,7 +19,7 @@ export default function DocsOverviewPage() {
       title="Documentation"
       intro={
         <>
-          Formora collects structured data — from a one-page contact form to a multi-form field
+          ImpactLens collects structured data — from a one-page contact form to a multi-form field
           programme run across hundreds of sites. This is the reference for every part of it. If
           you are new, read <Term>Quickstart</Term> and <Term>Core concepts</Term> first; they take
           about ten minutes together and make everything else easier to place.

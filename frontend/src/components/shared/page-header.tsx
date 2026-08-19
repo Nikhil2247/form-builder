@@ -103,7 +103,10 @@ export function PageHeader({
               {badge}
             </div>
             {description && (
-              <p className="mt-1 text-sm text-muted-foreground">{description}</p>
+              // A `div`, not a `p`: the form detail page passes a `RichText`
+              // node here, and that renders block elements (`<ul>`, `<p>`) —
+              // invalid inside a `<p>` and a React hydration mismatch.
+              <div className="mt-1 text-sm text-muted-foreground">{description}</div>
             )}
           </div>
         </div>
