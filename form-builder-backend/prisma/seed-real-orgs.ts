@@ -24,8 +24,8 @@
  * have each person change it after first login.
  *
  * Run with: bun prisma/seed-real-orgs.ts
- * Requires CONFIRM_REAL_SEED=yes, set explicitly, since this truncates every
- * table before writing — there is no dry-run mode.
+ * There is no dry-run mode and no confirmation prompt — it truncates every
+ * table in whatever database DATABASE_URL points at as soon as it runs.
  */
 
 import { randomUUID } from 'crypto';
@@ -37,14 +37,6 @@ import 'dotenv/config';
 const DATABASE_URL = process.env.DATABASE_URL;
 if (!DATABASE_URL) {
   throw new Error('DATABASE_URL is not set. Copy .env.example to .env first.');
-}
-
-if (process.env.CONFIRM_REAL_SEED !== 'yes') {
-  throw new Error(
-    'Refusing to run: this truncates every table in the target database ' +
-      '(the one DATABASE_URL points at) before writing the real Vibha orgs/users. ' +
-      'Re-run with CONFIRM_REAL_SEED=yes once you have confirmed DATABASE_URL is correct.',
-  );
 }
 
 const prisma = new PrismaClient({
