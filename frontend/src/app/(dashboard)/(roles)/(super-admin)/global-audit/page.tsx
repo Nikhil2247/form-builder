@@ -17,7 +17,7 @@ export default function GlobalAuditPage() {
     <PageShell>
       <PageHeader
         title="Platform audit log"
-        description="Every audited action across every organization on this deployment."
+        // description="Every audited action across every organization on this deployment."
       />
 
       <AuditLogTable

@@ -99,7 +99,7 @@ export default function PlatformSystemPage() {
     <PageShell>
       <PageHeader
         title="System"
-        description={`Dependency probes, queue depth, and infrastructure statistics. Refreshes every ${POLL_MS / 1000} seconds.`}
+        // description={`Dependency probes, queue depth, and infrastructure statistics. Refreshes every ${POLL_MS / 1000} seconds.`}
         actions={
           <div className="flex items-center gap-3">
             <span className="text-xs text-muted-foreground">

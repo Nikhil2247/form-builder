@@ -2,14 +2,17 @@
 
 import React, { useState } from 'react';
 import Link from 'next/link';
-import { useParams } from 'next/navigation';
+import { useParams, useRouter } from 'next/navigation';
 import {
   Building2,
   FileBox,
   HardDrive,
   MailPlus,
+  Pencil,
+  Plus,
   ShieldAlert,
   ShieldCheck,
+  Trash2,
   Users,
 } from 'lucide-react';
 import { toast } from 'sonner';
@@ -39,14 +42,19 @@ import {
 } from '@/components/shared';
 import { formatBytes, formatCompact } from '@/components/shared/formatters';
 import { cn } from '@/lib/utils';
+import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select';
 import {
   useActivateOrganization,
+  useAddOrgMember,
   useAdminOrganization,
   useSuspendOrganization,
+  useUpdateOrganization,
+  useDeleteOrganization,
   useUpdateOrgQuotas,
   type AdminOrganizationDetail,
   type AdminOrgForm,
   type AdminOrgMember,
+  type OrgRole,
 } from '@/hooks/use-admin';
 
 /**
@@ -71,14 +79,19 @@ const BYTES_PER_GB = 1024 ** 3;
 export default function PlatformOrganizationDetailPage() {
   const params = useParams<{ orgId: string }>();
   const orgId = params.orgId;
+  const router = useRouter();
 
   const { data: org, isLoading, error, refetch } = useAdminOrganization(orgId);
 
   const suspendOrg = useSuspendOrganization();
   const activateOrg = useActivateOrganization();
+  const updateOrg = useUpdateOrganization();
+  const deleteOrg = useDeleteOrganization();
 
   const [suspending, setSuspending] = useState(false);
   const [activating, setActivating] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   if (error) {
     return (
@@ -155,25 +168,38 @@ export default function PlatformOrganizationDetailPage() {
         badge={org ? <StatusBadge status={org.status} dot /> : undefined}
         actions={
           org ? (
-            org.status === 'ACTIVE' ? (
-              <Button
-                variant="destructive"
-                size="sm"
-                className="gap-2"
-                onClick={() => setSuspending(true)}
-              >
-                <ShieldAlert className="size-4" /> Suspend
+            <div className="flex items-center gap-2">
+              <Button variant="outline" size="sm" className="gap-2" onClick={() => setEditing(true)}>
+                <Pencil className="size-4" /> Edit
               </Button>
-            ) : (
+              {org.status === 'ACTIVE' ? (
+                <Button
+                  variant="destructive"
+                  size="sm"
+                  className="gap-2"
+                  onClick={() => setSuspending(true)}
+                >
+                  <ShieldAlert className="size-4" /> Suspend
+                </Button>
+              ) : (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="gap-2"
+                  onClick={() => setActivating(true)}
+                >
+                  <ShieldCheck className="size-4" /> Reactivate
+                </Button>
+              )}
               <Button
-                variant="outline"
+                variant="ghost"
                 size="sm"
-                className="gap-2"
-                onClick={() => setActivating(true)}
+                className="gap-2 text-destructive hover:bg-destructive/10 hover:text-destructive"
+                onClick={() => setDeleting(true)}
               >
-                <ShieldCheck className="size-4" /> Reactivate
+                <Trash2 className="size-4" /> Delete
               </Button>
-            )
+            </div>
           ) : undefined
         }
       />
@@ -249,7 +275,7 @@ export default function PlatformOrganizationDetailPage() {
             />
           </div>
 
-          <MembersSection members={members} />
+          <MembersSection orgId={orgId} members={members} />
 
           <FormsSection forms={org.forms} formCount={formCount} />
         </>
@@ -281,7 +307,96 @@ export default function PlatformOrganizationDetailPage() {
         isPending={activateOrg.isPending}
         onConfirm={handleActivate}
       />
+
+      {editing && org && (
+        <EditOrgModal
+          org={org}
+          onClose={() => setEditing(false)}
+          isPending={updateOrg.isPending}
+          onConfirm={async (data) => {
+            try {
+              await updateOrg.mutateAsync({ orgId: org.id, data });
+              toast.success('Organization updated');
+              setEditing(false);
+            } catch {
+              // Reported globally; the modal stays open with the edits typed.
+            }
+          }}
+        />
+      )}
+
+      <ConfirmDialog
+        open={deleting}
+        onOpenChange={setDeleting}
+        title="Delete organization"
+        description={
+          <>
+            {org?.name} and every membership in it will be removed from view immediately. Its
+            forms, submissions, and audit trail are retained, not erased.
+          </>
+        }
+        confirmLabel="Delete organization"
+        confirmText={org?.name}
+        isPending={deleteOrg.isPending}
+        onConfirm={async () => {
+          if (!org) return;
+          try {
+            await deleteOrg.mutateAsync(org.id);
+            toast.success(`${org.name} deleted`);
+            router.push('/platform/organizations');
+          } catch {
+            // Reported globally.
+          }
+        }}
+      />
     </PageShell>
+  );
+}
+
+/** Identity fields only. Quotas are edited in QuotasCard below. */
+function EditOrgModal({
+  org,
+  onClose,
+  onConfirm,
+  isPending,
+}: {
+  org: AdminOrganizationDetail;
+  onClose: () => void;
+  onConfirm: (data: { name?: string; slug?: string }) => void;
+  isPending: boolean;
+}) {
+  const [name, setName] = useState(org.name);
+  const [slug, setSlug] = useState(org.slug);
+
+  const valid = name.trim().length >= 2 && slug.trim().length > 0;
+  const dirty = name.trim() !== org.name || slug.trim() !== org.slug;
+
+  return (
+    <Modal
+      open
+      onOpenChange={(open) => !open && onClose()}
+      title="Edit organization"
+      footer={
+        <ModalActions
+          onCancel={onClose}
+          confirmLabel="Save changes"
+          onConfirm={() => onConfirm({ name: name.trim(), slug: slug.trim() })}
+          isPending={isPending}
+          disabled={!valid || !dirty}
+        />
+      }
+    >
+      <div className="space-y-3">
+        <div className="space-y-1.5">
+          <Label htmlFor="edit-org-name">Name</Label>
+          <Input id="edit-org-name" value={name} onChange={(e) => setName(e.target.value)} autoFocus />
+        </div>
+        <div className="space-y-1.5">
+          <Label htmlFor="edit-org-slug">Slug</Label>
+          <Input id="edit-org-slug" value={slug} onChange={(e) => setSlug(e.target.value)} />
+        </div>
+      </div>
+    </Modal>
   );
 }
 
@@ -511,7 +626,10 @@ function QuotaField({
   );
 }
 
-function MembersSection({ members }: { members: AdminOrgMember[] }) {
+function MembersSection({ orgId, members }: { orgId: string; members: AdminOrgMember[] }) {
+  const addMember = useAddOrgMember();
+  const [adding, setAdding] = useState(false);
+
   const columns: DataTableColumn<AdminOrgMember>[] = [
     {
       id: 'user',
@@ -578,9 +696,14 @@ function MembersSection({ members }: { members: AdminOrgMember[] }) {
     <section className="space-y-3">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
         <h2 className="text-sm font-semibold">Members</h2>
-        <span className="text-xs text-muted-foreground">
-          Change a role from the member’s own page.
-        </span>
+        <div className="flex items-center gap-3">
+          <span className="text-xs text-muted-foreground">
+            Change a role from the member’s own page.
+          </span>
+          <Button size="sm" variant="outline" className="gap-2" onClick={() => setAdding(true)}>
+            <Plus className="size-3.5" /> Add member
+          </Button>
+        </div>
       </div>
 
       <DataTable
@@ -595,10 +718,91 @@ function MembersSection({ members }: { members: AdminOrgMember[] }) {
             icon={Users}
             title="No members"
             description="Nobody belongs to this organization, so nobody can sign in to it."
+            action={
+              <Button size="sm" className="gap-2" onClick={() => setAdding(true)}>
+                <Plus className="size-3.5" /> Add member
+              </Button>
+            }
           />
         }
       />
+
+      {adding && (
+        <AddMemberModal
+          onClose={() => setAdding(false)}
+          isPending={addMember.isPending}
+          onConfirm={async (data) => {
+            try {
+              await addMember.mutateAsync({ orgId, ...data });
+              toast.success(`${data.email} added to this organization`);
+              setAdding(false);
+            } catch {
+              // Reported globally; the modal stays open with the fields filled in.
+            }
+          }}
+        />
+      )}
     </section>
+  );
+}
+
+function AddMemberModal({
+  onClose,
+  onConfirm,
+  isPending,
+}: {
+  onClose: () => void;
+  onConfirm: (data: { email: string; role: OrgRole }) => void;
+  isPending: boolean;
+}) {
+  const [email, setEmail] = useState('');
+  const [role, setRole] = useState<OrgRole>('VIEWER');
+
+  const valid = /\S+@\S+\.\S+/.test(email);
+
+  return (
+    <Modal
+      open
+      onOpenChange={(open) => !open && onClose()}
+      title="Add member"
+      description="The account must already exist. This grants membership immediately — no invitation email is sent."
+      footer={
+        <ModalActions
+          onCancel={onClose}
+          confirmLabel="Add member"
+          onConfirm={() => onConfirm({ email: email.trim(), role })}
+          isPending={isPending}
+          disabled={!valid}
+        />
+      }
+    >
+      <div className="space-y-3">
+        <div className="space-y-1.5">
+          <Label htmlFor="add-member-email">Email</Label>
+          <Input
+            id="add-member-email"
+            type="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            placeholder="person@example.org"
+            autoFocus
+          />
+        </div>
+        <div className="space-y-1.5">
+          <Label htmlFor="add-member-role">Role</Label>
+          <NativeSelect
+            className="w-full"
+            id="add-member-role"
+            value={role}
+            onChange={(e) => setRole(e.target.value as OrgRole)}
+          >
+            <NativeSelectOption value="ADMIN">Admin</NativeSelectOption>
+            <NativeSelectOption value="EDITOR">Editor</NativeSelectOption>
+            <NativeSelectOption value="VIEWER">Viewer</NativeSelectOption>
+          </NativeSelect>
+        </div>
+      </div>
+    </Modal>
   );
 }
 

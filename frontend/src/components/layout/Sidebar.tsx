@@ -7,7 +7,7 @@ import { ChevronDown, PanelLeft, PanelLeftClose, X } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
 import { useSidebarStore } from '@/store/sidebar-store';
-import { useUser } from '@/hooks/use-auth';
+import { useOrganizations, useUser } from '@/hooks/use-auth';
 import { useFilteredNavigation } from '@/hooks/use-filtered-navigation';
 import { isNavItemActive, type NavGroup, type NavItem } from '@/config/navigation';
 import { StatusBadge } from '@/components/shared/status-badge';
@@ -19,6 +19,7 @@ export function Sidebar() {
   const { isCollapsed, isOpen, setCollapsed, close } = useSidebarStore();
   const { data: session } = useUser();
   const navigation = useFilteredNavigation();
+  const organizations = useOrganizations();
 
   const user = session?.user;
   const org = session?.activeOrganization;
@@ -107,10 +108,14 @@ export function Sidebar() {
         {/* ── Workspace ─────────────────────────────────────────────────────
             Its own row rather than nested under the brand link: a dropdown
             trigger inside an anchor is both an accessibility violation and
-            ambiguous to click. */}
-        <div className="shrink-0 border-b border-sidebar-border py-1">
-          <OrgSwitcher isCollapsed={isCollapsed} />
-        </div>
+            ambiguous to click. Omitted entirely for a super admin with no
+            organization membership — a platform-only account has no workspace
+            to switch, so there is nothing this row could ever say. */}
+        {organizations.length > 0 && (
+          <div className="shrink-0 border-b border-sidebar-border py-1">
+            <OrgSwitcher isCollapsed={isCollapsed} />
+          </div>
+        )}
 
         {/* ── Navigation ────────────────────────────────────────────────── */}
         <nav className="flex-1 overflow-y-auto overflow-x-hidden p-2">

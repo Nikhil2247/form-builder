@@ -1,8 +1,28 @@
 'use client';
 
-import React from 'react';
-import { Check, ShieldCheck, User, Users } from 'lucide-react';
+import React, { useState } from 'react';
+import {
+  Check,
+  MoreHorizontal,
+  Plus,
+  ShieldCheck,
+  Trash2,
+  User,
+  UserCheck,
+  Users,
+} from 'lucide-react';
+import { toast } from 'sonner';
 
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import {
   PageHeader,
   PageShell,
@@ -11,11 +31,20 @@ import {
   EmptyState,
   Toolbar,
   SearchInput,
+  ConfirmDialog,
+  Modal,
+  ModalActions,
   RelativeTime,
   type DataTableColumn,
 } from '@/components/shared';
 import { usePagination } from '@/hooks/use-pagination';
-import { useAdminUsers, type AdminUser } from '@/hooks/use-admin';
+import {
+  useAdminUsers,
+  useCreateUser,
+  useSetUserSuspended,
+  type AdminUser,
+  type SystemRole,
+} from '@/hooks/use-admin';
 
 export default function PlatformUsersPage() {
   const pager = usePagination();
@@ -24,6 +53,13 @@ export default function PlatformUsersPage() {
     limit: pager.pageSize,
     search: pager.search,
   });
+
+  const setSuspended = useSetUserSuspended();
+  const createUser = useCreateUser();
+  const [confirmTarget, setConfirmTarget] = useState<{ user: AdminUser; next: boolean } | null>(
+    null,
+  );
+  const [creating, setCreating] = useState(false);
 
   const users = data?.items ?? [];
   const total = data?.pagination.total ?? 0;
@@ -59,6 +95,17 @@ export default function PlatformUsersPage() {
       header: 'System role',
       width: 'w-36',
       cell: (user) => <StatusBadge status={user.systemRole} />,
+    },
+    {
+      id: 'status',
+      header: 'Status',
+      width: 'w-28',
+      cell: (user) =>
+        user.deletedAt ? (
+          <StatusBadge status="SUSPENDED" dot />
+        ) : (
+          <StatusBadge status="ACTIVE" dot />
+        ),
     },
     {
       id: 'organization',
@@ -114,13 +161,52 @@ export default function PlatformUsersPage() {
         </span>
       ),
     },
+    {
+      id: 'actions',
+      header: <span className="sr-only">Actions</span>,
+      width: 'w-12',
+      className: 'text-right',
+      headerClassName: 'text-right',
+      cell: (user) => (
+        <DropdownMenu>
+          <DropdownMenuTrigger
+            aria-label={`Actions for ${user.email}`}
+            className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+          >
+            <MoreHorizontal className="size-4" />
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            {user.deletedAt ? (
+              <DropdownMenuItem
+                onClick={() => setConfirmTarget({ user, next: false })}
+                className="cursor-pointer"
+              >
+                <UserCheck className="mr-2 size-3.5" /> Reinstate
+              </DropdownMenuItem>
+            ) : (
+              <DropdownMenuItem
+                onClick={() => setConfirmTarget({ user, next: true })}
+                className="cursor-pointer text-destructive focus:bg-destructive/10 focus:text-destructive"
+              >
+                <Trash2 className="mr-2 size-3.5" /> Delete
+              </DropdownMenuItem>
+            )}
+          </DropdownMenuContent>
+        </DropdownMenu>
+      ),
+    },
   ];
 
   return (
     <PageShell>
       <PageHeader
         title="Users"
-        description="Every registered account on this deployment."
+        // description="Every registered account on this deployment."
+        actions={
+          <Button size="sm" className="gap-2" onClick={() => setCreating(true)}>
+            <Plus className="size-4" /> New user
+          </Button>
+        }
       />
 
       <Toolbar>
@@ -153,6 +239,151 @@ export default function PlatformUsersPage() {
           />
         }
       />
+
+      <ConfirmDialog
+        open={confirmTarget !== null}
+        onOpenChange={(open) => !open && setConfirmTarget(null)}
+        title={confirmTarget?.next ? 'Delete this account' : 'Reinstate this account'}
+        description={
+          confirmTarget?.next ? (
+            <>
+              {confirmTarget.user.email} will be signed out of every device and blocked from
+              signing in. Their forms, submissions, and audit trail are retained, not erased — the
+              account can be reinstated at any time.
+            </>
+          ) : (
+            <>{confirmTarget?.user.email} will be able to sign in again with their existing password.</>
+          )
+        }
+        confirmLabel={confirmTarget?.next ? 'Delete account' : 'Reinstate'}
+        confirmText={confirmTarget?.next ? confirmTarget.user.email : undefined}
+        variant={confirmTarget?.next ? 'destructive' : 'default'}
+        isPending={setSuspended.isPending}
+        onConfirm={async () => {
+          if (!confirmTarget) return;
+          try {
+            await setSuspended.mutateAsync({
+              userId: confirmTarget.user.id,
+              suspended: confirmTarget.next,
+            });
+            toast.success(
+              confirmTarget.next
+                ? `${confirmTarget.user.email} deleted`
+                : `${confirmTarget.user.email} reinstated`,
+            );
+            setConfirmTarget(null);
+          } catch {
+            // Reported globally; the dialog stays open so the operator can retry.
+          }
+        }}
+      />
+
+      {creating && (
+        <CreateUserModal
+          onClose={() => setCreating(false)}
+          isPending={createUser.isPending}
+          onConfirm={async (data) => {
+            try {
+              await createUser.mutateAsync(data);
+              toast.success(`${data.email} created — a set-password link has been emailed to them`);
+              setCreating(false);
+            } catch {
+              // Reported globally; the modal stays open with the fields filled in.
+            }
+          }}
+        />
+      )}
     </PageShell>
+  );
+}
+
+function CreateUserModal({
+  onClose,
+  onConfirm,
+  isPending,
+}: {
+  onClose: () => void;
+  onConfirm: (data: {
+    email: string;
+    firstName: string;
+    lastName: string;
+    systemRole?: SystemRole;
+  }) => void;
+  isPending: boolean;
+}) {
+  const [email, setEmail] = useState('');
+  const [firstName, setFirstName] = useState('');
+  const [lastName, setLastName] = useState('');
+  const [systemRole, setSystemRole] = useState<SystemRole>('USER');
+
+  const valid = /\S+@\S+\.\S+/.test(email) && firstName.trim().length > 0 && lastName.trim().length > 0;
+
+  return (
+    <Modal
+      open
+      onOpenChange={(open) => !open && onClose()}
+      title="New user"
+      description="Creates a standalone account with no organization membership. They receive an email to set their own password."
+      footer={
+        <ModalActions
+          onCancel={onClose}
+          confirmLabel="Create user"
+          onConfirm={() =>
+            onConfirm({
+              email: email.trim(),
+              firstName: firstName.trim(),
+              lastName: lastName.trim(),
+              systemRole,
+            })
+          }
+          isPending={isPending}
+          disabled={!valid}
+        />
+      }
+    >
+      <div className="space-y-3">
+        <div className="space-y-1.5">
+          <Label htmlFor="create-user-email">Email</Label>
+          <Input
+            id="create-user-email"
+            type="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            placeholder="person@example.org"
+            autoFocus
+          />
+        </div>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <div className="space-y-1.5">
+            <Label htmlFor="create-user-first">First name</Label>
+            <Input
+              id="create-user-first"
+              value={firstName}
+              onChange={(e) => setFirstName(e.target.value)}
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="create-user-last">Last name</Label>
+            <Input
+              id="create-user-last"
+              value={lastName}
+              onChange={(e) => setLastName(e.target.value)}
+            />
+          </div>
+        </div>
+        <div className="space-y-1.5">
+          <Label htmlFor="create-user-role">Platform role</Label>
+          <NativeSelect
+            className="w-full"
+            id="create-user-role"
+            value={systemRole}
+            onChange={(e) => setSystemRole(e.target.value as SystemRole)}
+          >
+            <NativeSelectOption value="USER">User</NativeSelectOption>
+            <NativeSelectOption value="SUPER_ADMIN">Super admin</NativeSelectOption>
+          </NativeSelect>
+        </div>
+      </div>
+    </Modal>
   );
 }

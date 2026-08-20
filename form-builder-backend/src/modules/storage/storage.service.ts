@@ -4,6 +4,7 @@ import {
   NotFoundException,
   ForbiddenException,
   Logger,
+  OnModuleInit,
 } from '@nestjs/common';
 import { PutObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
@@ -75,7 +76,7 @@ const BLOCKED_EXTENSIONS = new Set([
 ]);
 
 @Injectable()
-export class StorageService {
+export class StorageService implements OnModuleInit {
   private readonly logger = new Logger(StorageService.name);
 
   constructor(
@@ -83,6 +84,51 @@ export class StorageService {
     @InjectQueue(QUEUE_NAMES.FILE_VERIFY)
     private readonly fileVerifyQueue: Queue,
   ) {}
+
+  /**
+   * Create the configured bucket if it does not exist yet.
+   *
+   * Without this, a fresh MinIO instance reports "Down" on the storage health
+   * probe forever — nothing else in the deployment ever creates the bucket,
+   * so a brand-new environment starts broken until someone runs `mc mb` by
+   * hand. Best-effort and never fatal: a storage outage at boot should not
+   * crash the API process that is supposed to report the outage.
+   */
+  async onModuleInit() {
+    try {
+      const storage = createStorageClient();
+
+      if (storage.type === 'minio') {
+        const exists = await storage.client.bucketExists(storage.bucket);
+        if (!exists) {
+          await storage.client.makeBucket(storage.bucket);
+          this.logger.log(`Created MinIO bucket "${storage.bucket}"`);
+        }
+        return;
+      }
+
+      // S3: bucket creation is normally provisioned via IaC and region-bound,
+      // but the same "nobody created it" failure is worth recovering from
+      // automatically rather than leaving the deployment down.
+      const { HeadBucketCommand, CreateBucketCommand } = await import(
+        '@aws-sdk/client-s3'
+      );
+      try {
+        await storage.client.send(
+          new HeadBucketCommand({ Bucket: storage.bucket }),
+        );
+      } catch {
+        await storage.client.send(
+          new CreateBucketCommand({ Bucket: storage.bucket }),
+        );
+        this.logger.log(`Created S3 bucket "${storage.bucket}"`);
+      }
+    } catch (err) {
+      this.logger.warn(
+        `Could not verify or create the storage bucket at startup: ${(err as Error).message}`,
+      );
+    }
+  }
 
   async generatePresignedUrl(
     formId: string,

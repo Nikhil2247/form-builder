@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Layers, ArrowLeft, ShieldCheck } from 'lucide-react';
 import { InputOTP, InputOTPGroup, InputOTPSlot, InputOTPSeparator } from '@/components/ui/input-otp';
 import { useLoginMfa } from '@/hooks/use-auth';
+import { landingRoute } from '@/config/roles';
 import { toast } from 'sonner';
 
 function MFAForm() {
@@ -26,16 +27,12 @@ function MFAForm() {
     loginMfaMutation.mutate({ mfaToken, code: value }, {
       onSuccess: (data: any) => {
         toast.success('Logged in successfully!');
+        // Shared with the password login redirect (config/roles.ts) — see its
+        // comment for why this used to send an org ADMIN to the audit log and
+        // an EDITOR to a blank new form, and could send a super admin with no
+        // membership to /dashboard, which their permissions forbid.
         const user = data.user;
-        if (user?.systemRole === 'SUPER_ADMIN') {
-          router.push('/platform');
-        } else if (user?.orgRole === 'ADMIN') {
-          router.push('/org-audit');
-        } else if (user?.orgRole === 'EDITOR') {
-          router.push('/forms/builder');
-        } else {
-          router.push('/dashboard');
-        }
+        router.push(landingRoute(user?.systemRole, user?.orgRole));
       },
       // The toast comes from the global handler; this only clears the boxes so
       // the user can retype without selecting the old code first.

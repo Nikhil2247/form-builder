@@ -27,6 +27,8 @@
     "db:seed:choices": "bun prisma/seed-choice-lists.ts",
     "// db:seed:nagaland": "Buildability test: rebuilds the Samagra Shiksha Nagaland monitoring form as configuration, with responses. Needs db:seed and db:seed:choices first. Prints a verdict on what the platform can and cannot express.",
     "db:seed:nagaland": "bun prisma/seed-nagaland-app.ts",
+    "// db:seed:real": "Wipes every table and creates only the real Vibha orgs (Punjab PMU, Nagaland PMU) and their real users plus one super admin. Requires CONFIRM_REAL_SEED=yes. Not for local dev data — see db:seed.",
+    "db:seed:real": "bun prisma/seed-real-orgs.ts",
     "db:studio": "prisma studio",
     "test": "jest",
     "test:watch": "jest --watch",

@@ -1,4 +1,10 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import {
+  Injectable,
+  NotFoundException,
+  ConflictException,
+  BadRequestException,
+} from '@nestjs/common';
+import * as crypto from 'crypto';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import {
   parsePagination,
@@ -9,6 +15,7 @@ import {
   organizationAdminSelect,
   userAdminSelect,
   auditLogSelect,
+  memberSelect,
 } from '../../common/prisma/selects';
 import { SessionCacheService } from '../../common/session/session-cache.service';
 
@@ -103,6 +110,154 @@ export class AdminService {
     ]);
 
     return paginated('organizations', organizations, pagination, total);
+  }
+
+  /** Same scheme the signup flow uses, so a platform-created org's slug looks
+   *  no different from one a user made for themselves. */
+  private generateSlug(name: string): string {
+    const baseSlug = name
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .substring(0, 100);
+    const suffix = crypto.randomBytes(3).toString('hex');
+    return `${baseSlug}-${suffix}`;
+  }
+
+  /**
+   * Create a new organization from the platform admin console.
+   *
+   * No members are attached — a super admin creating a shell workspace is not
+   * implicitly joining it (same rule PlatformRoleCard documents on the
+   * frontend). Whoever should run it gets invited afterwards, the normal way.
+   */
+  async createOrganization(data: { name: string; slug?: string }) {
+    const slug = data.slug?.trim() || this.generateSlug(data.name);
+
+    if (data.slug) {
+      const existing = await this.prisma.reader.organization.findUnique({
+        where: { slug },
+      });
+      if (existing) throw new ConflictException('This slug is already taken.');
+    }
+
+    return this.prisma.writer.organization.create({
+      data: { name: data.name, slug },
+      select: organizationAdminSelect,
+    });
+  }
+
+  /**
+   * Edit an organization's identity fields. Quotas have their own endpoint
+   * (updateOrgQuotas) — kept separate so a rename cannot accidentally carry a
+   * quota change along with it.
+   */
+  async updateOrganization(
+    orgId: string,
+    data: { name?: string; slug?: string; logoUrl?: string },
+  ) {
+    const org = await this.prisma.reader.organization.findUnique({
+      where: { id: orgId },
+    });
+    if (!org) throw new NotFoundException('Organization not found.');
+
+    if (data.slug && data.slug !== org.slug) {
+      const existing = await this.prisma.reader.organization.findUnique({
+        where: { slug: data.slug },
+      });
+      if (existing) throw new ConflictException('This slug is already taken.');
+    }
+
+    return this.prisma.writer.organization.update({
+      where: { id: orgId },
+      data: {
+        name: data.name,
+        slug: data.slug,
+        logoUrl: data.logoUrl,
+      },
+      select: organizationAdminSelect,
+    });
+  }
+
+  /**
+   * Soft-delete an organization from the platform console.
+   *
+   * Mirrors OrganizationsService.deleteOrganization (the self-service path an
+   * org's own admin uses): `deletedAt` rather than a row delete, so forms,
+   * submissions, and the audit trail survive. Every cached member session is
+   * invalidated so the org closes immediately rather than at the end of a TTL.
+   */
+  async deleteOrganization(orgId: string) {
+    const org = await this.prisma.reader.organization.findUnique({
+      where: { id: orgId },
+    });
+    if (!org) throw new NotFoundException('Organization not found.');
+    if (org.deletedAt) {
+      throw new BadRequestException('This organization is already deleted.');
+    }
+
+    const deleted = await this.prisma.writer.organization.update({
+      where: { id: orgId },
+      data: { deletedAt: new Date(), isActive: false },
+    });
+
+    await this.sessions.invalidateOrganizationMembers(orgId);
+    return deleted;
+  }
+
+  /**
+   * Attach an existing user to an organization from the platform console.
+   *
+   * The one path that does not exist anywhere else: an org's own admin can
+   * only add someone via an emailed invitation (OrganizationsService.
+   * createInvitation), which has to wait for the recipient to click accept.
+   * A platform admin bypasses that — the membership is created immediately,
+   * matching every other action in this file (suspend, quota changes) that
+   * takes effect the moment the operator confirms it rather than the moment
+   * someone else responds.
+   */
+  async addOrganizationMember(
+    orgId: string,
+    email: string,
+    role: 'ADMIN' | 'EDITOR' | 'VIEWER',
+  ) {
+    const org = await this.prisma.reader.organization.findUnique({
+      where: { id: orgId },
+    });
+    if (!org || org.deletedAt) {
+      throw new NotFoundException('Organization not found.');
+    }
+
+    const user = await this.prisma.reader.user.findUnique({
+      where: { email: email.toLowerCase() },
+    });
+    if (!user) {
+      throw new NotFoundException(
+        'No account exists with this email. Create the user first.',
+      );
+    }
+
+    const existing = await this.prisma.reader.organizationMember.findUnique({
+      where: {
+        organizationId_userId: { organizationId: orgId, userId: user.id },
+      },
+    });
+    if (existing) {
+      throw new ConflictException(
+        'This user is already a member of this organization.',
+      );
+    }
+
+    const member = await this.prisma.writer.organizationMember.create({
+      data: { organizationId: orgId, userId: user.id, role },
+      select: memberSelect,
+    });
+
+    // The membership list is part of the cached session; without this the
+    // user does not see the new workspace until the cache TTL expires.
+    await this.sessions.invalidate(user.id);
+
+    return member;
   }
 
   /**
@@ -204,9 +359,15 @@ export class AdminService {
 
   /**
    * List all users with pagination and search.
+   *
+   * Unlike organizations, a user has no separate "suspended" flag — suspension
+   * IS `deletedAt` (see AdminUsersService.setUserSuspended). Filtering it out
+   * here would make a suspended account disappear from the one screen an
+   * operator uses to reinstate it, so every account stays listed and the UI
+   * marks suspended ones instead.
    */
   async listUsers(pagination: Pagination = parsePagination(), search?: string) {
-    const where: any = { deletedAt: null };
+    const where: any = {};
 
     const term = search?.trim();
     if (term) {

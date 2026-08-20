@@ -62,7 +62,7 @@ export default function PlatformOverviewPage() {
     <PageShell>
       <PageHeader
         title="Platform"
-        description="Deployment-wide totals and administration."
+        // description="Deployment-wide totals and administration."
       />
 
       {error ? (

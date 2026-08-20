@@ -22,7 +22,7 @@ export default function PlatformAuditLogsPage() {
     <PageShell>
       <PageHeader
         title="Audit logs"
-        description="Immutable record of platform and organization activity."
+        // description="Immutable record of platform and organization activity."
       />
 
       <AuditLogTable

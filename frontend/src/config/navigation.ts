@@ -24,7 +24,6 @@ import {
   LayoutGrid,
   Settings,
   Shield,
-  ShieldCheck,
   Smartphone,
   ToggleLeft,
   Trash2,
@@ -173,12 +172,6 @@ export const platformNav: NavGroup = {
       title: 'Global dictionary',
       href: '/platform/dictionary',
       icon: BookMarked,
-      permissions: ['platform:access'],
-    },
-    {
-      title: 'Roles',
-      href: '/platform/roles',
-      icon: ShieldCheck,
       permissions: ['platform:access'],
     },
     {

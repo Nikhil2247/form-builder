@@ -43,7 +43,6 @@ export default function PlatformPage() {
               'Users',
               'Every account. Grant or revoke the super admin role, review sessions, and see which organizations someone belongs to.',
             ],
-            ['Roles', 'Reference for what each role can do.'],
             [
               'System health',
               'Dependency probes and queue depth for the instance that answered. Process memory and uptime are per-pod, not aggregate.',

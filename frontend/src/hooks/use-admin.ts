@@ -38,6 +38,8 @@ export interface AdminUser {
   emailVerified?: boolean;
   mfaEnabled?: boolean;
   createdAt: string;
+  /** Soft delete. Non-null means the account is suspended and cannot sign in. */
+  deletedAt?: string | null;
   organization?: { id: string; name: string; role?: string } | null;
   memberships?: Array<{ organization: { id: string; name: string }; role: string }>;
 }
@@ -142,6 +144,27 @@ export function useAdminUsers({
       return toPage<AdminUser>(raw, 'users', page, limit);
     },
     placeholderData: keepPreviousData,
+  });
+}
+
+export function useCreateUser() {
+  const qc = useQueryClient();
+  return useMutation({
+    meta: { errorFallback: 'Could not create this user' },
+    mutationFn: (data: {
+      email: string;
+      firstName: string;
+      lastName: string;
+      systemRole?: SystemRole;
+    }) =>
+      fetchApi('/admin/users', {
+        method: 'POST',
+        body: JSON.stringify(data),
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['admin', 'users'] });
+      qc.invalidateQueries({ queryKey: ['admin', 'dashboard'] });
+    },
   });
 }
 
@@ -479,6 +502,41 @@ export function useUpdateOrgQuotas() {
   });
 }
 
+/**
+ * Add an existing user to an organization, effective immediately — the
+ * platform-admin route to a membership, distinct from the emailed invitation
+ * an org's own admin sends (which waits on the recipient to accept).
+ */
+export function useAddOrgMember() {
+  const qc = useQueryClient();
+  return useMutation({
+    meta: { errorFallback: 'Could not add this member' },
+    mutationFn: async ({
+      orgId,
+      email,
+      role,
+    }: {
+      orgId: string;
+      email: string;
+      role: OrgRole;
+    }) =>
+      unwrap<AdminOrgMember>(
+        await fetchApi(`/admin/organizations/${orgId}/members`, {
+          method: 'POST',
+          body: JSON.stringify({ email, role }),
+        }),
+      ),
+    onSuccess: (data, variables) => {
+      qc.invalidateQueries({ queryKey: ['admin', 'organization', variables.orgId] });
+      qc.invalidateQueries({ queryKey: ['admin', 'organizations'] });
+      qc.invalidateQueries({ queryKey: ['admin', 'users'] });
+      if (data?.user?.id) {
+        qc.invalidateQueries({ queryKey: ['admin', 'user', data.user.id] });
+      }
+    },
+  });
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Mutations
 // ─────────────────────────────────────────────────────────────────────────────
@@ -506,6 +564,58 @@ export function useActivateOrganization() {
     meta: { errorFallback: 'Could not reactivate this organization' },
     mutationFn: (orgId: string) =>
       fetchApi(`/admin/organizations/${orgId}/activate`, { method: 'POST' }),
+    onSuccess: (_data, orgId) => {
+      qc.invalidateQueries({ queryKey: ['admin', 'organizations'] });
+      qc.invalidateQueries({ queryKey: ['admin', 'organization', orgId] });
+      qc.invalidateQueries({ queryKey: ['admin', 'dashboard'] });
+    },
+  });
+}
+
+export function useCreateOrganization() {
+  const qc = useQueryClient();
+  return useMutation({
+    meta: { errorFallback: 'Could not create this organization' },
+    mutationFn: (data: { name: string; slug?: string }) =>
+      fetchApi('/admin/organizations', {
+        method: 'POST',
+        body: JSON.stringify(data),
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['admin', 'organizations'] });
+      qc.invalidateQueries({ queryKey: ['admin', 'dashboard'] });
+    },
+  });
+}
+
+export interface OrgProfileUpdate {
+  name?: string;
+  slug?: string;
+  logoUrl?: string;
+}
+
+export function useUpdateOrganization() {
+  const qc = useQueryClient();
+  return useMutation({
+    meta: { errorFallback: 'Could not save this organization' },
+    mutationFn: ({ orgId, data }: { orgId: string; data: OrgProfileUpdate }) =>
+      fetchApi(`/admin/organizations/${orgId}`, {
+        method: 'PATCH',
+        body: JSON.stringify(data),
+      }),
+    onSuccess: (_data, variables) => {
+      qc.invalidateQueries({ queryKey: ['admin', 'organizations'] });
+      qc.invalidateQueries({ queryKey: ['admin', 'organization', variables.orgId] });
+    },
+  });
+}
+
+export function useDeleteOrganization() {
+  const qc = useQueryClient();
+  return useMutation({
+    meta: { errorFallback: 'Could not delete this organization' },
+    mutationFn: (orgId: string) =>
+      fetchApi(`/admin/organizations/${orgId}`, { method: 'DELETE' }),
     onSuccess: (_data, orgId) => {
       qc.invalidateQueries({ queryKey: ['admin', 'organizations'] });
       qc.invalidateQueries({ queryKey: ['admin', 'organization', orgId] });

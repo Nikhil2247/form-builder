@@ -74,11 +74,11 @@ export function PublicHeader() {
               optimizer 400s on local SVGs unless `dangerouslyAllowSVG` is set;
               not worth loosening for a static decorative logotype. */}
           <img
-            src="/logos/impactlens-logo-large.svg"
+            src="/logos/impactlens-logo-medium.svg"
             alt="ImpactLens"
-            width={180}
-            height={58}
-            className="h-18 w-auto"
+            width={300}
+            height={72}
+            className="h-12 w-auto"
           />
         </Link>
 

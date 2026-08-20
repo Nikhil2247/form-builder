@@ -31,7 +31,7 @@ export default function PlatformFeaturesPage() {
     <PageShell>
       <PageHeader
         title="Features"
-        description="Turn capabilities on for the whole platform, or for one organization at a time."
+        // description="Turn capabilities on for the whole platform, or for one organization at a time."
       />
 
       {error ? (

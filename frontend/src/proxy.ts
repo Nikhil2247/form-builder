@@ -142,8 +142,15 @@ export function proxy(req: NextRequest) {
   }
 
   if (AUTH_PAGES.includes(pathname) && hasSession) {
+    // Cannot pick the real destination here — the edge only sees that the
+    // refresh-token cookie exists, not the role it belongs to (the access
+    // token carrying systemRole/orgRole lives in memory, client-side only).
+    // Hardcoding a destination that requires org membership (it used to be
+    // /dashboard) sent a super admin with no organization straight into a
+    // RoleGuard rejection. /redirecting has real session data and applies
+    // the one shared landingRoute rule instead.
     const url = req.nextUrl.clone();
-    url.pathname = '/dashboard';
+    url.pathname = '/redirecting';
     url.search = '';
     return NextResponse.redirect(url);
   }

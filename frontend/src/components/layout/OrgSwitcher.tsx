@@ -36,18 +36,9 @@ export function OrgSwitcher({ isCollapsed = false }: OrgSwitcherProps) {
 
   const active = organizations.find((org) => org.id === activeOrgId) ?? organizations[0];
 
-  if (!active) {
-    return (
-      <div
-        className={cn(
-          'px-3 py-2 text-xs text-muted-foreground',
-          isCollapsed && 'md:hidden',
-        )}
-      >
-        No workspace
-      </div>
-    );
-  }
+  // The caller (Sidebar) only mounts this component when there is at least one
+  // organization; this is just the defensive fallback for that invariant.
+  if (!active) return null;
 
   const initial = active.name?.[0]?.toUpperCase() ?? '?';
 

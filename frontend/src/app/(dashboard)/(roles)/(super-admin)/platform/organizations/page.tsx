@@ -1,9 +1,19 @@
 'use client';
 
 import React, { useState } from 'react';
-import { Building2, MoreHorizontal, ShieldAlert, ShieldCheck } from 'lucide-react';
+import {
+  Building2,
+  MoreHorizontal,
+  Pencil,
+  Plus,
+  ShieldAlert,
+  ShieldCheck,
+  Trash2,
+} from 'lucide-react';
 import { toast } from 'sonner';
 
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import {
@@ -32,6 +42,9 @@ import {
   useAdminOrganizations,
   useSuspendOrganization,
   useActivateOrganization,
+  useCreateOrganization,
+  useUpdateOrganization,
+  useDeleteOrganization,
   type AdminOrganization,
 } from '@/hooks/use-admin';
 
@@ -45,9 +58,15 @@ export default function PlatformOrganizationsPage() {
 
   const suspendOrg = useSuspendOrganization();
   const activateOrg = useActivateOrganization();
+  const createOrg = useCreateOrganization();
+  const updateOrg = useUpdateOrganization();
+  const deleteOrg = useDeleteOrganization();
 
   const [suspendTarget, setSuspendTarget] = useState<AdminOrganization | null>(null);
   const [activateTarget, setActivateTarget] = useState<AdminOrganization | null>(null);
+  const [creating, setCreating] = useState(false);
+  const [editTarget, setEditTarget] = useState<AdminOrganization | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<AdminOrganization | null>(null);
 
   const orgs = data?.items ?? [];
   const total = data?.pagination.total ?? 0;
@@ -131,6 +150,9 @@ export default function PlatformOrganizationsPage() {
             <MoreHorizontal className="size-4" />
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
+            <DropdownMenuItem onClick={() => setEditTarget(org)} className="cursor-pointer">
+              <Pencil className="mr-2 size-3.5" /> Edit
+            </DropdownMenuItem>
             {org.status === 'SUSPENDED' ? (
               <DropdownMenuItem onClick={() => setActivateTarget(org)} className="cursor-pointer">
                 <ShieldCheck className="mr-2 size-3.5" /> Reactivate
@@ -143,6 +165,12 @@ export default function PlatformOrganizationsPage() {
                 <ShieldAlert className="mr-2 size-3.5" /> Suspend
               </DropdownMenuItem>
             )}
+            <DropdownMenuItem
+              onClick={() => setDeleteTarget(org)}
+              className="cursor-pointer text-destructive focus:bg-destructive/10 focus:text-destructive"
+            >
+              <Trash2 className="mr-2 size-3.5" /> Delete
+            </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
       ),
@@ -153,7 +181,12 @@ export default function PlatformOrganizationsPage() {
     <PageShell>
       <PageHeader
         title="Organizations"
-        description="Every tenant on this deployment."
+        // description="Every tenant on this deployment."
+        actions={
+          <Button size="sm" className="gap-2" onClick={() => setCreating(true)}>
+            <Plus className="size-4" /> New organization
+          </Button>
+        }
       />
 
       <Toolbar>
@@ -232,7 +265,168 @@ export default function PlatformOrganizationsPage() {
           }
         }}
       />
+
+      {creating && (
+        <CreateOrgModal
+          onClose={() => setCreating(false)}
+          isPending={createOrg.isPending}
+          onConfirm={async (data) => {
+            try {
+              await createOrg.mutateAsync(data);
+              toast.success(`${data.name} created`);
+              setCreating(false);
+            } catch {
+              // Reported globally; the modal stays open with the fields filled in.
+            }
+          }}
+        />
+      )}
+
+      {editTarget && (
+        <EditOrgModal
+          org={editTarget}
+          onClose={() => setEditTarget(null)}
+          isPending={updateOrg.isPending}
+          onConfirm={async (data) => {
+            try {
+              await updateOrg.mutateAsync({ orgId: editTarget.id, data });
+              toast.success(`${data.name || editTarget.name} updated`);
+              setEditTarget(null);
+            } catch {
+              // Reported globally; the modal stays open with the edits typed.
+            }
+          }}
+        />
+      )}
+
+      <ConfirmDialog
+        open={!!deleteTarget}
+        onOpenChange={(open) => !open && setDeleteTarget(null)}
+        title="Delete organization"
+        description={
+          <>
+            {deleteTarget?.name} and every membership in it will be removed from view immediately.
+            Its forms, submissions, and audit trail are retained, not erased.
+          </>
+        }
+        confirmLabel="Delete organization"
+        confirmText={deleteTarget?.name}
+        isPending={deleteOrg.isPending}
+        onConfirm={async () => {
+          if (!deleteTarget) return;
+          try {
+            await deleteOrg.mutateAsync(deleteTarget.id);
+            toast.success(`${deleteTarget.name} deleted`);
+            setDeleteTarget(null);
+          } catch {
+            // Reported globally.
+          }
+        }}
+      />
     </PageShell>
+  );
+}
+
+/** Name + optional slug. Leaving the slug blank generates one, same as signup. */
+function CreateOrgModal({
+  onClose,
+  onConfirm,
+  isPending,
+}: {
+  onClose: () => void;
+  onConfirm: (data: { name: string; slug?: string }) => void;
+  isPending: boolean;
+}) {
+  const [name, setName] = useState('');
+  const [slug, setSlug] = useState('');
+
+  const valid = name.trim().length >= 2;
+
+  return (
+    <Modal
+      open
+      onOpenChange={(open) => !open && onClose()}
+      title="New organization"
+      description="Creates an empty workspace with no members. Invite someone to it from the organization's own Team settings."
+      footer={
+        <ModalActions
+          onCancel={onClose}
+          confirmLabel="Create organization"
+          onConfirm={() => onConfirm({ name: name.trim(), slug: slug.trim() || undefined })}
+          isPending={isPending}
+          disabled={!valid}
+        />
+      }
+    >
+      <div className="space-y-3">
+        <div className="space-y-1.5">
+          <Label htmlFor="create-org-name">Name</Label>
+          <Input
+            id="create-org-name"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="Acme Foundation"
+            autoFocus
+          />
+        </div>
+        <div className="space-y-1.5">
+          <Label htmlFor="create-org-slug">Slug (optional)</Label>
+          <Input
+            id="create-org-slug"
+            value={slug}
+            onChange={(e) => setSlug(e.target.value)}
+            placeholder="Generated automatically if left blank"
+          />
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+/** Identity fields only. Quotas are edited from the organization's own detail page. */
+function EditOrgModal({
+  org,
+  onClose,
+  onConfirm,
+  isPending,
+}: {
+  org: AdminOrganization;
+  onClose: () => void;
+  onConfirm: (data: { name?: string; slug?: string }) => void;
+  isPending: boolean;
+}) {
+  const [name, setName] = useState(org.name);
+  const [slug, setSlug] = useState(org.slug);
+
+  const valid = name.trim().length >= 2 && slug.trim().length > 0;
+  const dirty = name.trim() !== org.name || slug.trim() !== org.slug;
+
+  return (
+    <Modal
+      open
+      onOpenChange={(open) => !open && onClose()}
+      title="Edit organization"
+      footer={
+        <ModalActions
+          onCancel={onClose}
+          confirmLabel="Save changes"
+          onConfirm={() => onConfirm({ name: name.trim(), slug: slug.trim() })}
+          isPending={isPending}
+          disabled={!valid || !dirty}
+        />
+      }
+    >
+      <div className="space-y-3">
+        <div className="space-y-1.5">
+          <Label htmlFor="edit-org-name">Name</Label>
+          <Input id="edit-org-name" value={name} onChange={(e) => setName(e.target.value)} autoFocus />
+        </div>
+        <div className="space-y-1.5">
+          <Label htmlFor="edit-org-slug">Slug</Label>
+          <Input id="edit-org-slug" value={slug} onChange={(e) => setSlug(e.target.value)} />
+        </div>
+      </div>
+    </Modal>
   );
 }
 

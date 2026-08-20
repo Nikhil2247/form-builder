@@ -3,10 +3,16 @@ import {
   NotFoundException,
   BadRequestException,
   ForbiddenException,
+  ConflictException,
 } from '@nestjs/common';
+import * as argon2 from 'argon2';
+import * as crypto from 'crypto';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
+import { MailService } from '../mail/mail.service';
 import { SessionCacheService } from '../../common/session/session-cache.service';
+import { frontendUrl } from '../auth/auth.service';
+import type { CreateUserDto } from './dto/create-user.dto';
 
 /**
  * Platform-level user administration.
@@ -28,7 +34,93 @@ export class AdminUsersService {
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
     private readonly sessions: SessionCacheService,
+    private readonly mail: MailService,
   ) {}
+
+  /**
+   * Create a platform-level account from the admin console.
+   *
+   * No organization is attached — same rule createOrganization documents on
+   * the org side: a super admin creating an account is not implicitly a
+   * member of anything. The account starts with no usable password (a random
+   * one it will never be told) and is immediately sent a reset-password link,
+   * the same email `forgotPassword` sends, so the new user's first action is
+   * choosing their own credential rather than being handed one.
+   */
+  async createUser(dto: CreateUserDto, actingUserId: string) {
+    const email = dto.email.toLowerCase();
+
+    const existing = await this.prisma.reader.user.findUnique({
+      where: { email },
+    });
+    if (existing) {
+      throw new ConflictException('A user with this email already exists.');
+    }
+
+    const passwordHash = await argon2.hash(
+      crypto.randomBytes(32).toString('hex'),
+      {
+        type: argon2.argon2id,
+        timeCost: 3,
+        memoryCost: 65536,
+        parallelism: 4,
+      },
+    );
+
+    const user = await this.prisma.writer.user.create({
+      data: {
+        email,
+        passwordHash,
+        firstName: dto.firstName.trim(),
+        lastName: dto.lastName.trim(),
+        systemRole: dto.systemRole ?? 'USER',
+      },
+      select: {
+        id: true,
+        email: true,
+        firstName: true,
+        lastName: true,
+        systemRole: true,
+        emailVerified: true,
+        createdAt: true,
+      },
+    });
+
+    const rawToken = crypto.randomBytes(32).toString('hex');
+    const tokenHash = crypto
+      .createHash('sha256')
+      .update(rawToken)
+      .digest('hex');
+    const expiresAt = new Date();
+    expiresAt.setHours(expiresAt.getHours() + 1);
+
+    await this.prisma.writer.passwordResetToken.create({
+      data: { userId: user.id, tokenHash, expiresAt },
+    });
+
+    await this.mail
+      .sendPasswordResetEmail(
+        user.email,
+        `${frontendUrl()}/reset-password?token=${rawToken}`,
+      )
+      .catch((err) =>
+        // A platform admin creating an account should not fail because the
+        // mail provider hiccupped — the account still exists and the admin
+        // can resend via "forgot password" from the sign-in screen.
+        console.error('Failed to send new-account reset email:', err),
+      );
+
+    this.audit.log({
+      organizationId: null,
+      userId: actingUserId,
+      action: 'user.created',
+      resource: 'user',
+      resourceId: user.id,
+      metadata: { email: user.email, systemRole: user.systemRole },
+    });
+
+    return user;
+  }
 
   /** Full profile: memberships with roles, session count, security posture. */
   async getUserDetail(userId: string) {

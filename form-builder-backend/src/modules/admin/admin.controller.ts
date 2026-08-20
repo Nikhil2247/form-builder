@@ -3,6 +3,7 @@ import {
   Get,
   Post,
   Patch,
+  Delete,
   Param,
   Query,
   UseGuards,
@@ -19,6 +20,10 @@ import { SuperAdminGuard } from '../../common/guards/super-admin.guard';
 import { PaginationQueryDto } from '../../common/pagination/pagination-query.dto';
 import { AuditLogQueryDto } from '../../common/pagination/audit-query.dto';
 import { parsePagination } from '../../common/pagination/pagination';
+import { CreateOrganizationDto } from '../organizations/dto/create-organization.dto';
+import { UpdateOrganizationDto } from '../organizations/dto/update-organization.dto';
+import { CreateUserDto } from './dto/create-user.dto';
+import { AddOrgMemberDto } from './dto/add-org-member.dto';
 
 /**
  * Platform administration endpoints — accessible only by SUPER_ADMIN users.
@@ -69,6 +74,11 @@ export class AdminController {
   // ════════════════════════════════════════════════════════════════════════════
   // USER ADMINISTRATION
   // ════════════════════════════════════════════════════════════════════════════
+
+  @Post('users')
+  async createUser(@Body() dto: CreateUserDto, @Req() req: Request) {
+    return this.adminUsers.createUser(dto, (req.user as any).sub);
+  }
 
   @Get('users/:userId')
   async getUserDetail(@Param('userId', new ParseUUIDPipe()) userId: string) {
@@ -156,9 +166,35 @@ export class AdminController {
     );
   }
 
+  @Post('organizations')
+  async createOrganization(@Body() dto: CreateOrganizationDto) {
+    return this.adminService.createOrganization(dto);
+  }
+
   @Get('organizations/:orgId')
   async getOrganizationDetail(@Param('orgId') orgId: string) {
     return this.adminService.getOrganizationDetail(orgId);
+  }
+
+  @Patch('organizations/:orgId')
+  async updateOrganization(
+    @Param('orgId') orgId: string,
+    @Body() dto: UpdateOrganizationDto,
+  ) {
+    return this.adminService.updateOrganization(orgId, dto);
+  }
+
+  @Delete('organizations/:orgId')
+  async deleteOrganization(@Param('orgId') orgId: string) {
+    return this.adminService.deleteOrganization(orgId);
+  }
+
+  @Post('organizations/:orgId/members')
+  async addOrganizationMember(
+    @Param('orgId') orgId: string,
+    @Body() dto: AddOrgMemberDto,
+  ) {
+    return this.adminService.addOrganizationMember(orgId, dto.email, dto.role);
   }
 
   @Post('organizations/:orgId/suspend')

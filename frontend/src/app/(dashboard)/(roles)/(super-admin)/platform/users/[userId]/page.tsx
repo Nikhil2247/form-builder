@@ -9,16 +9,19 @@ import {
   KeyRound,
   Loader2,
   LogOut,
+  Plus,
+  Search,
   ShieldAlert,
   ShieldCheck,
+  Trash2,
   UserCheck,
-  UserX,
   Users,
 } from 'lucide-react';
 import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
+import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select';
 import {
@@ -32,16 +35,22 @@ import {
   ButtonLink,
   CopyField,
   FormattedDate,
+  Modal,
+  ModalActions,
   RelativeTime,
   type DataTableColumn,
 } from '@/components/shared';
+import { cn } from '@/lib/utils';
 import {
+  useAddOrgMember,
+  useAdminOrganizations,
   useAdminUser,
   useResetUserMfa,
   useRevokeUserSessions,
   useSetSystemRole,
   useSetUserOrgRole,
   useSetUserSuspended,
+  type AdminOrganization,
   type AdminUserDetail,
   type AdminUserMembership,
   type OrgRole,
@@ -181,7 +190,7 @@ export default function PlatformUserDetailPage() {
                 className="gap-2"
                 onClick={() => setConfirm('suspend')}
               >
-                <UserX className="size-4" /> Suspend account
+                <Trash2 className="size-4" /> Delete account
               </Button>
             )
           ) : undefined
@@ -192,8 +201,9 @@ export default function PlatformUserDetailPage() {
         <div className="flex flex-wrap items-center gap-2 rounded-xl border border-destructive/20 bg-destructive/5 px-4 py-3 text-sm text-destructive">
           <ShieldAlert className="size-4 shrink-0" />
           <span>
-            This account is suspended and cannot sign in. Its forms, submissions, and audit trail
-            are untouched — suspension is a soft delete.
+            This account is deleted and cannot sign in. Its forms, submissions, and audit trail
+            are untouched — deletion is a soft delete, and the account can be reinstated at any
+            time.
           </span>
         </div>
       )}
@@ -224,14 +234,14 @@ export default function PlatformUserDetailPage() {
       <ConfirmDialog
         open={confirm === 'suspend'}
         onOpenChange={(open) => !open && setConfirm(null)}
-        title="Suspend this account"
+        title="Delete this account"
         description={
           <>
             {user?.email} will be signed out of every device and blocked from signing in. Nothing
             they created is deleted, and the account can be reinstated at any time.
           </>
         }
-        confirmLabel="Suspend account"
+        confirmLabel="Delete account"
         confirmText={user?.email}
         isPending={setSuspended.isPending}
         onConfirm={() => handleSuspension(true)}
@@ -420,6 +430,11 @@ function PlatformRoleCard({ user }: { user: AdminUserDetail }) {
 const ORG_ROLES: OrgRole[] = ['ADMIN', 'EDITOR', 'VIEWER'];
 
 function MembershipsSection({ user }: { user: AdminUserDetail }) {
+  const addMember = useAddOrgMember();
+  const [adding, setAdding] = useState(false);
+
+  const memberOrgIds = new Set(user.memberships.map((m) => m.organization.id));
+
   const columns: DataTableColumn<AdminUserMembership>[] = [
     {
       id: 'organization',
@@ -496,9 +511,14 @@ function MembershipsSection({ user }: { user: AdminUserDetail }) {
     <section className="space-y-3">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
         <h2 className="text-sm font-semibold">Organization memberships</h2>
-        <span className="text-xs text-muted-foreground">
-          Changing a role here is recorded in that organization’s audit log.
-        </span>
+        <div className="flex items-center gap-3">
+          <span className="text-xs text-muted-foreground">
+            Changing a role here is recorded in that organization’s audit log.
+          </span>
+          <Button size="sm" variant="outline" className="gap-2" onClick={() => setAdding(true)}>
+            <Plus className="size-3.5" /> Add to organization
+          </Button>
+        </div>
       </div>
 
       <DataTable
@@ -512,10 +532,141 @@ function MembershipsSection({ user }: { user: AdminUserDetail }) {
             icon={Building2}
             title="No organization memberships"
             description="This account belongs to no organization, so it can only sign in — there is nothing for it to open."
+            action={
+              <Button size="sm" className="gap-2" onClick={() => setAdding(true)}>
+                <Plus className="size-3.5" /> Add to organization
+              </Button>
+            }
           />
         }
       />
+
+      {adding && (
+        <AddToOrgModal
+          alreadyMemberOf={memberOrgIds}
+          onClose={() => setAdding(false)}
+          isPending={addMember.isPending}
+          onConfirm={async (org, role) => {
+            try {
+              await addMember.mutateAsync({ orgId: org.id, email: user.email, role });
+              toast.success(`${user.email} added to ${org.name}`);
+              setAdding(false);
+            } catch {
+              // Reported globally; the modal stays open with the selection intact.
+            }
+          }}
+        />
+      )}
     </section>
+  );
+}
+
+/** Org picker with an inline search, since an admin console can hold far too
+ *  many organizations to show as a plain dropdown. */
+function AddToOrgModal({
+  alreadyMemberOf,
+  onClose,
+  onConfirm,
+  isPending,
+}: {
+  alreadyMemberOf: Set<string>;
+  onClose: () => void;
+  onConfirm: (org: AdminOrganization, role: OrgRole) => void;
+  isPending: boolean;
+}) {
+  const [search, setSearch] = useState('');
+  const [selected, setSelected] = useState<AdminOrganization | null>(null);
+  const [role, setRole] = useState<OrgRole>('VIEWER');
+
+  const { data, isFetching } = useAdminOrganizations({ page: 1, limit: 8, search });
+  const results = (data?.items ?? []).filter((org) => !alreadyMemberOf.has(org.id));
+
+  return (
+    <Modal
+      open
+      onOpenChange={(open) => !open && onClose()}
+      title="Add to organization"
+      description="Grants membership immediately — no invitation email is sent."
+      footer={
+        <ModalActions
+          onCancel={onClose}
+          confirmLabel="Add to organization"
+          onConfirm={() => selected && onConfirm(selected, role)}
+          isPending={isPending}
+          disabled={!selected}
+        />
+      }
+    >
+      <div className="space-y-3">
+        {selected ? (
+          <div className="flex items-center justify-between gap-3 rounded-lg border border-border bg-muted/30 px-3 py-2">
+            <div className="min-w-0">
+              <div className="truncate text-sm font-medium text-foreground">{selected.name}</div>
+              <div className="truncate font-mono text-xs text-muted-foreground">{selected.slug}</div>
+            </div>
+            <Button variant="ghost" size="sm" onClick={() => setSelected(null)}>
+              Change
+            </Button>
+          </div>
+        ) : (
+          <>
+            <div className="space-y-1.5">
+              <Label htmlFor="org-search">Organization</Label>
+              <div className="relative">
+                <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+                <Input
+                  id="org-search"
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  placeholder="Search by name or slug…"
+                  className="pl-8"
+                  autoFocus
+                />
+              </div>
+            </div>
+
+            <div className="max-h-56 space-y-1 overflow-y-auto rounded-lg border border-border p-1">
+              {isFetching ? (
+                <p className="p-3 text-center text-xs text-muted-foreground">Searching…</p>
+              ) : results.length === 0 ? (
+                <p className="p-3 text-center text-xs text-muted-foreground">
+                  {search ? 'No organizations match.' : 'Start typing to search.'}
+                </p>
+              ) : (
+                results.map((org) => (
+                  <button
+                    key={org.id}
+                    type="button"
+                    onClick={() => setSelected(org)}
+                    className={cn(
+                      'flex w-full flex-col items-start gap-0.5 rounded-md px-3 py-2 text-left transition-colors',
+                      'hover:bg-muted',
+                    )}
+                  >
+                    <span className="truncate text-sm font-medium text-foreground">{org.name}</span>
+                    <span className="truncate font-mono text-xs text-muted-foreground">{org.slug}</span>
+                  </button>
+                ))
+              )}
+            </div>
+          </>
+        )}
+
+        <div className="space-y-1.5">
+          <Label htmlFor="org-role">Role</Label>
+          <NativeSelect
+            className="w-full"
+            id="org-role"
+            value={role}
+            onChange={(e) => setRole(e.target.value as OrgRole)}
+          >
+            <NativeSelectOption value="ADMIN">Admin</NativeSelectOption>
+            <NativeSelectOption value="EDITOR">Editor</NativeSelectOption>
+            <NativeSelectOption value="VIEWER">Viewer</NativeSelectOption>
+          </NativeSelect>
+        </div>
+      </div>
+    </Modal>
   );
 }
 

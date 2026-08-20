@@ -7,7 +7,6 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Layers } from 'lucide-react';
 import { useLogin } from '@/hooks/use-auth';
 import { toast } from 'sonner';
 
@@ -46,10 +45,17 @@ function LoginForm() {
   return (
     <div className="space-y-6">
       <div className="flex flex-col space-y-2 text-center lg:text-left">
-        <div className="flex lg:hidden justify-center mb-4 text-primary">
-          <div className="bg-primary/10 p-3 rounded-2xl">
-            <Layers size={32} />
-          </div>
+        <div className="flex lg:hidden justify-center mb-4">
+          {/* eslint-disable-next-line @next/next/no-img-element -- next/image's
+              optimizer 400s on local SVGs unless `dangerouslyAllowSVG` is set;
+              not worth loosening for a static decorative logotype. */}
+          <img
+            src="/logos/impactlens-logo-medium.svg"
+            alt="ImpactLens"
+            width={300}
+            height={72}
+            className="h-12 w-auto"
+          />
         </div>
         <h1 className="text-2xl font-semibold tracking-tight">Welcome back</h1>
         <p className="text-sm text-muted-foreground">
