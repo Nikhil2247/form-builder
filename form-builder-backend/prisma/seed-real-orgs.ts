@@ -23,6 +23,12 @@
  * Every account shares TEMP_PASSWORD below — communicate it out of band and
  * have each person change it after first login.
  *
+ * ── Feature flags ────────────────────────────────────────────────────────────
+ *   All flags are seeded globally-OFF so future orgs start with a blank slate.
+ *   Both PMU orgs receive an explicit org-level override enabling every flag
+ *   that has been shipped (FORM_APPS, FORM_RULES, AI_ASSISTANT).
+ *   Flags must stay in sync with FEATURE_KEYS in feature-flags.service.ts.
+ *
  * Run with: bun prisma/seed-real-orgs.ts
  * There is no dry-run mode and no confirmation prompt — it truncates every
  * table in whatever database DATABASE_URL points at as soon as it runs.
@@ -126,6 +132,51 @@ const ORGS: RealOrg[] = [
 ];
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Feature flags — keep in sync with FEATURE_KEYS in feature-flags.service.ts
+// ─────────────────────────────────────────────────────────────────────────────
+
+interface FlagDef {
+  key: string;
+  name: string;
+  description: string;
+  /** Global default. Set false so unknown orgs stay opted-out by default. */
+  isEnabledGlobally: boolean;
+}
+
+/**
+ * All flags the platform knows about.
+ * Every org listed in ORGS gets an explicit override enabling each flag so
+ * PMU staff can use every feature that has been shipped.
+ */
+const FEATURE_FLAGS: FlagDef[] = [
+  {
+    key: 'FORM_APPS',
+    name: 'Form Apps',
+    description:
+      'Enables the Form App builder — a bundled data-entry surface that links'
+      + ' a subject type (patient, household, school) to a sequence of forms,'
+      + ' supporting registration, follow-up visits, and longitudinal records.',
+    isEnabledGlobally: false,
+  },
+  {
+    key: 'FORM_RULES',
+    name: 'Form Rules & Conditional Logic',
+    description:
+      'Enables the visual rules / conditional-logic editor inside the form'
+      + ' builder: skip-logic, show/hide, jump-to-page, and calculation fields.',
+    isEnabledGlobally: false,
+  },
+  {
+    key: 'AI_ASSISTANT',
+    name: 'AI Assistant',
+    description:
+      'Enables the AI-powered assistant panel (org insights, help guide,'
+      + ' idea suggestions). Requires a valid ANTHROPIC_API_KEY in env.',
+    isEnabledGlobally: false,
+  },
+];
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Seed
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -148,6 +199,18 @@ async function main() {
     },
   });
   console.log(`  1 super admin (${SUPER_ADMIN.email})`);
+
+  // ── Feature flags (global definitions) ────────────────────────────────────
+  await prisma.featureFlag.createMany({
+    data: FEATURE_FLAGS.map((f) => ({
+      key: f.key,
+      name: f.name,
+      description: f.description,
+      isEnabledGlobally: f.isEnabledGlobally,
+    })),
+    skipDuplicates: true,
+  });
+  console.log(`  ${FEATURE_FLAGS.length} feature flag(s) seeded (all globally OFF by default)`);
 
   // ── Orgs + their users ──────────────────────────────────────────────────────
   for (const org of ORGS) {
@@ -188,10 +251,22 @@ async function main() {
       })),
     });
 
+    // ── Per-org feature-flag overrides (enable everything for real PMU orgs) ──
+    await prisma.organizationFeatureFlag.createMany({
+      data: FEATURE_FLAGS.map((f) => ({
+        organizationId: orgId,
+        flagKey: f.key,
+        isEnabled: true, // opt every shipped feature in for real orgs
+      })),
+      skipDuplicates: true,
+    });
+
     const roleSummary = members
       .map(({ role }, index) => `${org.users[index].email.split('@')[0]}:${role}`)
       .join(', ');
+    const flagSummary = FEATURE_FLAGS.map((f) => f.key).join(', ');
     console.log(`  ${org.name} (${org.slug}) — ${members.length} member(s) — ${roleSummary}`);
+    console.log(`    └─ flags enabled: ${flagSummary}`);
   }
 
   console.log('\nDone. Every account\'s password is:', TEMP_PASSWORD);

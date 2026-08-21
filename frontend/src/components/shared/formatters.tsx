@@ -127,6 +127,13 @@ export function formatCompact(value: number | null | undefined): string {
   }).format(value);
 }
 
+/** Cost in USD — sub-cent turns read as "$0.00" without this, which looks like a bug. */
+export function formatCost(usd: number | null | undefined): string {
+  if (usd === null || usd === undefined || !Number.isFinite(usd)) return '—';
+  if (usd < 0.01) return '< $0.01';
+  return `$${usd.toFixed(2)}`;
+}
+
 export function formatBytes(bytes: number | null | undefined): string {
   if (bytes === null || bytes === undefined || !Number.isFinite(bytes)) return '—';
   if (bytes === 0) return '0 B';

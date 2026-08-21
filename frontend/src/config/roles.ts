@@ -98,6 +98,7 @@ export const PERMISSIONS = [
   'billing:manage',
   'audit:view',
   'platform:access',
+  'assistant:use',
 ] as const;
 
 export type Permission = (typeof PERMISSIONS)[number];
@@ -119,6 +120,7 @@ const EDITOR_PERMISSIONS: Permission[] = [
   'submission:export',
   'submission:delete',
   'template:use',
+  'assistant:use',
 ];
 
 const ADMIN_PERMISSIONS: Permission[] = [

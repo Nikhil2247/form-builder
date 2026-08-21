@@ -1,8 +1,8 @@
 'use client';
 
-import React from 'react';
+import React, { useState } from 'react';
 import dynamic from 'next/dynamic';
-import { AlertCircle, Calculator, Star } from 'lucide-react';
+import { AlertCircle, Calculator, MapPin, Star } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
@@ -652,6 +652,16 @@ function QuestionControl({
     case 'REPEATING_SECTION':
       return <RepeatingSectionControl q={q} value={value} onChange={onChange} />;
 
+    case 'GPS_LOCATION':
+      return (
+        <GpsLocationControl
+          value={value}
+          onChange={onChange}
+          labelId={labelId}
+          describedBy={shared['aria-describedby'] as string | undefined}
+        />
+      );
+
     default:
       return (
         <Input
@@ -816,6 +826,130 @@ function MatrixControl({
           ))}
         </tbody>
       </table>
+    </div>
+  );
+}
+
+/**
+ * GPS location capture.
+ *
+ * The primary path is the browser's own Geolocation API — one tap, no typing,
+ * which is what a field surveyor standing at a school actually wants. Manual
+ * lat/lng entry is the fallback for a desktop browser or a denied permission,
+ * not the default: an unlabelled pair of number inputs is a worse first
+ * impression than a single "Use my current location" button.
+ *
+ * A `role="group"` composite rather than a single labelled control — like
+ * MATRIX and the choice fieldsets above — because it is a button plus an
+ * optional manual-entry pair, not one element a `<label for>` could name.
+ */
+function GpsLocationControl({
+  value,
+  onChange,
+  labelId,
+  describedBy,
+}: {
+  value: unknown;
+  onChange: (value: unknown) => void;
+  labelId: string;
+  describedBy?: string;
+}) {
+  const [status, setStatus] = useState<'idle' | 'locating'>('idle');
+  const [error, setError] = useState('');
+  const [manual, setManual] = useState(false);
+
+  const point =
+    value && typeof value === 'object' && !Array.isArray(value)
+      ? (value as { lat?: number; lng?: number; accuracy?: number })
+      : undefined;
+
+  const capture = () => {
+    if (typeof navigator === 'undefined' || !('geolocation' in navigator)) {
+      setError('Location is not available on this device. Enter coordinates manually.');
+      setManual(true);
+      return;
+    }
+    setStatus('locating');
+    setError('');
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        setStatus('idle');
+        onChange({
+          lat: position.coords.latitude,
+          lng: position.coords.longitude,
+          accuracy: position.coords.accuracy,
+          capturedAt: new Date().toISOString(),
+        });
+      },
+      () => {
+        setStatus('idle');
+        setError('Could not get your location. Check permissions, or enter coordinates manually.');
+        setManual(true);
+      },
+      { enableHighAccuracy: true, timeout: 15_000 },
+    );
+  };
+
+  return (
+    <div role="group" aria-labelledby={labelId} aria-describedby={describedBy} className="max-w-md space-y-2">
+      <div className="flex flex-wrap items-center gap-3">
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={capture}
+          disabled={status === 'locating'}
+          className="gap-1.5"
+        >
+          <MapPin className="size-3.5" />
+          {status === 'locating' ? 'Locating…' : point ? 'Update location' : 'Use my current location'}
+        </Button>
+        <button
+          type="button"
+          onClick={() => setManual((m) => !m)}
+          className="text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground"
+        >
+          {manual ? 'Hide manual entry' : 'Enter coordinates manually'}
+        </button>
+      </div>
+
+      {point?.lat != null && point?.lng != null && (
+        <p className="tabular text-xs text-muted-foreground">
+          {point.lat.toFixed(6)}, {point.lng.toFixed(6)}
+          {point.accuracy != null && ` (±${Math.round(point.accuracy)}m)`}
+        </p>
+      )}
+
+      {error && <p className="text-xs text-destructive">{error}</p>}
+
+      {manual && (
+        <div className="flex gap-2">
+          <Input
+            type="number"
+            step="any"
+            placeholder="Latitude"
+            aria-label="Latitude"
+            value={point?.lat ?? ''}
+            onChange={(e) => {
+              const lat = Number(e.target.value);
+              onChange({ ...point, lat: Number.isFinite(lat) ? lat : undefined });
+            }}
+            className="h-8 bg-background text-sm"
+          />
+          <Input
+            type="number"
+            step="any"
+            placeholder="Longitude"
+            aria-label="Longitude"
+            value={point?.lng ?? ''}
+            onChange={(e) => {
+              const lng = Number(e.target.value);
+              onChange({ ...point, lng: Number.isFinite(lng) ? lng : undefined });
+            }}
+            className="h-8 bg-background text-sm"
+          />
+        </div>
+      )}
     </div>
   );
 }

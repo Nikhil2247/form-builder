@@ -30,6 +30,7 @@ import { ChoiceListsModule } from './modules/choice-lists/choice-lists.module';
 import { ApiKeysModule } from './modules/api-keys/api-keys.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
 import { ExportsModule } from './modules/exports/exports.module';
+import { AssistantModule } from './modules/assistant/assistant.module';
 
 import configuration, { validationSchema } from './config/configuration';
 import { bullMQConnection } from './config/bullmq.config';
@@ -158,6 +159,12 @@ import { CacheControlInterceptor } from './common/interceptors/cache-control.int
     // (see ExportsModule), so API pods never stream a submissions table on the
     // event loop they serve HTTP from.
     ExportsModule,
+
+    // Claude-backed AI assistant. Phase 0: the Claude client wrapper and the
+    // idea/generation service behind POST .../forms/generate (imported
+    // directly by FormsModule too). Later phases add its own controllers —
+    // see AI_ASSISTANT_PLAN.md.
+    AssistantModule,
   ],
   controllers: [AppController],
   providers: [

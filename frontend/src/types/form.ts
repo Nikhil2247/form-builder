@@ -16,7 +16,8 @@ export type QuestionType =
   | 'SIGNATURE'
   | 'MATRIX'
   | 'SECTION_HEADER'
-  | 'REPEATING_SECTION';
+  | 'REPEATING_SECTION'
+  | 'GPS_LOCATION';
 
 /** How wide a question sits in a GRID-layout form. */
 export type QuestionWidth = 'AUTO' | 'HALF' | 'FULL';

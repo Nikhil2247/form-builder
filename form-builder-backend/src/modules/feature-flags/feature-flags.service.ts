@@ -19,6 +19,7 @@ import { AuditService } from '../audit/audit.service';
 export const FEATURE_KEYS = {
   FORM_APPS: 'FORM_APPS',
   FORM_RULES: 'FORM_RULES',
+  AI_ASSISTANT: 'AI_ASSISTANT',
 } as const;
 
 export type FeatureKey = (typeof FEATURE_KEYS)[keyof typeof FEATURE_KEYS];

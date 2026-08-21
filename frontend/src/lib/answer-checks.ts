@@ -91,10 +91,13 @@ export function checkAnswer(
         ? null
         : `${label} must be a valid http(s) URL.`;
 
-    case 'PHONE':
-      return PHONE_RE.test(String(value).trim())
-        ? null
-        : `${label} must be a valid phone number.`;
+    case 'PHONE': {
+      const s = String(value).trim();
+      // A custom pattern (e.g. "exactly 10 digits") overrides the generic
+      // format — same precedence as the API's validator, so the two agree.
+      const ok = v.pattern ? safePatternTest(v.pattern, s) : PHONE_RE.test(s);
+      return ok ? null : `${label} must be a valid phone number.`;
+    }
 
     case 'NUMBER':
     case 'SLIDER': {
@@ -124,6 +127,15 @@ export function checkAnswer(
     case 'DATE': {
       const parsed = new Date(String(value));
       return Number.isNaN(parsed.getTime()) ? `${label} must be a valid date.` : null;
+    }
+
+    case 'GPS_LOCATION': {
+      const point = value as { lat?: unknown; lng?: unknown };
+      const lat = Number(point?.lat);
+      const lng = Number(point?.lng);
+      if (!Number.isFinite(lat) || lat < -90 || lat > 90) return `${label} needs a valid location.`;
+      if (!Number.isFinite(lng) || lng < -180 || lng > 180) return `${label} needs a valid location.`;
+      return null;
     }
 
     default:

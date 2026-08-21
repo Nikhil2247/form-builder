@@ -21,6 +21,8 @@ import { useSidebarStore } from '@/store/sidebar-store';
 import { useUser, useLogout, usePermissions } from '@/hooks/use-auth';
 import { useCommandMenuStore } from '@/store/command-menu-store';
 import { useUnreadNotificationCount } from '@/hooks/use-notifications';
+import { FEATURES, useFeature } from '@/hooks/use-features';
+import { AssistantPanel } from '@/components/assistant/AssistantPanel';
 
 /** Human-readable names for URL segments. */
 const SEGMENT_TITLES: Record<string, string> = {
@@ -67,6 +69,12 @@ export function Header() {
   // DashboardLayout — see the note there.
   const { data: notificationCount } = useUnreadNotificationCount();
   const unread = notificationCount?.unreadCount ?? 0;
+  const aiAssistantFeature = useFeature(FEATURES.AI_ASSISTANT);
+  // VIEWER+ (i.e. any org member) — the assistant route itself is VIEWER-gated
+  // with per-tool authorization now (AI_ASSISTANT_IMPROVEMENT_PLAN.md §3.1);
+  // `analytics:view` is reused here as the "any member" check rather than
+  // adding a permission that would mean the same thing.
+  const assistantEnabled = aiAssistantFeature && can('analytics:view');
 
   const user = session?.user;
   const org = session?.activeOrganization;
@@ -167,6 +175,8 @@ export function Header() {
             </span>
           )}
         </Link>
+
+        {assistantEnabled && <AssistantPanel />}
 
         <ThemeToggle />
 

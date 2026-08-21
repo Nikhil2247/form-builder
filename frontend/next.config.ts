@@ -40,9 +40,16 @@ const COMMON_HEADERS = [
   { key: 'Referrer-Policy', value: 'strict-origin-when-cross-origin' },
   {
     key: 'Permissions-Policy',
-    // Nothing in the app uses any of these. The signature pad is a plain
-    // <canvas>; file upload needs no camera.
-    value: 'camera=(), microphone=(), geolocation=(), payment=(), usb=(), magnetometer=()',
+    // The signature pad is a plain <canvas>; file upload needs no camera —
+    // those stay denied. `geolocation=(self)` is what the GPS_LOCATION
+    // question type needs to call `navigator.geolocation` at all: this
+    // header previously denied it outright, so the button silently failed
+    // everywhere, including the builder's own preview (same origin, no
+    // iframe involved). `(self)` rather than `*`: a form embedded via
+    // <iframe> on a third-party site still needs that iframe tag to carry
+    // `allow="geolocation"` for capture to work there — this header cannot
+    // grant across an origin boundary, only within one.
+    value: 'camera=(), microphone=(), geolocation=(self), payment=(), usb=(), magnetometer=()',
   },
   // Ignored by browsers over plain http, so it is safe to send in dev too, but
   // there is no reason to.

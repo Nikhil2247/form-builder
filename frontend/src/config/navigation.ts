@@ -14,6 +14,7 @@ import {
   Boxes,
   Building2,
   ClipboardList,
+  Coins,
   Contact,
   CreditCard,
   FileBox,
@@ -178,6 +179,12 @@ export const platformNav: NavGroup = {
       title: 'System health',
       href: '/platform/system',
       icon: Activity,
+      permissions: ['platform:access'],
+    },
+    {
+      title: 'Assistant usage',
+      href: '/platform/assistant',
+      icon: Coins,
       permissions: ['platform:access'],
     },
     {

@@ -415,8 +415,11 @@ export class AnswerValidatorService {
         if (typeof raw !== 'string')
           return bad('TYPE', `"${label}" must be text.`);
         const s = raw.trim();
-        if (!PHONE_RE.test(s))
-          return bad('PHONE', `"${label}" must be a valid phone number.`);
+        // A custom pattern (e.g. "exactly 10 digits") overrides the generic
+        // format rather than adding to it — the author asked for something
+        // narrower than "any plausible phone number", not something broader.
+        const ok = v.pattern ? safeRegexTest(v.pattern, s) : PHONE_RE.test(s);
+        if (!ok) return bad('PHONE', `"${label}" must be a valid phone number.`);
         return { value: s };
       }
 
@@ -587,6 +590,25 @@ export class AnswerValidatorService {
             return bad('TYPE', `"${label}" contains an invalid entry.`);
         }
         return { value: raw };
+      }
+
+      case 'GPS_LOCATION': {
+        if (typeof raw !== 'object' || raw === null || Array.isArray(raw))
+          return bad('TYPE', `"${label}" must be a location.`);
+        const lat = Number((raw as Record<string, unknown>).lat);
+        const lng = Number((raw as Record<string, unknown>).lng);
+        if (!Number.isFinite(lat) || lat < -90 || lat > 90)
+          return bad('LAT', `"${label}" has an invalid latitude.`);
+        if (!Number.isFinite(lng) || lng < -180 || lng > 180)
+          return bad('LNG', `"${label}" has an invalid longitude.`);
+
+        const out: Record<string, any> = { lat, lng };
+        const accuracy = Number((raw as Record<string, unknown>).accuracy);
+        if (Number.isFinite(accuracy) && accuracy >= 0) out.accuracy = accuracy;
+        const capturedAt = (raw as Record<string, unknown>).capturedAt;
+        if (typeof capturedAt === 'string') out.capturedAt = capturedAt.slice(0, 40);
+
+        return { value: out };
       }
 
       default: {

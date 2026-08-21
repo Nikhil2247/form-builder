@@ -41,6 +41,8 @@ import { SubjectEntriesController } from '../../modules/form-apps/subject-entrie
 import { NotificationsController } from '../../modules/notifications/notifications.controller';
 import { MetricsController } from '../metrics/metrics.controller';
 import { ApiKeysController } from '../../modules/api-keys/api-keys.controller';
+import { AssistantController } from '../../modules/assistant/assistant.controller';
+import { PlatformAssistantController } from '../../modules/assistant/platform-assistant.controller';
 
 /**
  * Structural tenant-isolation checks.
@@ -89,6 +91,8 @@ const ALL_CONTROLLERS = [
   SubjectEntriesController,
   NotificationsController,
   MetricsController,
+  AssistantController,
+  PlatformAssistantController,
 ];
 
 /**

@@ -15,6 +15,7 @@ import {
   Link as LinkIcon,
   ListFilter,
   Mail,
+  MapPin,
   PenTool,
   Phone,
   Plus,
@@ -90,6 +91,7 @@ const CATEGORIZED_PALETTE: PaletteCategory[] = [
       { type: 'FILE_UPLOAD', label: 'File upload', icon: UploadCloud },
       { type: 'SIGNATURE', label: 'Signature', icon: PenTool },
       { type: 'MATRIX', label: 'Matrix / Likert', icon: Grid },
+      { type: 'GPS_LOCATION', label: 'GPS location', icon: MapPin },
     ],
   },
   {
@@ -110,6 +112,7 @@ const TYPE_ICONS: Partial<Record<QuestionType, React.ElementType>> = {
   SIGNATURE: PenTool,
   DATE: Calendar,
   MATRIX: Grid,
+  GPS_LOCATION: MapPin,
   SECTION_HEADER: Heading,
   EMAIL: Mail,
   PHONE: Phone,

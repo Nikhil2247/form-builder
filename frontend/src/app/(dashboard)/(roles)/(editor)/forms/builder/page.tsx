@@ -32,6 +32,7 @@ import {
   Link as LinkIcon,
   ListFilter,
   Mail,
+  MapPin,
   PenTool,
   Phone,
   Plus,
@@ -101,6 +102,7 @@ const COMMAND_ITEMS: { type: QuestionType; label: string; keywords: string; icon
     { type: 'FILE_UPLOAD', label: 'File upload', keywords: 'file upload document image', icon: UploadCloud },
     { type: 'SIGNATURE', label: 'Signature', keywords: 'signature sign draw', icon: PenTool },
     { type: 'MATRIX', label: 'Matrix / Likert', keywords: 'matrix likert grid table', icon: Grid },
+    { type: 'GPS_LOCATION', label: 'GPS location', keywords: 'gps location geolocation map coordinates', icon: MapPin },
     { type: 'SECTION_HEADER', label: 'Section header', keywords: 'section header banner title', icon: HeadingIcon },
   ];
 

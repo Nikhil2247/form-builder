@@ -167,7 +167,6 @@ export function FormRunner({
   const [totalMarks, setTotalMarks] = useState(0);
   const [startTime] = useState<number>(() => Date.now());
 
-  const summaryRef = useRef<HTMLDivElement | null>(null);
   const cardClass = cardVariantClass(form.theme?.cardVariant);
   const isGrid = layoutMode === 'GRID';
   const isConversational = layoutMode === 'CONVERSATIONAL';
@@ -363,17 +362,6 @@ export function FormRunner({
     [showAllProblems, hasAttemptedSubmit, touched],
   );
 
-  /** Problems the respondent should be told about now, in form order. */
-  const visibleProblems = useMemo(() => {
-    const list: Array<{ questionId: string; label: string; message: string }> = [];
-    for (const q of activeQuestions) {
-      if (!showProblemsFor(q.id)) continue;
-      const message = problems.get(q.id) ?? rules.violationsByQuestionId.get(q.id)?.[0];
-      if (message) list.push({ questionId: q.id, label: q.label, message });
-    }
-    return list;
-  }, [activeQuestions, problems, rules.violationsByQuestionId, showProblemsFor]);
-
   const focusQuestion = useCallback((questionId: string) => {
     const container = document.querySelector<HTMLElement>(`[data-question-id="${questionId}"]`);
     container?.scrollIntoView({ block: 'center', behavior: 'smooth' });
@@ -511,10 +499,7 @@ export function FormRunner({
     if (!isConversational) setCurrentPage(pageOf(first.questionId));
     else setConversationalId(first.questionId);
     // After the step switch has rendered.
-    requestAnimationFrame(() => {
-      summaryRef.current?.focus();
-      focusQuestion(first.questionId);
-    });
+    requestAnimationFrame(() => focusQuestion(first.questionId));
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -645,10 +630,7 @@ export function FormRunner({
         if (firstId) {
           if (!isConversational) setCurrentPage(pageOf(firstId));
           else setConversationalId(firstId);
-          requestAnimationFrame(() => {
-            summaryRef.current?.focus();
-            focusQuestion(firstId);
-          });
+          requestAnimationFrame(() => focusQuestion(firstId));
         }
       } else {
         setSubmitError(failure?.message || 'Failed to submit form. Please try again.');
@@ -742,42 +724,6 @@ export function FormRunner({
             <RichText html={form.description} className="text-muted-foreground" />
           </Card>
         ))}
-
-      {/* ── Error summary ──────────────────────────────────────────────────
-          A long form gave the respondent a red border somewhere below the fold
-          and nothing else. This lists every problem and jumps to it. */}
-      {!hideChrome && visibleProblems.length > 0 && (
-        <div
-          ref={summaryRef}
-          tabIndex={-1}
-          role="alert"
-          className="space-y-2 rounded-[var(--radius)] border border-destructive/40 bg-destructive/10 p-4 focus:outline-none focus-visible:ring-2 focus-visible:ring-destructive"
-        >
-          <p className="flex items-center gap-2 text-sm font-semibold text-destructive">
-            <AlertCircle className="size-4 shrink-0" aria-hidden />
-            {visibleProblems.length === 1
-              ? 'There is a problem with your answers'
-              : `There are ${visibleProblems.length} problems with your answers`}
-          </p>
-          <ul className="space-y-1 pl-6">
-            {visibleProblems.map((problem) => (
-              <li key={problem.questionId}>
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (!isConversational) setCurrentPage(pageOf(problem.questionId));
-                    else setConversationalId(problem.questionId);
-                    requestAnimationFrame(() => focusQuestion(problem.questionId));
-                  }}
-                  className="text-left text-xs text-destructive underline underline-offset-2 hover:no-underline"
-                >
-                  {problem.label || 'Question'}: {problem.message}
-                </button>
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
 
       <form onSubmit={handleSubmit} noValidate className="space-y-6">
         {currentPageMeta && (currentPageMeta.title || currentPageMeta.description) && (

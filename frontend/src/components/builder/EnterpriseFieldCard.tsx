@@ -6,11 +6,14 @@ import { CSS } from '@dnd-kit/utilities';
 import {
   Calendar,
   Check,
+  ChevronDown,
+  ChevronRight,
   Copy,
   GitBranch,
   GripVertical,
   Heading as HeadingIcon,
   Key,
+  MapPin,
   PenTool,
   Plus,
   Star,
@@ -27,9 +30,10 @@ import { Switch } from '@/components/ui/switch';
 import { Label } from '@/components/ui/label';
 import { useBuilderStore, useFormSnapshot, useQuestion } from '@/store/builder-store';
 import { gridSpanOf } from '@/types/form';
-import type { FormQuestion, QuestionOption, QuestionWidth } from '@/types/form';
+import type { FormQuestion, QuestionOption, QuestionType, QuestionWidth } from '@/types/form';
 import { OptionsSourcePicker } from './OptionsSourcePicker';
 import { RichTextEditor } from './RichTextEditor';
+import { hasValidationControls, ValidationControls } from './ValidationControls';
 
 /**
  * One question on the canvas.
@@ -58,6 +62,54 @@ interface EnterpriseFieldCardProps {
 
 const CHOICE_TYPES = ['SINGLE_CHOICE', 'MULTI_CHOICE', 'DROPDOWN'] as const;
 
+/**
+ * Types offered by the "change type" control on an existing field.
+ *
+ * SECTION_HEADER is excluded — it is a layout element with its own render
+ * branch below, not a question a field can turn into. REPEATING_SECTION is
+ * excluded too: it has no authoring UI for its sub-questions, so offering it
+ * here would produce a field nobody can configure.
+ */
+const TYPE_CHANGE_GROUPS: Array<{ label: string; types: Array<[QuestionType, string]> }> = [
+  {
+    label: 'Basic',
+    types: [
+      ['SHORT_TEXT', 'Short answer'],
+      ['LONG_TEXT', 'Paragraph'],
+      ['EMAIL', 'Email address'],
+      ['PHONE', 'Phone number'],
+      ['NUMBER', 'Number'],
+      ['URL', 'Website URL'],
+    ],
+  },
+  {
+    label: 'Choice',
+    types: [
+      ['SINGLE_CHOICE', 'Single choice'],
+      ['MULTI_CHOICE', 'Multiple choice'],
+      ['DROPDOWN', 'Dropdown'],
+    ],
+  },
+  {
+    label: 'Rating',
+    types: [
+      ['STAR_RATING', 'Star rating'],
+      ['NPS', 'NPS score'],
+      ['SLIDER', 'Slider'],
+    ],
+  },
+  {
+    label: 'Advanced',
+    types: [
+      ['DATE', 'Date'],
+      ['FILE_UPLOAD', 'File upload'],
+      ['SIGNATURE', 'Signature'],
+      ['MATRIX', 'Matrix / Likert'],
+      ['GPS_LOCATION', 'GPS location'],
+    ],
+  },
+];
+
 function slugifyOption(label: string) {
   return (
     label
@@ -80,6 +132,7 @@ function EnterpriseFieldCardImpl({ id, index }: EnterpriseFieldCardProps) {
   const pages = useBuilderStore((s) => s.pages);
 
   const patchQuestion = useBuilderStore((s) => s.patchQuestion);
+  const changeQuestionType = useBuilderStore((s) => s.changeQuestionType);
   const deleteQuestion = useBuilderStore((s) => s.deleteQuestion);
   const duplicateQuestion = useBuilderStore((s) => s.duplicateQuestion);
   const selectQuestion = useBuilderStore((s) => s.selectQuestion);
@@ -87,6 +140,10 @@ function EnterpriseFieldCardImpl({ id, index }: EnterpriseFieldCardProps) {
   const setActiveView = useBuilderStore((s) => s.setActiveView);
 
   const [isAnswerKeyOpen, setIsAnswerKeyOpen] = useState(false);
+  // Closed by default — an author who needs a character limit or a numeric
+  // range opens this deliberately; it should not add height to every field
+  // that is just going to keep "Required" as its only setting.
+  const [isValidationOpen, setIsValidationOpen] = useState(false);
 
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id,
@@ -303,7 +360,7 @@ function EnterpriseFieldCardImpl({ id, index }: EnterpriseFieldCardProps) {
       <Card
         onClick={() => !isSelected && selectQuestion(id)}
         className={cn(
-          'space-y-4 p-4 transition-shadow',
+          'space-y-2 p-4 transition-shadow',
           isSelected
             ? 'border-foreground/25 ring-1 ring-foreground/15'
             : 'hover:border-border-strong',
@@ -327,6 +384,35 @@ function EnterpriseFieldCardImpl({ id, index }: EnterpriseFieldCardProps) {
               className="h-8 min-w-0 flex-1 border-0 bg-transparent px-1 text-sm font-medium shadow-none
                          focus-visible:border-b focus-visible:border-foreground/30 focus-visible:ring-0"
             />
+
+            {/* Always visible, like Google Forms' type dropdown next to the
+                title — an author reaches for this before they select the
+                card, not after. Switching type keeps this field's id and key
+                (so logic rules and formulas referencing it keep working) but
+                resets type-specific settings like options, ranges and
+                patterns — see `changeQuestionType`. */}
+            <select
+              aria-label={`Question ${index + 1} type`}
+              value={question.type}
+              onClick={(e) => e.stopPropagation()}
+              onChange={(e) => {
+                e.stopPropagation();
+                changeQuestionType(id, e.target.value as QuestionType);
+              }}
+              title="Change field type — keeps the label and id, but resets type-specific settings."
+              className="h-7 shrink-0 rounded-md border border-border bg-background px-1.5 text-[11px]
+                         text-muted-foreground hover:border-border-strong focus-visible:outline-none"
+            >
+              {TYPE_CHANGE_GROUPS.map((group) => (
+                <optgroup key={group.label} label={group.label}>
+                  {group.types.map(([type, label]) => (
+                    <option key={type} value={type}>
+                      {label}
+                    </option>
+                  ))}
+                </optgroup>
+              ))}
+            </select>
 
             {logicRuleCount > 0 && (
               <button
@@ -450,6 +536,39 @@ function EnterpriseFieldCardImpl({ id, index }: EnterpriseFieldCardProps) {
             should see the question, not every question's data plumbing. */}
         {isChoice && isSelected && (
           <ConnectedOptionsSource question={question} onPatch={patch} />
+        )}
+
+        {/* ── Validation rules ───────────────────────────────────────────── */}
+        {/* Visible only while selected, and only for types that have
+            something to configure here (choice min/max lives with its
+            options section instead) — same rule as the options source above.
+            Collapsed by default: this is a "reach for it when you need it"
+            control, not something every field should show by default. */}
+        {isSelected && hasValidationControls(question.type) && (
+          <div className="rounded-md border border-border">
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                setIsValidationOpen((open) => !open);
+              }}
+              aria-expanded={isValidationOpen}
+              className="flex w-full items-center gap-1.5 px-2.5 py-1.5 text-[10px] font-semibold
+                         uppercase tracking-wider text-muted-foreground hover:text-foreground"
+            >
+              {isValidationOpen ? (
+                <ChevronDown className="size-3" />
+              ) : (
+                <ChevronRight className="size-3" />
+              )}
+              Validation
+            </button>
+            {isValidationOpen && (
+              <div className="border-t border-border bg-muted/20 p-2.5">
+                <ValidationControls question={question} onPatch={patch} />
+              </div>
+            )}
+          </div>
         )}
 
         {/* ── Preview of the respondent's control ────────────────────────── */}
@@ -648,6 +767,14 @@ function QuestionPreview({
         <div className="flex h-20 max-w-md items-center justify-center gap-2 rounded-md border border-input bg-background text-muted-foreground">
           <PenTool className="size-4 opacity-50" />
           <span className="text-xs">Sign here</span>
+        </div>
+      );
+
+    case 'GPS_LOCATION':
+      return (
+        <div className="flex max-w-md items-center gap-2 rounded-md border border-input bg-background px-3 py-2 text-sm text-muted-foreground">
+          <MapPin className="size-3.5" />
+          <span>Capture GPS location on submit</span>
         </div>
       );
 

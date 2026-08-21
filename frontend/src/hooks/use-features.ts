@@ -20,6 +20,8 @@ export const FEATURES = {
   FORM_APPS: 'FORM_APPS',
   /** Calculated fields and advanced rules in the form builder. */
   FORM_RULES: 'FORM_RULES',
+  /** The Claude-backed help/guide chat panel. */
+  AI_ASSISTANT: 'AI_ASSISTANT',
 } as const;
 
 export type FeatureKey = (typeof FEATURES)[keyof typeof FEATURES];

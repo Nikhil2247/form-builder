@@ -147,6 +147,21 @@ export interface BuilderState {
   addQuestion: (type: QuestionType, afterId?: string | null, pageNumber?: number) => string;
   /** Partial update — merges into the existing question. */
   patchQuestion: (id: string, patch: Partial<FormQuestion>) => void;
+  /**
+   * Switch a question to a different type in place — same `id` and `key`, so
+   * logic rules, rule-engine formulas and past answers keep addressing the
+   * same field instead of an orphaned one.
+   *
+   * Type-specific state (options, matrix rows/columns, slider bounds,
+   * min/max/pattern/etc.) does not carry across: a `maxLength` that made sense
+   * for text means nothing once the field is a number, and stale choice
+   * options from a text-to-dropdown switch would just be confusing leftovers.
+   * Only what is genuinely type-agnostic survives: label, description,
+   * placeholder, required, width, page and points. Choice options are the one
+   * exception — switching between SINGLE_CHOICE/MULTI_CHOICE/DROPDOWN keeps
+   * them, since they mean the same thing in all three.
+   */
+  changeQuestionType: (id: string, type: QuestionType) => void;
   replaceQuestion: (question: FormQuestion) => void;
   duplicateQuestion: (id: string) => string | null;
   deleteQuestion: (id: string) => void;
@@ -223,6 +238,7 @@ const TYPE_LABELS: Partial<Record<QuestionType, string>> = {
   MATRIX: 'Rate the following',
   SECTION_HEADER: 'Section',
   REPEATING_SECTION: 'Repeating section',
+  GPS_LOCATION: 'Location',
 };
 
 /**
@@ -425,6 +441,53 @@ export const useBuilderStore = create<BuilderState>()((set, get) => ({
         // Only this key's identity changes. Cards bound to other ids do not
         // re-render, which is the entire point of the normalised shape.
         byId: { ...s.byId, [id]: { ...current, ...patch } },
+        isDirty: true,
+        revision: s.revision + 1,
+      };
+    }),
+
+  changeQuestionType: (id, type) =>
+    set((s) => {
+      const current = s.byId[id];
+      if (!current || current.type === type) return s;
+
+      const wasChoice = CHOICE_TYPES.includes(current.type);
+      const isChoice = CHOICE_TYPES.includes(type);
+
+      const next: FormQuestion = {
+        id: current.id,
+        key: current.key,
+        type,
+        label: current.label,
+        description: current.description,
+        placeholder: current.placeholder,
+        required: current.required,
+        width: current.width,
+        pageNumber: current.pageNumber,
+        points: current.points,
+        // Not carried across: format is meaningless without a type to match it
+        // to (a pattern authored for text is not a min/max for a number).
+        validation: { required: current.validation?.required ?? false },
+        ...(isChoice
+          ? {
+              options:
+                wasChoice && current.options?.length
+                  ? current.options
+                  : [
+                      { id: newId('opt'), label: 'Option 1', value: 'option_1' },
+                      { id: newId('opt'), label: 'Option 2', value: 'option_2' },
+                    ],
+              optionsSource: wasChoice ? current.optionsSource : undefined,
+            }
+          : {}),
+        ...(type === 'SLIDER' ? { sliderMin: 0, sliderMax: 100, sliderStep: 1 } : {}),
+        ...(type === 'MATRIX'
+          ? { matrixRows: ['Row 1', 'Row 2'], matrixColumns: ['Poor', 'Fair', 'Good'] }
+          : {}),
+      };
+
+      return {
+        byId: { ...s.byId, [id]: next },
         isDirty: true,
         revision: s.revision + 1,
       };

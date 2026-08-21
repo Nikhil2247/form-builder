@@ -112,6 +112,7 @@ enum QuestionType {
   MATRIX // Row × Column grid of radio/checkbox answers
   SECTION_HEADER // Non-answerable visual divider between question groups
   REPEATING_SECTION // A section that can be duplicated multiple times by the respondent
+  GPS_LOCATION // Device geolocation capture, stored as { lat, lng, accuracy?, capturedAt? }
 }
 
 /// Conditional logic operators for skip logic and show/hide rules.
@@ -231,6 +232,11 @@ model Organization {
   storageQuotaBytes   BigInt @default(5368709120) @map("storage_quota_bytes")
   /// Current storage usage in bytes. Updated by file upload workers.
   storageUsedBytes    BigInt @default(0) @map("storage_used_bytes")
+  /// Maximum AI assistant queries this org may make per calendar month.
+  maxAiQueriesMonth   Int    @default(500) @map("max_ai_queries_month")
+  /// Assistant queries made so far in the current calendar month. Reset by the
+  /// same monthly job that resets submission-quota counters.
+  aiQueriesThisMonth  Int    @default(0) @map("ai_queries_this_month")
 
   // ── Storage Configuration ───────────────────────────────────────────────────
   /// Org-specific MinIO bucket. NULL = use global MINIO_DEFAULT_BUCKET.
@@ -271,6 +277,8 @@ model Organization {
   featureFlags       OrganizationFeatureFlag[]
   choiceLists        ChoiceList[]
   exportJobs         ExportJob[]
+  assistantSessions  AssistantSession[]
+  assistantPlans     AssistantPlan[]
 
   @@index([slug])
   @@index([isActive])
@@ -437,9 +445,11 @@ model User {
   mfaRecoveryCodes        MfaRecoveryCode[]
   auditLogs               AuditLog[]               @relation("AuditActor")
 
-  reviewedSubmissions FormSubmission[] @relation("SubmissionReviewer")
-  deletedSubmissions  FormSubmission[] @relation("SubmissionDeleter")
+  reviewedSubmissions FormSubmission[]   @relation("SubmissionReviewer")
+  deletedSubmissions  FormSubmission[]   @relation("SubmissionDeleter")
   exportJobs          ExportJob[]
+  assistantSessions   AssistantSession[]
+  assistantPlans      AssistantPlan[]
 
   @@index([email])
   @@map("users")
@@ -1778,6 +1788,127 @@ model OrganizationFeatureFlag {
   @@id([organizationId, flagKey])
   @@index([organizationId])
   @@map("organization_feature_flags")
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// AI ASSISTANT
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Which capability an AssistantSession belongs to.
+/// ORG_INSIGHTS       — Q&A over one organization's form/Form App responses.
+/// HELP_GUIDE         — guidance on building forms, rules, calculations, Form Apps.
+/// IDEA_SUGGESTION    — proposes new forms/Form Apps, reviews existing ones.
+/// PLATFORM_INSIGHTS  — cross-organization Q&A. SUPER_ADMIN only.
+/// AUTO               — the unified endpoint (AI_ASSISTANT_IMPROVEMENT_PLAN.md
+///                       §3.1/§3.6): every ORG_TOOLS tool available, the model
+///                       routes itself. The other three modes share this same
+///                       tool registry and system prompt as of Phase A — this
+///                       value exists to label sessions started from the
+///                       single unified route, not because its capabilities
+///                       differ from the others.
+enum AssistantMode {
+  ORG_INSIGHTS
+  HELP_GUIDE
+  IDEA_SUGGESTION
+  PLATFORM_INSIGHTS
+  AUTO
+}
+
+/// Speaker of one AssistantMessage.
+enum AssistantMessageRole {
+  USER
+  ASSISTANT
+  TOOL
+}
+
+/// One assistant conversation.
+///
+/// `organizationId` is NULL only for PLATFORM_INSIGHTS sessions — every other
+/// mode is scoped to exactly one organization. That scoping is enforced at the
+/// service/guard layer the same way every other org-scoped resource is; a NULL
+/// here is not itself an authorization decision.
+model AssistantSession {
+  id             String        @id @default(uuid()) @db.Uuid
+  organizationId String?       @map("organization_id") @db.Uuid
+  userId         String        @map("user_id") @db.Uuid
+  mode           AssistantMode
+  /// First question, trimmed — labels the session in a history list without a
+  /// second round-trip to summarize it.
+  title          String?       @db.VarChar(200)
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  organization Organization?      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  messages     AssistantMessage[]
+
+  @@index([organizationId, userId])
+  @@index([userId, mode])
+  @@map("assistant_sessions")
+}
+
+/// One turn in an AssistantSession.
+///
+/// `toolCalls` records the tool name, its input, and a short result summary
+/// for auditability — never the raw tool result payload, so an aggregated
+/// submissions-query result doesn't end up stored twice (once as the visible
+/// answer, once again here).
+model AssistantMessage {
+  id              String               @id @default(uuid()) @db.Uuid
+  sessionId       String               @map("session_id") @db.Uuid
+  role            AssistantMessageRole
+  content         Json                 @db.JsonB
+  /// e.g. "claude-haiku-4-5" or "claude-sonnet-5". NULL for USER messages.
+  modelUsed       String?              @map("model_used") @db.VarChar(60)
+  inputTokens     Int?                 @map("input_tokens")
+  outputTokens    Int?                 @map("output_tokens")
+  cacheReadTokens Int?                 @map("cache_read_tokens")
+  /// Tokens written to the prompt cache on this turn (billed at 1.25x input price). NULL for USER messages.
+  cacheCreationTokens Int?             @map("cache_creation_tokens")
+  /// Computed at write time from the price table in claude-client.service.ts — see AI_ASSISTANT_IMPROVEMENT_PLAN.md §3.8. NULL for USER messages.
+  costUsd         Decimal?             @map("cost_usd") @db.Decimal(10, 6)
+  toolCalls       Json?                @map("tool_calls") @db.JsonB
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  session AssistantSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId, createdAt])
+  @@map("assistant_messages")
+}
+
+/// What an AssistantPlan will create once confirmed.
+enum AssistantPlanKind {
+  FORM
+  FORM_APP
+}
+
+/// A generated form/Form App held for confirmation before anything real is
+/// created — the "plan, then confirm" split described in
+/// AI_ASSISTANT_IMPROVEMENT_PLAN.md §3.3(c). `plan_form`/`plan_form_app`
+/// write one of these; `create_from_plan` is the only path that turns it into
+/// actual Form/SubjectType/FormApp rows, and marks it consumed so it can't be
+/// replayed twice.
+model AssistantPlan {
+  id             String            @id @default(uuid()) @db.Uuid
+  organizationId String            @map("organization_id") @db.Uuid
+  userId         String            @map("user_id") @db.Uuid
+  kind           AssistantPlanKind
+  /// The full generated form/app JSON, exactly as create_from_plan will replay it. Never shown to the model — only `outline` is.
+  payload        Json              @db.JsonB
+  /// Compact summary shown to the model (and, once Phase C ships, the user): title, step names, question count/labels.
+  outline        Json              @db.JsonB
+  consumedAt     DateTime?         @map("consumed_at")
+  expiresAt      DateTime          @map("expires_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, userId])
+  @@map("assistant_plans")
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

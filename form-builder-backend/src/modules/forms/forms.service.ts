@@ -48,7 +48,10 @@ import {
  * 36^10 ≈ 3.6e15 keeps collision probability negligible, and P2002 on the
  * unique index is handled at the call sites that can hit it.
  */
-const publicSlug = customAlphabet('0123456789abcdefghijklmnopqrstuvwxyz', 10);
+export const publicSlug = customAlphabet(
+  '0123456789abcdefghijklmnopqrstuvwxyz',
+  10,
+);
 
 /**
  * Escape a value for CSV, defending against CSV injection.
@@ -327,85 +330,6 @@ export class FormsService {
     });
 
     return form;
-  }
-
-  /**
-   * Generate a form using Google Gemini AI based on a prompt.
-   */
-  async generateFormWithAI(orgId: string, createdById: string, prompt: string) {
-    if (!process.env.GEMINI_API_KEY) {
-      throw new BadRequestException(
-        'AI Generation is not configured on this server (missing GEMINI_API_KEY).',
-      );
-    }
-
-    try {
-      // Dynamic import to avoid breaking if not installed properly or missing env vars at startup
-      const { GoogleGenAI } = await import('@google/genai');
-      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-
-      const systemInstruction = `You are an expert form builder AI. 
-Generate a comprehensive form based on the user's prompt.
-Respond ONLY with a valid JSON object matching this structure:
-{
-  "title": "Form Title",
-  "description": "Form description",
-  "questions": [
-    {
-      "id": "q1",
-      "type": "SHORT_TEXT", // one of: SHORT_TEXT, LONG_TEXT, NUMBER, EMAIL, PHONE, URL, SINGLE_CHOICE, MULTI_CHOICE, DROPDOWN, STAR_RATING, NPS, SLIDER, DATE
-      "label": "Question text",
-      "required": true,
-      "options": [] // required for SINGLE_CHOICE, MULTI_CHOICE, DROPDOWN (array of strings)
-    }
-  ]
-}`;
-
-      const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash',
-        contents: prompt,
-        config: {
-          systemInstruction,
-          responseMimeType: 'application/json',
-        },
-      });
-
-      const rawText = response.text || '{}';
-      const formData = JSON.parse(rawText);
-
-      // Save it to the database
-      const form = await this.prisma.writer.form.create({
-        data: {
-          organizationId: orgId,
-          createdById,
-          slug: publicSlug(),
-          title: formData.title || 'AI Generated Form',
-          description: formData.description || '',
-          questionsJson: formData.questions || [],
-          pagesJson: [],
-          logicJson: [],
-          themeConfig: {},
-          status: 'DRAFT',
-          layoutMode: 'DOCUMENT',
-        },
-      });
-
-      this.audit.log({
-        organizationId: orgId,
-        userId: createdById,
-        action: 'form.generated_ai',
-        resource: 'form',
-        resourceId: form.id,
-        metadata: { formTitle: form.title, prompt },
-      });
-
-      return form;
-    } catch (error) {
-      console.error('AI Generation Error:', error);
-      throw new BadRequestException(
-        'Failed to generate form using AI. Please try again.',
-      );
-    }
   }
 
   /**

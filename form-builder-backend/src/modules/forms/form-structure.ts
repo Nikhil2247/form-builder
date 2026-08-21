@@ -52,6 +52,7 @@ const QUESTION_TYPES = new Set([
   'MATRIX',
   'SECTION_HEADER',
   'REPEATING_SECTION',
+  'GPS_LOCATION',
 ]);
 
 const LOGIC_OPERATORS = new Set([

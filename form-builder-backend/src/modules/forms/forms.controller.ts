@@ -13,6 +13,7 @@ import {
   Logger,
 } from '@nestjs/common';
 import { FormsService } from './forms.service';
+import { IdeaService } from '../assistant/idea.service';
 import { CreateFormDto } from './dto/create-form.dto';
 import { UpdateFormDto } from './dto/update-form.dto';
 import { ApiKeyOrJwtGuard } from '../../common/guards/api-key-or-jwt.guard';
@@ -53,7 +54,10 @@ import { parsePagination } from '../../common/pagination/pagination';
 export class FormsController {
   private readonly logger = new Logger(FormsController.name);
 
-  constructor(private readonly formsService: FormsService) {}
+  constructor(
+    private readonly formsService: FormsService,
+    private readonly ideaService: IdeaService,
+  ) {}
 
   @Post()
   @RequiredRole('EDITOR')
@@ -85,7 +89,7 @@ export class FormsController {
     @Req() req: Request,
   ) {
     const userId = (req.user as any).sub;
-    return this.formsService.generateFormWithAI(orgId, userId, body.prompt);
+    return this.ideaService.generateForm(orgId, userId, body.prompt);
   }
 
   /**
