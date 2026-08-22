@@ -4,7 +4,19 @@ import { useEffect, useId, useRef, useState } from 'react';
 import dynamic from 'next/dynamic';
 import Link from 'next/link';
 import { formatDistanceToNow } from 'date-fns';
-import { History, Plus, Send, Sparkles, X } from 'lucide-react';
+import {
+  BarChart3,
+  Check,
+  ChevronDown,
+  Globe2,
+  HelpCircle,
+  History,
+  Plus,
+  Send,
+  Sparkles,
+  Wand2,
+  X,
+} from 'lucide-react';
 
 import {
   Sheet,
@@ -12,7 +24,6 @@ import {
   SheetFooter,
   SheetHeader,
   SheetTitle,
-  SheetTrigger,
 } from '@/components/ui/sheet';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
@@ -67,19 +78,21 @@ type Mode = 'auto' | 'help' | 'insights' | 'build' | 'platform';
 
 const MODE_META: Record<
   Mode,
-  { label: string; hint?: string; placeholder: string; empty: string }
+  { label: string; hint?: string; placeholder: string; empty: string; short: string }
 > = {
   auto: {
     label: 'Auto',
     placeholder: 'Ask anything…',
     empty:
       "Ask how to do something, what your data shows, or describe a form to create — I'll figure out how to help.",
+    short: 'Figures out how to help',
   },
   help: {
     label: 'Help',
     hint: 'the user selected Help mode — favor how-to guidance over data or generation',
     placeholder: 'Ask how to do something…',
     empty: 'Ask how to build a form, add a validation or calculation rule, or set up a Form App.',
+    short: 'How-to guidance',
   },
   insights: {
     label: 'Insights',
@@ -87,6 +100,7 @@ const MODE_META: Record<
     placeholder: 'Ask about your data…',
     empty:
       'Ask about response counts, completion rates, trends, or your busiest forms. Answers are always based on aggregated numbers, never individual responses.',
+    short: 'Your form and response data',
   },
   build: {
     label: 'Build',
@@ -94,12 +108,22 @@ const MODE_META: Record<
     placeholder: 'Describe a form or program…',
     empty:
       'Describe a form or multi-step program to get a draft, ask for a matching template, or ask for a review of a form you already have.',
+    short: 'Draft, review, or template a form',
   },
   platform: {
     label: 'Platform',
     placeholder: 'Ask across organizations…',
     empty: 'Ask about platform-wide totals, compare organizations, or check quota usage.',
+    short: 'Cross-organization totals',
   },
+};
+
+const MODE_ICONS: Record<Mode, typeof Sparkles> = {
+  auto: Sparkles,
+  help: HelpCircle,
+  insights: BarChart3,
+  build: Wand2,
+  platform: Globe2,
 };
 
 interface ChatTurn {
@@ -262,12 +286,8 @@ export function AssistantPanel({ currentFormId }: AssistantPanelProps) {
   }
 
   return (
+    <>
     <Sheet open={open} onOpenChange={setOpen}>
-      <SheetTrigger
-        render={<Button variant="ghost" size="icon" aria-label="Ask AI" title="Ask AI (⌘J)" />}
-      >
-        <Sparkles className="size-4" strokeWidth={1.5} />
-      </SheetTrigger>
 
       <SheetContent side="right" className="flex flex-col sm:max-w-md">
         <SheetHeader className="gap-3">
@@ -317,8 +337,6 @@ export function AssistantPanel({ currentFormId }: AssistantPanelProps) {
               </Button>
             </div>
           </div>
-
-          <ModeToggle mode={mode} onChange={setMode} showPlatform={!!isSuperAdmin} />
         </SheetHeader>
 
         <MessageScrollerProvider>
@@ -423,6 +441,12 @@ export function AssistantPanel({ currentFormId }: AssistantPanelProps) {
               send(input);
             }}
           >
+            <ModeSwitcher
+              mode={mode}
+              onChange={setMode}
+              showPlatform={!!isSuperAdmin}
+              disabled={asking.isPending}
+            />
             <Textarea
               id={inputId}
               value={input}
@@ -455,37 +479,91 @@ export function AssistantPanel({ currentFormId }: AssistantPanelProps) {
         </SheetFooter>
       </SheetContent>
     </Sheet>
+
+    {/* Sticky launcher, mirrors the Copilot/Intercom-style corner bubble —
+        a second entry point to the same controlled `open` state, alongside
+        the header's Sparkles trigger. Hidden while the sheet is open so it
+        never fights the sheet's own overlay/backdrop for the click. */}
+    {!open && (
+      <Button
+        type="button"
+        size="icon"
+        aria-label="Ask AI"
+        title="Ask AI (⌘J)"
+        onClick={() => setOpen(true)}
+        className="fixed bottom-5 right-5 z-40 size-12 rounded-full shadow-lg"
+      >
+        <Sparkles className="size-5" strokeWidth={1.5} />
+      </Button>
+    )}
+    </>
   );
 }
 
-function ModeToggle({
+/**
+ * Compact mode picker anchored to the composer, in the spirit of Claude's
+ * and Copilot's tool switchers — a small pill next to the input rather than
+ * a full-width bar over the message list. Selecting a mode only changes
+ * `modeHint`/copy (see the module comment on AssistantPanel) — never the
+ * tool list or system prompt, so switching mid-conversation can't fork the
+ * cached prefix.
+ */
+function ModeSwitcher({
   mode,
   onChange,
   showPlatform,
+  disabled,
 }: {
   mode: Mode;
   onChange: (mode: Mode) => void;
   showPlatform: boolean;
+  disabled: boolean;
 }) {
   const modes: Mode[] = showPlatform
     ? ['auto', 'help', 'insights', 'build', 'platform']
     : ['auto', 'help', 'insights', 'build'];
+  const CurrentIcon = MODE_ICONS[mode];
 
   return (
-    <div className="flex w-fit gap-0.5 rounded-lg bg-muted p-0.5">
-      {modes.map((m) => (
-        <Button
-          key={m}
-          type="button"
-          variant={mode === m ? 'default' : 'ghost'}
-          size="sm"
-          className="h-7 px-2.5 text-xs"
-          onClick={() => onChange(m)}
-        >
-          {MODE_META[m].label}
-        </Button>
-      ))}
-    </div>
+    <DropdownMenu>
+      <DropdownMenuTrigger
+        render={
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={disabled}
+            aria-label="Assistant mode"
+            className="h-9 shrink-0 gap-1.5 rounded-full px-3 text-xs font-medium"
+          />
+        }
+      >
+        <CurrentIcon className="size-3.5" strokeWidth={1.5} />
+        {MODE_META[mode].label}
+        <ChevronDown className="size-3 opacity-60" strokeWidth={1.5} />
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" side="top" className="w-64">
+        <DropdownMenuLabel>Mode</DropdownMenuLabel>
+        <DropdownMenuSeparator />
+        {modes.map((m) => {
+          const Icon = MODE_ICONS[m];
+          return (
+            <DropdownMenuItem
+              key={m}
+              onClick={() => onChange(m)}
+              className="flex flex-col items-start gap-0.5 py-2"
+            >
+              <span className="flex w-full items-center gap-1.5 text-sm font-medium">
+                <Icon className="size-3.5" strokeWidth={1.5} />
+                {MODE_META[m].label}
+                {mode === m && <Check className="ml-auto size-3.5" strokeWidth={1.5} />}
+              </span>
+              <span className="pl-5 text-xs text-muted-foreground">{MODE_META[m].short}</span>
+            </DropdownMenuItem>
+          );
+        })}
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 

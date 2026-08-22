@@ -7,10 +7,16 @@ import { usePathname } from 'next/navigation';
 import { useSidebarStore } from '@/store/sidebar-store';
 import { useNotificationStream } from '@/hooks/use-notifications';
 import { cn } from '@/lib/utils';
+import { AssistantPanel } from '@/components/assistant/AssistantPanel';
+import { FEATURES, useFeature } from '@/hooks/use-features';
+import { usePermissions } from '@/hooks/use-auth';
 
 export function DashboardLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const { isCollapsed } = useSidebarStore();
+  const { can } = usePermissions();
+  const aiAssistantFeature = useFeature(FEATURES.AI_ASSISTANT);
+  const assistantEnabled = aiAssistantFeature && can('analytics:view');
 
   // The single notification stream for the whole app shell.
   //
@@ -80,6 +86,9 @@ export function DashboardLayout({ children }: { children: React.ReactNode }) {
           {children}
         </div>
       </main>
+
+      {/* Floating AI assistant — bottom-right FAB, visible across all pages */}
+      {assistantEnabled && <AssistantPanel />}
     </div>
   );
 }
