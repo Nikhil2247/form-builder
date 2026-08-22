@@ -10,9 +10,9 @@ import {
 import { Throttle } from '@nestjs/throttler';
 import { StorageService } from './storage.service';
 import { PresignedUrlDto } from './dto/presigned-url.dto';
-import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
-import { OrgMemberGuard } from '../../common/guards/org-member.guard';
-import { OrgId } from '../../common/decorators/org-id.decorator';
+import { JwtAuthGuard } from '../../common/auth/jwt-auth.guard';
+import { OrgMemberGuard } from '../../common/auth/org-member.guard';
+import { OrgId } from '../../common/auth/org-id.decorator';
 
 @Controller('storage')
 export class StorageController {

@@ -19,19 +19,19 @@ import { SubmitFormDto } from './dto/submit-form.dto';
 import { ReviewSubmissionDto } from './dto/review-submission.dto';
 import { BulkSubmissionsDto } from './dto/bulk-submissions.dto';
 import type { Request } from 'express';
-import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
+import { JwtAuthGuard } from '../../common/auth/jwt-auth.guard';
 // Added alongside JwtAuthGuard rather than replacing it: the mutation routes on
 // this controller are bearer-only by design, and only the org-wide list is
 // reachable with an API key.
-import { ApiKeyOrJwtGuard } from '../../common/guards/api-key-or-jwt.guard';
-import { RequiredScope } from '../../common/decorators/scopes.decorator';
-import { OrgMemberGuard } from '../../common/guards/org-member.guard';
-import { RoleGuard } from '../../common/guards/role.guard';
-import { OptionalJwtAuthGuard } from '../../common/guards/optional-jwt-auth.guard';
-import { RequiredRole } from '../../common/decorators/roles.decorator';
-import { OrgId } from '../../common/decorators/org-id.decorator';
-import { PaginationQueryDto } from '../../common/pagination/pagination-query.dto';
-import { parsePagination } from '../../common/pagination/pagination';
+import { ApiKeyOrJwtGuard } from '../../common/auth/api-key-or-jwt.guard';
+import { RequiredScope } from '../../common/auth/scopes.decorator';
+import { OrgMemberGuard } from '../../common/auth/org-member.guard';
+import { RoleGuard } from '../../common/auth/role.guard';
+import { OptionalJwtAuthGuard } from '../../common/auth/optional-jwt-auth.guard';
+import { RequiredRole } from '../../common/auth/roles.decorator';
+import { OrgId } from '../../common/auth/org-id.decorator';
+import { PaginationQueryDto } from '../../common/http/pagination/pagination-query.dto';
+import { parsePagination } from '../../common/http/pagination/pagination';
 
 /**
  * Guards are attached per route rather than on the class, because this

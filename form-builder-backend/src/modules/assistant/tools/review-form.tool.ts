@@ -1,7 +1,7 @@
 import type Anthropic from '@anthropic-ai/sdk';
 // Must be zod's v4 API (see claude-client.service.ts) for zodOutputFormat().
 import { z } from 'zod/v4';
-import type { PrismaService } from '../../../common/prisma/prisma.service';
+import type { PrismaService } from '../../../common/infra/prisma/prisma.service';
 import { ClaudeClientService, MODEL_SONNET } from '../claude-client.service';
 
 export const REVIEW_FORM_TOOL: Anthropic.Tool = {
@@ -104,6 +104,7 @@ Existing rules: ${rules} rule(s) in the new rules engine, ${legacy} legacy show/
     system: SYSTEM_PROMPT,
     userMessage,
     schema: ReviewOutputSchema,
+    effort: 'medium',
   });
 
   return JSON.stringify(data);

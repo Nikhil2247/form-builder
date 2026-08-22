@@ -6,9 +6,9 @@ import {
 } from '@nestjs/bullmq';
 import { Logger, Optional } from '@nestjs/common';
 import { Job, Queue } from 'bullmq';
-import { PrismaService } from '../../../common/prisma/prisma.service';
+import { PrismaService } from '../../../common/infra/prisma/prisma.service';
 import { MailService } from '../../mail/mail.service';
-import { MetricsService } from '../../../common/metrics/metrics.service';
+import { MetricsService } from '../../../common/observability/metrics/metrics.service';
 import { QUEUE_NAMES, defaultJobOptions } from '../../../config/bullmq.config';
 import type { SubmissionPayload } from './submission.producer';
 

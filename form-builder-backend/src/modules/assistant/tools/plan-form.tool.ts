@@ -1,6 +1,6 @@
 import type Anthropic from '@anthropic-ai/sdk';
 import type { Prisma } from '@prisma/client';
-import type { PrismaService } from '../../../common/prisma/prisma.service';
+import type { PrismaService } from '../../../common/infra/prisma/prisma.service';
 import { outlineForm, outlineFormApp, type IdeaService } from '../idea.service';
 
 /** 24h — long enough to review and confirm in the same sitting, short enough that stale plans don't linger. */

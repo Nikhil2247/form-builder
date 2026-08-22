@@ -1,7 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import type Anthropic from '@anthropic-ai/sdk';
 import { AssistantMode } from '@prisma/client';
-import { PrismaService } from '../../common/prisma/prisma.service';
+import { PrismaService } from '../../common/infra/prisma/prisma.service';
 import { AdminService } from '../admin/admin.service';
 import { AgentLoopService } from './agent-loop.service';
 import { QuotaService } from './quota.service';

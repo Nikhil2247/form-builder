@@ -1,5 +1,5 @@
 import { IsIn, IsOptional } from 'class-validator';
-import { SortablePaginationQueryDto } from '../../../common/pagination/pagination-query.dto';
+import { SortablePaginationQueryDto } from '../../../common/http/pagination/pagination-query.dto';
 
 /** Query parameters for GET /organizations/:orgId/forms. */
 export class ListFormsQueryDto extends SortablePaginationQueryDto {

@@ -22,7 +22,7 @@ import {
   FormAppSessionsService,
   type SessionActor,
 } from './form-app-sessions.service';
-import { OptionalJwtAuthGuard } from '../../common/guards/optional-jwt-auth.guard';
+import { OptionalJwtAuthGuard } from '../../common/auth/optional-jwt-auth.guard';
 
 /**
  * The public face of a form app: /a/{publicSlug}.

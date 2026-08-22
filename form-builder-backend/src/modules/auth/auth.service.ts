@@ -6,18 +6,18 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
-import { PrismaService } from '../../common/prisma/prisma.service';
+import { PrismaService } from '../../common/infra/prisma/prisma.service';
 import { resolveActiveOrganization } from '../../common/tenancy/active-organization';
 import { FeatureFlagsService } from '../feature-flags/feature-flags.service';
-import { userCredentialsSelect } from '../../common/prisma/selects';
+import { userCredentialsSelect } from '../../common/infra/prisma/selects';
 import * as argon2 from 'argon2';
 import * as crypto from 'crypto';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
 import { MailService } from '../mail/mail.service';
 import { AuditService } from '../audit/audit.service';
-import { TotpService } from '../../common/crypto/totp.service';
-import { CryptoService } from '../../common/crypto/crypto.service';
+import { TotpService } from '../../common/infra/crypto/totp.service';
+import { CryptoService } from '../../common/infra/crypto/crypto.service';
 import {
   decideRefreshAction,
   interpretRotationClaim,

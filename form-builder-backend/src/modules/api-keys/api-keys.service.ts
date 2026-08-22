@@ -4,9 +4,9 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { createHash, randomBytes } from 'crypto';
-import { PrismaService } from '../../common/prisma/prisma.service';
-import { RedisService } from '../../common/redis/redis.service';
-import { AppLogger } from '../../common/logger/app-logger.service';
+import { PrismaService } from '../../common/infra/prisma/prisma.service';
+import { RedisService } from '../../common/infra/redis/redis.service';
+import { AppLogger } from '../../common/observability/logger/app-logger.service';
 import { AuditService } from '../audit/audit.service';
 import {
   API_KEY_PREFIX,
@@ -14,7 +14,7 @@ import {
   encodeBase62,
   fingerprintFromHash,
   parseScopes,
-} from '../../common/guards/api-key-policy';
+} from '../../common/auth/api-key-policy';
 import { CreateApiKeyDto } from './dto/create-api-key.dto';
 
 /**

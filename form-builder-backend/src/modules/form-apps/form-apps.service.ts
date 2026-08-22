@@ -6,7 +6,7 @@ import {
   ForbiddenException,
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
-import { PrismaService } from '../../common/prisma/prisma.service';
+import { PrismaService } from '../../common/infra/prisma/prisma.service';
 import { normalizeTheme } from '../forms/form-structure';
 import { AuditService } from '../audit/audit.service';
 import { CADENCES, readPeriodConfig } from './period-cadence';

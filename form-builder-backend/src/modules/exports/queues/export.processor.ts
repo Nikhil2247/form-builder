@@ -3,7 +3,7 @@ import { HttpException, Logger } from '@nestjs/common';
 import { Job } from 'bullmq';
 import { Readable } from 'node:stream';
 import type { ExportJob } from '@prisma/client';
-import { PrismaService } from '../../../common/prisma/prisma.service';
+import { PrismaService } from '../../../common/infra/prisma/prisma.service';
 import { FormsService } from '../../forms/forms.service';
 import { ExportProgressMeter } from '../export-progress';
 import type { FrozenExportFilters } from '../export-filters';

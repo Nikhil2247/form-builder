@@ -1,5 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { PrismaService } from '../../../common/prisma/prisma.service';
+import { PrismaService } from '../../../common/infra/prisma/prisma.service';
 import { AuditService } from '../../audit/audit.service';
 import { deleteExportObject } from '../export-uploader';
 import { resolveRetentionDays, resolveStaleRunningMs } from '../export-policy';

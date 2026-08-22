@@ -1,5 +1,5 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import { PrismaService } from '../../common/prisma/prisma.service';
+import { PrismaService } from '../../common/infra/prisma/prisma.service';
 
 /** Clamp a caller-supplied window so a huge value cannot scan the whole table. */
 function normaliseDays(days: number | undefined): number {

@@ -16,7 +16,7 @@ import { ValidationPipe } from '@nestjs/common';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { json, urlencoded } from 'express';
 import { AppModule } from './app.module';
-import { WinstonNestAdapter } from './common/logger/winston-nest.adapter';
+import { WinstonNestAdapter } from './common/observability/logger/winston-nest.adapter';
 import helmet from 'helmet';
 import compression from 'compression';
 import cookieParser from 'cookie-parser';

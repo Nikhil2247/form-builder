@@ -4,8 +4,8 @@ import {
   OnModuleInit,
   OnModuleDestroy,
 } from '@nestjs/common';
-import { PrismaService } from '../../common/prisma/prisma.service';
-import { RedisService } from '../../common/redis/redis.service';
+import { PrismaService } from '../../common/infra/prisma/prisma.service';
+import { RedisService } from '../../common/infra/redis/redis.service';
 import { isWorkerMode } from '../../config/runtime.config';
 
 /**

@@ -2,7 +2,7 @@ import type Anthropic from '@anthropic-ai/sdk';
 import { NotFoundException } from '@nestjs/common';
 // Must be zod's v4 API (see claude-client.service.ts) for zodOutputFormat().
 import { z } from 'zod/v4';
-import type { PrismaService } from '../../../common/prisma/prisma.service';
+import type { PrismaService } from '../../../common/infra/prisma/prisma.service';
 import {
   compileRules,
   type FormRule,
@@ -252,6 +252,7 @@ Rules:
     system,
     userMessage,
     schema: ProposeRuleOutputSchema,
+    effort: 'medium',
   });
 
   const proposed: FormRule[] = data.rules.map((r) => ({

@@ -1,8 +1,8 @@
 import { Controller, Get, Query, Param } from '@nestjs/common';
 import { IsOptional, IsString, MaxLength } from 'class-validator';
 import { TemplatesService } from './templates.service';
-import { PaginationQueryDto } from '../../common/pagination/pagination-query.dto';
-import { parsePagination } from '../../common/pagination/pagination';
+import { PaginationQueryDto } from '../../common/http/pagination/pagination-query.dto';
+import { parsePagination } from '../../common/http/pagination/pagination';
 
 class ListTemplatesQueryDto extends PaginationQueryDto {
   @IsOptional()

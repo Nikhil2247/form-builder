@@ -16,20 +16,20 @@ import {
 } from './queues/submission.producer';
 import { SubmitFormDto } from './dto/submit-form.dto';
 import { AnswerValidatorService } from './answer-validator.service';
-import { PrismaService } from '../../common/prisma/prisma.service';
-import { RedisService } from '../../common/redis/redis.service';
+import { PrismaService } from '../../common/infra/prisma/prisma.service';
+import { RedisService } from '../../common/infra/redis/redis.service';
 import { AuditService } from '../audit/audit.service';
 import { StorageService } from '../storage/storage.service';
 import {
   parsePagination,
   paginated,
   type Pagination,
-} from '../../common/pagination/pagination';
+} from '../../common/http/pagination/pagination';
 import {
   submissionDetailSelect,
   submissionListSelect,
   userSummarySelect,
-} from '../../common/prisma/selects';
+} from '../../common/infra/prisma/selects';
 import { ReviewSubmissionDto } from './dto/review-submission.dto';
 import { BulkSubmissionsDto } from './dto/bulk-submissions.dto';
 import {

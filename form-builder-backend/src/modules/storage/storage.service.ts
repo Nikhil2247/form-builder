@@ -11,7 +11,7 @@ import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
 import { createStorageClient } from '../../config/storage.config';
-import { PrismaService } from '../../common/prisma/prisma.service';
+import { PrismaService } from '../../common/infra/prisma/prisma.service';
 import { QUEUE_NAMES } from '../../config/bullmq.config';
 import { nanoid } from 'nanoid';
 import * as path from 'path';

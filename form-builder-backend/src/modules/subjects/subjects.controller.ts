@@ -14,13 +14,13 @@ import {
 import type { Request } from 'express';
 
 import { SubjectsService, type IdentityConfig } from './subjects.service';
-import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
-import { OrgMemberGuard } from '../../common/guards/org-member.guard';
-import { RoleGuard } from '../../common/guards/role.guard';
-import { RequiredRole } from '../../common/decorators/roles.decorator';
-import { OrgId } from '../../common/decorators/org-id.decorator';
-import { PaginationQueryDto } from '../../common/pagination/pagination-query.dto';
-import { parsePagination } from '../../common/pagination/pagination';
+import { JwtAuthGuard } from '../../common/auth/jwt-auth.guard';
+import { OrgMemberGuard } from '../../common/auth/org-member.guard';
+import { RoleGuard } from '../../common/auth/role.guard';
+import { RequiredRole } from '../../common/auth/roles.decorator';
+import { OrgId } from '../../common/auth/org-id.decorator';
+import { PaginationQueryDto } from '../../common/http/pagination/pagination-query.dto';
+import { parsePagination } from '../../common/http/pagination/pagination';
 
 /**
  * Subject types and subjects.

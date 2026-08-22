@@ -7,25 +7,25 @@ import {
   ConflictException,
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
-import { PrismaService } from '../../common/prisma/prisma.service';
+import { PrismaService } from '../../common/infra/prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { CreateFormDto } from './dto/create-form.dto';
 import { UpdateFormDto } from './dto/update-form.dto';
 import { customAlphabet } from 'nanoid';
 import * as argon2 from 'argon2';
 
-import { RedisService } from '../../common/redis/redis.service';
+import { RedisService } from '../../common/infra/redis/redis.service';
 import {
   parsePagination,
   paginated,
   type Pagination,
-} from '../../common/pagination/pagination';
+} from '../../common/http/pagination/pagination';
 import {
   formListSelect,
   formTrashSelect,
   formDetailSelect,
   submissionGridSelect,
-} from '../../common/prisma/selects';
+} from '../../common/infra/prisma/selects';
 import { compileRules, type FormRule } from '../../common/rules';
 import { ChoiceListsService } from '../choice-lists/choice-lists.service';
 import {

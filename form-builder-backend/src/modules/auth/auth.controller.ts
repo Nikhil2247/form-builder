@@ -19,7 +19,7 @@ import { LoginDto } from './dto/login.dto';
 import { ForgotPasswordDto } from './dto/forgot-password.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import { VerifyMfaDto, VerifyMfaLoginDto } from './dto/verify-mfa.dto';
-import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
+import { JwtAuthGuard } from '../../common/auth/jwt-auth.guard';
 import type { CookieOptions, Response, Request } from 'express';
 
 const COOKIE_NAME = 'refresh_token';

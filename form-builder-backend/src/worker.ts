@@ -10,7 +10,7 @@ initSentry('worker');
 
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
-import { WinstonNestAdapter } from './common/logger/winston-nest.adapter';
+import { WinstonNestAdapter } from './common/observability/logger/winston-nest.adapter';
 
 // Patch BigInt to be serializable by JSON.stringify (mirrors main.ts).
 (BigInt.prototype as any).toJSON = function () {

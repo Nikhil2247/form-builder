@@ -9,7 +9,7 @@ import {
   MaxLength,
   MinLength,
 } from 'class-validator';
-import { API_KEY_SCOPES } from '../../../common/guards/api-key-policy';
+import { API_KEY_SCOPES } from '../../../common/auth/api-key-policy';
 
 /**
  * Body for POST /organizations/:orgId/api-keys.

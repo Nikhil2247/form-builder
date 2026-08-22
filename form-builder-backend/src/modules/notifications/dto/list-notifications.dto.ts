@@ -1,6 +1,6 @@
 import { Transform } from 'class-transformer';
 import { IsBoolean, IsOptional } from 'class-validator';
-import { PaginationQueryDto } from '../../../common/pagination/pagination-query.dto';
+import { PaginationQueryDto } from '../../../common/http/pagination/pagination-query.dto';
 
 /**
  * Query for `GET /notifications`.

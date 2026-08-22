@@ -10,10 +10,10 @@ import {
 } from '@nestjs/common';
 import type { Request } from 'express';
 import { AssistantMode } from '@prisma/client';
-import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
-import { SuperAdminGuard } from '../../common/guards/super-admin.guard';
-import { PaginationQueryDto } from '../../common/pagination/pagination-query.dto';
-import { parsePagination } from '../../common/pagination/pagination';
+import { JwtAuthGuard } from '../../common/auth/jwt-auth.guard';
+import { SuperAdminGuard } from '../../common/auth/super-admin.guard';
+import { PaginationQueryDto } from '../../common/http/pagination/pagination-query.dto';
+import { parsePagination } from '../../common/http/pagination/pagination';
 import { PlatformInsightsService } from './platform-insights.service';
 import { SessionService } from './session.service';
 import { UsageService } from './usage.service';

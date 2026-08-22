@@ -21,7 +21,7 @@ import { LookupModule } from './modules/lookup/lookup.module';
 import { AdminModule } from './modules/admin/admin.module';
 import { AuditModule } from './modules/audit/audit.module';
 import { MailModule } from './modules/mail/mail.module';
-import { HealthModule } from './common/health/health.module';
+import { HealthModule } from './common/observability/health/health.module';
 import { TemplatesModule } from './modules/templates/templates.module';
 import { SubjectsModule } from './modules/subjects/subjects.module';
 import { FormAppsModule } from './modules/form-apps/form-apps.module';
@@ -37,27 +37,27 @@ import { bullMQConnection } from './config/bullmq.config';
 import { getRedisUrl } from './config/env';
 
 // ── Logging ────────────────────────────────────────────────────────────────────
-import { LoggerModule } from './common/logger/logger.module';
-import { HttpLoggingInterceptor } from './common/interceptors/logging.interceptor';
+import { LoggerModule } from './common/observability/logger/logger.module';
+import { HttpLoggingInterceptor } from './common/http/logging.interceptor';
 
-import { PrismaModule } from './common/prisma/prisma.module';
-import { RedisModule } from './common/redis/redis.module';
-import { CryptoModule } from './common/crypto/crypto.module';
-import { SessionModule } from './common/session/session.module';
+import { PrismaModule } from './common/infra/prisma/prisma.module';
+import { RedisModule } from './common/infra/redis/redis.module';
+import { CryptoModule } from './common/infra/crypto/crypto.module';
+import { SessionModule } from './common/infra/session/session.module';
 
 // ── Observability ──────────────────────────────────────────────────────────────
-import { MetricsModule } from './common/metrics/metrics.module';
-import { HttpMetricsInterceptor } from './common/metrics/http-metrics.interceptor';
+import { MetricsModule } from './common/observability/metrics/metrics.module';
+import { HttpMetricsInterceptor } from './common/observability/metrics/http-metrics.interceptor';
 
 // ── Tenant scoping ─────────────────────────────────────────────────────────────
 import { TenantContextInterceptor } from './common/tenancy/tenant-context.interceptor';
 
 // ── Global error handling ──────────────────────────────────────────────────────
-import { HttpExceptionFilter } from './common/filters/http-exception.filter';
+import { HttpExceptionFilter } from './common/http/http-exception.filter';
 
 // ── Global response envelope ───────────────────────────────────────────────────
-import { ResponseInterceptor } from './common/interceptors/response.interceptor';
-import { CacheControlInterceptor } from './common/interceptors/cache-control.interceptor';
+import { ResponseInterceptor } from './common/http/response.interceptor';
+import { CacheControlInterceptor } from './common/http/cache-control.interceptor';
 
 @Module({
   imports: [

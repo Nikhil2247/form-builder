@@ -5,7 +5,7 @@ import {
 } from '@nestjs/common';
 // Must be zod's v4 API (see claude-client.service.ts) for zodOutputFormat().
 import { z } from 'zod/v4';
-import { PrismaService } from '../../common/prisma/prisma.service';
+import { PrismaService } from '../../common/infra/prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import {
   ClaudeClientService,
@@ -175,6 +175,7 @@ export class IdeaService {
       system: SYSTEM_PROMPT,
       userMessage: prompt,
       schema: GeneratedFormSchema,
+      effort: 'medium',
     });
 
     this.audit.log({
@@ -264,6 +265,7 @@ export class IdeaService {
       userMessage: prompt,
       schema: GeneratedFormAppSchema,
       maxTokens: 12000,
+      effort: 'medium',
     });
 
     this.audit.log({

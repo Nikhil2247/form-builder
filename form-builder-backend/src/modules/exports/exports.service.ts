@@ -7,14 +7,14 @@ import {
   ServiceUnavailableException,
 } from '@nestjs/common';
 import type { ExportJob } from '@prisma/client';
-import { PrismaService } from '../../common/prisma/prisma.service';
+import { PrismaService } from '../../common/infra/prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { FormsService } from '../forms/forms.service';
 import {
   paginated,
   parsePagination,
   type Pagination,
-} from '../../common/pagination/pagination';
+} from '../../common/http/pagination/pagination';
 import { CreateExportDto } from './dto/create-export.dto';
 import { ListExportsQueryDto } from './dto/list-exports-query.dto';
 import {

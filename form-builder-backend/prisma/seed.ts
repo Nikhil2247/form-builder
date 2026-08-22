@@ -59,7 +59,7 @@ import 'dotenv/config';
 import { compileRules, type FormRule } from '../src/common/rules';
 // Reused rather than reimplemented: the MFA secret has to be encrypted with the
 // exact key derivation the running app uses, or login fails at decrypt.
-import { CryptoService } from '../src/common/crypto/crypto.service';
+import { CryptoService } from '../src/common/infra/crypto/crypto.service';
 
 const DATABASE_URL = process.env.DATABASE_URL;
 if (!DATABASE_URL) {

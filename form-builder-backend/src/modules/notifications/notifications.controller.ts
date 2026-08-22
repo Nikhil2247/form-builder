@@ -21,9 +21,9 @@ import { NotificationStreamService } from './notification-stream.service';
 import { SseTicketService } from './sse-ticket.service';
 import { SseTicketGuard } from './guards/sse-ticket.guard';
 import { ListNotificationsDto } from './dto/list-notifications.dto';
-import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
-import { Public } from '../../common/decorators/public.decorator';
-import { parsePagination } from '../../common/pagination/pagination';
+import { JwtAuthGuard } from '../../common/auth/jwt-auth.guard';
+import { Public } from '../../common/auth/public.decorator';
+import { parsePagination } from '../../common/http/pagination/pagination';
 
 /**
  * In-app notifications for the signed-in user.

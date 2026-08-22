@@ -20,11 +20,11 @@ import {
 } from './choice-lists.service';
 import { applyMapping, parseCsv, type CsvMapping } from './csv';
 import { ImportCsvDto, PreviewCsvDto } from './dto/import-csv.dto';
-import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
-import { OrgMemberGuard } from '../../common/guards/org-member.guard';
-import { RoleGuard } from '../../common/guards/role.guard';
-import { RequiredRole } from '../../common/decorators/roles.decorator';
-import { OrgId } from '../../common/decorators/org-id.decorator';
+import { JwtAuthGuard } from '../../common/auth/jwt-auth.guard';
+import { OrgMemberGuard } from '../../common/auth/org-member.guard';
+import { RoleGuard } from '../../common/auth/role.guard';
+import { RequiredRole } from '../../common/auth/roles.decorator';
+import { OrgId } from '../../common/auth/org-id.decorator';
 
 /**
  * Turn a client's mapping object into a `CsvMapping`, or explain what is wrong.

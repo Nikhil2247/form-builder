@@ -10,8 +10,8 @@ import {
 import type { Request } from 'express';
 
 import { FeatureFlagsService } from './feature-flags.service';
-import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
-import { SuperAdminGuard } from '../../common/guards/super-admin.guard';
+import { JwtAuthGuard } from '../../common/auth/jwt-auth.guard';
+import { SuperAdminGuard } from '../../common/auth/super-admin.guard';
 
 /**
  * Feature flag administration — super-admin only.

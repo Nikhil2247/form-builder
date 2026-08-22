@@ -1,8 +1,8 @@
 import { Global, Module } from '@nestjs/common';
 import { ApiKeysController } from './api-keys.controller';
 import { ApiKeysService } from './api-keys.service';
-import { ApiKeyGuard } from '../../common/guards/api-key.guard';
-import { ApiKeyOrJwtGuard } from '../../common/guards/api-key-or-jwt.guard';
+import { ApiKeyGuard } from '../../common/auth/api-key.guard';
+import { ApiKeyOrJwtGuard } from '../../common/auth/api-key-or-jwt.guard';
 
 /**
  * API key CRUD, plus the two guards that consume the keys.

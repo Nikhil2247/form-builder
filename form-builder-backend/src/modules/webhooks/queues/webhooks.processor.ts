@@ -2,11 +2,11 @@ import { Processor, WorkerHost, OnWorkerEvent } from '@nestjs/bullmq';
 import { Logger, Optional } from '@nestjs/common';
 import { Job } from 'bullmq';
 import { createHmac } from 'crypto';
-import { PrismaService } from '../../../common/prisma/prisma.service';
-import { CryptoService } from '../../../common/crypto/crypto.service';
-import { MetricsService } from '../../../common/metrics/metrics.service';
+import { PrismaService } from '../../../common/infra/prisma/prisma.service';
+import { CryptoService } from '../../../common/infra/crypto/crypto.service';
+import { MetricsService } from '../../../common/observability/metrics/metrics.service';
 import { QUEUE_NAMES } from '../../../config/bullmq.config';
-import { assertSafeOutboundUrl } from '../../../common/net/url-guard';
+import { assertSafeOutboundUrl } from '../../../common/infra/net/url-guard';
 import { NotificationsService } from '../../notifications/notifications.service';
 import { NOTIFICATION_TYPES } from '../../notifications/notification-recipients';
 

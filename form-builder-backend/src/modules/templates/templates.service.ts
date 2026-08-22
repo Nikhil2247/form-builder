@@ -1,11 +1,11 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
-import { PrismaService } from '../../common/prisma/prisma.service';
+import { PrismaService } from '../../common/infra/prisma/prisma.service';
 import {
   parsePagination,
   paginated,
   type Pagination,
-} from '../../common/pagination/pagination';
+} from '../../common/http/pagination/pagination';
 
 @Injectable()
 export class TemplatesService {

@@ -5,7 +5,7 @@ import {
   ConflictException,
   BadRequestException,
 } from '@nestjs/common';
-import { PrismaService } from '../../common/prisma/prisma.service';
+import { PrismaService } from '../../common/infra/prisma/prisma.service';
 import { MailService } from '../mail/mail.service';
 
 import { UpdateOrganizationDto } from './dto/update-organization.dto';
@@ -14,14 +14,14 @@ import {
   parsePagination,
   paginated,
   type Pagination,
-} from '../../common/pagination/pagination';
+} from '../../common/http/pagination/pagination';
 import {
   memberSelect,
   invitationSelect,
   auditLogSelect,
-} from '../../common/prisma/selects';
+} from '../../common/infra/prisma/selects';
 import { resolveActiveOrganization } from '../../common/tenancy/active-organization';
-import { SessionCacheService } from '../../common/session/session-cache.service';
+import { SessionCacheService } from '../../common/infra/session/session-cache.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { NOTIFICATION_TYPES } from '../notifications/notification-recipients';
 

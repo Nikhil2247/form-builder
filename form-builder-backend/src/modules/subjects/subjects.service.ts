@@ -5,13 +5,13 @@ import {
   ConflictException,
   Logger,
 } from '@nestjs/common';
-import { PrismaService } from '../../common/prisma/prisma.service';
+import { PrismaService } from '../../common/infra/prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import {
   parsePagination,
   paginated,
   type Pagination,
-} from '../../common/pagination/pagination';
+} from '../../common/http/pagination/pagination';
 import { refKey, type RuleValue, type CompiledPlan } from '../../common/rules';
 
 /**

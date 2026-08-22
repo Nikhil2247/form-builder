@@ -8,7 +8,7 @@ import {
 } from '@nestjs/common';
 import { createHash, randomUUID } from 'node:crypto';
 
-import { PrismaService } from '../../common/prisma/prisma.service';
+import { PrismaService } from '../../common/infra/prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { SubmissionsService } from '../submissions/submissions.service';
 import { SubmissionProducer } from '../submissions/queues/submission.producer';

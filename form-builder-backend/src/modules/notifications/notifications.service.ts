@@ -1,11 +1,11 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import { PrismaService } from '../../common/prisma/prisma.service';
-import { AppLogger } from '../../common/logger/app-logger.service';
+import { PrismaService } from '../../common/infra/prisma/prisma.service';
+import { AppLogger } from '../../common/observability/logger/app-logger.service';
 import {
   parsePagination,
   paginated,
   type Pagination,
-} from '../../common/pagination/pagination';
+} from '../../common/http/pagination/pagination';
 import {
   NotificationStreamService,
   type NotificationPush,

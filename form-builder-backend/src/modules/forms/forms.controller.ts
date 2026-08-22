@@ -16,16 +16,16 @@ import { FormsService } from './forms.service';
 import { IdeaService } from '../assistant/idea.service';
 import { CreateFormDto } from './dto/create-form.dto';
 import { UpdateFormDto } from './dto/update-form.dto';
-import { ApiKeyOrJwtGuard } from '../../common/guards/api-key-or-jwt.guard';
-import { OrgMemberGuard } from '../../common/guards/org-member.guard';
-import { RoleGuard } from '../../common/guards/role.guard';
-import { RequiredRole } from '../../common/decorators/roles.decorator';
-import { RequiredScope } from '../../common/decorators/scopes.decorator';
-import { OrgId } from '../../common/decorators/org-id.decorator';
+import { ApiKeyOrJwtGuard } from '../../common/auth/api-key-or-jwt.guard';
+import { OrgMemberGuard } from '../../common/auth/org-member.guard';
+import { RoleGuard } from '../../common/auth/role.guard';
+import { RequiredRole } from '../../common/auth/roles.decorator';
+import { RequiredScope } from '../../common/auth/scopes.decorator';
+import { OrgId } from '../../common/auth/org-id.decorator';
 import type { Request, Response } from 'express';
 import { ListFormsQueryDto } from './dto/list-forms-query.dto';
-import { PaginationQueryDto } from '../../common/pagination/pagination-query.dto';
-import { parsePagination } from '../../common/pagination/pagination';
+import { PaginationQueryDto } from '../../common/http/pagination/pagination-query.dto';
+import { parsePagination } from '../../common/http/pagination/pagination';
 
 /**
  * Organization-scoped form management endpoints.

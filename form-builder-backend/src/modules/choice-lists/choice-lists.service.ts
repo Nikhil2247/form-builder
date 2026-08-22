@@ -9,8 +9,8 @@ import {
 import { Prisma } from '@prisma/client';
 import { randomUUID } from 'node:crypto';
 
-import { PrismaService } from '../../common/prisma/prisma.service';
-import { RedisService } from '../../common/redis/redis.service';
+import { PrismaService } from '../../common/infra/prisma/prisma.service';
+import { RedisService } from '../../common/infra/redis/redis.service';
 import { AuditService } from '../audit/audit.service';
 import {
   lookupKey,

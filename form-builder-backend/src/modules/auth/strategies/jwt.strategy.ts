@@ -1,7 +1,7 @@
 import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { PassportStrategy } from '@nestjs/passport';
 import { ExtractJwt, Strategy } from 'passport-jwt';
-import { SessionCacheService } from '../../../common/session/session-cache.service';
+import { SessionCacheService } from '../../../common/infra/session/session-cache.service';
 import { resolveActiveOrganization } from '../../../common/tenancy/active-organization';
 
 export interface JwtPayload {

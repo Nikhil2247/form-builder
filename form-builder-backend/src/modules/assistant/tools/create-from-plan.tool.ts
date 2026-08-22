@@ -1,5 +1,5 @@
 import type Anthropic from '@anthropic-ai/sdk';
-import type { PrismaService } from '../../../common/prisma/prisma.service';
+import type { PrismaService } from '../../../common/infra/prisma/prisma.service';
 import type { IdeaService } from '../idea.service';
 
 export const CREATE_FROM_PLAN_TOOL: Anthropic.Tool = {

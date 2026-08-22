@@ -1,8 +1,8 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import { PrismaService } from '../../common/prisma/prisma.service';
+import { PrismaService } from '../../common/infra/prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
-import { CryptoService } from '../../common/crypto/crypto.service';
-import { assertSafeOutboundUrl } from '../../common/net/url-guard';
+import { CryptoService } from '../../common/infra/crypto/crypto.service';
+import { assertSafeOutboundUrl } from '../../common/infra/net/url-guard';
 import * as crypto from 'crypto';
 
 /**

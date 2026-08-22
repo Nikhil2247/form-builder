@@ -7,11 +7,11 @@ import {
 } from '@nestjs/common';
 
 import { FormAppSessionsService } from './form-app-sessions.service';
-import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
-import { OrgMemberGuard } from '../../common/guards/org-member.guard';
-import { RoleGuard } from '../../common/guards/role.guard';
-import { RequiredRole } from '../../common/decorators/roles.decorator';
-import { OrgId } from '../../common/decorators/org-id.decorator';
+import { JwtAuthGuard } from '../../common/auth/jwt-auth.guard';
+import { OrgMemberGuard } from '../../common/auth/org-member.guard';
+import { RoleGuard } from '../../common/auth/role.guard';
+import { RequiredRole } from '../../common/auth/roles.decorator';
+import { OrgId } from '../../common/auth/org-id.decorator';
 
 /**
  * What can be added to a record, right now.

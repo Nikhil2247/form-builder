@@ -100,6 +100,15 @@ export function computeCostUsd(model: ClaudeModel, usage: UsageInfo): number {
   return inputCost + outputCost;
 }
 
+/**
+ * All possible `output_config.effort` levels. Sonnet 5 only — the SDK accepts
+ * this on every model, but Haiku 4.5 silently ignores it (see
+ * AI_ASSISTANT_IMPROVEMENT_PLAN.md §2.1 C6), and the outer agent loop never
+ * runs Sonnet anyway (§3.2), so there's nothing to gain wiring it into
+ * ChatTurnParams too.
+ */
+export type Effort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+
 export interface StructuredCompletionParams<T extends z.ZodTypeAny> {
   model: ClaudeModel;
   /**
@@ -113,6 +122,14 @@ export interface StructuredCompletionParams<T extends z.ZodTypeAny> {
   userMessage: string;
   schema: T;
   maxTokens?: number;
+  /**
+   * Fewer, more-consolidated generation passes instead of the model's default
+   * reasoning depth — a per-call cost/latency knob distinct from maxTokens.
+   * AI_ASSISTANT_IMPROVEMENT_PLAN.md §3.2 sets 'medium' for every generation
+   * tool (propose_rule, review_form, plan_form, plan_form_app); omit for the
+   * model's default.
+   */
+  effort?: Effort;
 }
 
 export interface StructuredCompletionResult<T> {
@@ -263,6 +280,7 @@ export class ClaudeClientService {
       messages: [{ role: 'user', content: params.userMessage }],
       output_config: {
         format: zodOutputFormat(params.schema),
+        effort: params.effort,
       },
     });
 

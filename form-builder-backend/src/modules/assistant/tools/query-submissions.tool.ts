@@ -1,5 +1,5 @@
 import type Anthropic from '@anthropic-ai/sdk';
-import type { PrismaService } from '../../../common/prisma/prisma.service';
+import type { PrismaService } from '../../../common/infra/prisma/prisma.service';
 
 export const QUERY_SUBMISSIONS_TOOL: Anthropic.Tool = {
   name: 'query_submissions',

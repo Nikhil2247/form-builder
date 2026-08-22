@@ -1,6 +1,6 @@
 import { Logger } from '@nestjs/common';
 import { AssistantMode } from '@prisma/client';
-import { PrismaService } from '../../common/prisma/prisma.service';
+import { PrismaService } from '../../common/infra/prisma/prisma.service';
 import { AnalyticsService } from '../analytics/analytics.service';
 import { ClaudeClientService } from './claude-client.service';
 import { IdeaService } from './idea.service';

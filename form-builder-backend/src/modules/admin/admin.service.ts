@@ -5,19 +5,19 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import * as crypto from 'crypto';
-import { PrismaService } from '../../common/prisma/prisma.service';
+import { PrismaService } from '../../common/infra/prisma/prisma.service';
 import {
   parsePagination,
   paginated,
   type Pagination,
-} from '../../common/pagination/pagination';
+} from '../../common/http/pagination/pagination';
 import {
   organizationAdminSelect,
   userAdminSelect,
   auditLogSelect,
   memberSelect,
-} from '../../common/prisma/selects';
-import { SessionCacheService } from '../../common/session/session-cache.service';
+} from '../../common/infra/prisma/selects';
+import { SessionCacheService } from '../../common/infra/session/session-cache.service';
 
 @Injectable()
 export class AdminService {

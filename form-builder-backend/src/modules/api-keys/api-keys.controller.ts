@@ -13,11 +13,11 @@ import { Throttle } from '@nestjs/throttler';
 import type { Request } from 'express';
 import { ApiKeysService } from './api-keys.service';
 import { CreateApiKeyDto } from './dto/create-api-key.dto';
-import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
-import { OrgMemberGuard } from '../../common/guards/org-member.guard';
-import { RoleGuard } from '../../common/guards/role.guard';
-import { RequiredRole } from '../../common/decorators/roles.decorator';
-import { OrgId } from '../../common/decorators/org-id.decorator';
+import { JwtAuthGuard } from '../../common/auth/jwt-auth.guard';
+import { OrgMemberGuard } from '../../common/auth/org-member.guard';
+import { RoleGuard } from '../../common/auth/role.guard';
+import { RequiredRole } from '../../common/auth/roles.decorator';
+import { OrgId } from '../../common/auth/org-id.decorator';
 
 /**
  * Organization-scoped API key management.

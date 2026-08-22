@@ -9,7 +9,7 @@ import {
 import { Throttle } from '@nestjs/throttler';
 
 import { ChoiceListsService } from './choice-lists.service';
-import { PrismaService } from '../../common/prisma/prisma.service';
+import { PrismaService } from '../../common/infra/prisma/prisma.service';
 
 /**
  * Options for a question on a PUBLIC form.

@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { createHash, randomBytes } from 'crypto';
-import { RedisService } from '../../common/redis/redis.service';
-import { AppLogger } from '../../common/logger/app-logger.service';
+import { RedisService } from '../../common/infra/redis/redis.service';
+import { AppLogger } from '../../common/observability/logger/app-logger.service';
 
 /**
  * Single-use connection tickets for the SSE stream.

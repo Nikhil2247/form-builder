@@ -1,5 +1,5 @@
 import type Anthropic from '@anthropic-ai/sdk';
-import type { PrismaService } from '../../../common/prisma/prisma.service';
+import type { PrismaService } from '../../../common/infra/prisma/prisma.service';
 import type { AdminService } from '../../admin/admin.service';
 
 export const CROSS_ORG_QUERY_TOOL: Anthropic.Tool = {

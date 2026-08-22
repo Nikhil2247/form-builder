@@ -241,18 +241,29 @@ export class AgentLoopService {
         return { sessionId, reply, clarify, costUsd };
       }
 
-      const toolResults: Anthropic.ToolResultBlockParam[] = [];
-      for (const block of turn.content) {
-        if (block.type !== 'tool_use') continue;
-        toolCallLog.push({ name: block.name, input: block.input });
-        const output = await params.runTool(block.name, block.input);
-        params.onToolResult?.(block.name, block.input, output);
-        toolResults.push({
-          type: 'tool_result',
-          tool_use_id: block.id,
-          content: output,
-        });
-      }
+      // Run every tool_use block from this turn concurrently rather than one
+      // at a time — Haiku can and does request multiple independent tools
+      // (e.g. get_form_analytics + query_submissions) in a single turn, and
+      // they don't depend on each other's output. Promise.all preserves
+      // result order regardless of completion order, so tool_result blocks
+      // still line up 1:1 with their tool_use_id.
+      const toolUseBlocks = turn.content.filter(
+        (block): block is Anthropic.ToolUseBlock => block.type === 'tool_use',
+      );
+      toolUseBlocks.forEach((block) =>
+        toolCallLog.push({ name: block.name, input: block.input }),
+      );
+      const toolResults: Anthropic.ToolResultBlockParam[] = await Promise.all(
+        toolUseBlocks.map(async (block) => {
+          const output = await params.runTool(block.name, block.input);
+          params.onToolResult?.(block.name, block.input, output);
+          return {
+            type: 'tool_result' as const,
+            tool_use_id: block.id,
+            content: output,
+          };
+        }),
+      );
       messages.push({ role: 'user', content: toolResults });
     }
 

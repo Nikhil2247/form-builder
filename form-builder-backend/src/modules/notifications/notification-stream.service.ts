@@ -8,8 +8,8 @@ import {
 import { Observable } from 'rxjs';
 import { randomUUID } from 'crypto';
 import type Redis from 'ioredis';
-import { RedisService } from '../../common/redis/redis.service';
-import { AppLogger } from '../../common/logger/app-logger.service';
+import { RedisService } from '../../common/infra/redis/redis.service';
+import { AppLogger } from '../../common/observability/logger/app-logger.service';
 
 /**
  * The live half of notifications: Redis pub/sub fanned out to SSE clients.

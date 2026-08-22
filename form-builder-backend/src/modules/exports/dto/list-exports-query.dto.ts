@@ -1,5 +1,5 @@
 import { IsIn, IsOptional, IsUUID } from 'class-validator';
-import { PaginationQueryDto } from '../../../common/pagination/pagination-query.dto';
+import { PaginationQueryDto } from '../../../common/http/pagination/pagination-query.dto';
 
 /** Query parameters for GET /organizations/:orgId/exports. */
 export class ListExportsQueryDto extends PaginationQueryDto {

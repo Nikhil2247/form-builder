@@ -5,7 +5,7 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { SseTicketService } from '../sse-ticket.service';
-import { AppLogger } from '../../../common/logger/app-logger.service';
+import { AppLogger } from '../../../common/observability/logger/app-logger.service';
 
 /**
  * Authenticates the SSE stream from a single-use connection ticket.

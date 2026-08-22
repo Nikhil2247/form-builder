@@ -14,16 +14,16 @@ import { OrganizationsService } from './organizations.service';
 import { UpdateOrganizationDto } from './dto/update-organization.dto';
 import { InviteMemberDto } from './dto/invite-member.dto';
 import { UpdateMemberRoleDto } from './dto/update-member-role.dto';
-import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
-import { OrgMemberGuard } from '../../common/guards/org-member.guard';
-import { RoleGuard } from '../../common/guards/role.guard';
-import { RequiredRole } from '../../common/decorators/roles.decorator';
-import { OrgId } from '../../common/decorators/org-id.decorator';
-import { Public } from '../../common/decorators/public.decorator';
+import { JwtAuthGuard } from '../../common/auth/jwt-auth.guard';
+import { OrgMemberGuard } from '../../common/auth/org-member.guard';
+import { RoleGuard } from '../../common/auth/role.guard';
+import { RequiredRole } from '../../common/auth/roles.decorator';
+import { OrgId } from '../../common/auth/org-id.decorator';
+import { Public } from '../../common/auth/public.decorator';
 import { Throttle } from '@nestjs/throttler';
-import { PaginationQueryDto } from '../../common/pagination/pagination-query.dto';
-import { AuditLogQueryDto } from '../../common/pagination/audit-query.dto';
-import { parsePagination } from '../../common/pagination/pagination';
+import { PaginationQueryDto } from '../../common/http/pagination/pagination-query.dto';
+import { AuditLogQueryDto } from '../../common/http/pagination/audit-query.dto';
+import { parsePagination } from '../../common/http/pagination/pagination';
 import type { Request } from 'express';
 
 /**

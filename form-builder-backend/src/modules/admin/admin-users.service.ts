@@ -7,10 +7,10 @@ import {
 } from '@nestjs/common';
 import * as argon2 from 'argon2';
 import * as crypto from 'crypto';
-import { PrismaService } from '../../common/prisma/prisma.service';
+import { PrismaService } from '../../common/infra/prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { MailService } from '../mail/mail.service';
-import { SessionCacheService } from '../../common/session/session-cache.service';
+import { SessionCacheService } from '../../common/infra/session/session-cache.service';
 import { frontendUrl } from '../auth/auth.service';
 import type { CreateUserDto } from './dto/create-user.dto';
 
