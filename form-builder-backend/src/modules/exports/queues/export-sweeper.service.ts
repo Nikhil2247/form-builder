@@ -1,8 +1,8 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../../common/infra/prisma/prisma.service';
 import { AuditService } from '../../audit/audit.service';
-import { deleteExportObject } from '../export-uploader';
-import { resolveRetentionDays, resolveStaleRunningMs } from '../export-policy';
+import { deleteExportObject } from '../logic/export-uploader';
+import { resolveRetentionDays, resolveStaleRunningMs } from '../logic/export-policy';
 
 /**
  * Retention sweeper for finished exports.

@@ -17,12 +17,12 @@ import {
 import { Throttle } from '@nestjs/throttler';
 import type { Request } from 'express';
 
-import { FormAppsService } from './form-apps.service';
+import { FormAppsService } from '../form-apps.service';
 import {
   FormAppSessionsService,
   type SessionActor,
-} from './form-app-sessions.service';
-import { OptionalJwtAuthGuard } from '../../common/auth/optional-jwt-auth.guard';
+} from '../services/form-app-sessions.service';
+import { OptionalJwtAuthGuard } from '../../../common/auth/optional-jwt-auth.guard';
 
 /**
  * The public face of a form app: /a/{publicSlug}.

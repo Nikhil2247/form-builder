@@ -7,10 +7,10 @@ import {
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../common/infra/prisma/prisma.service';
-import { normalizeTheme } from '../forms/form-structure';
+import { normalizeTheme } from '../forms/logic/form-structure';
 import { AuditService } from '../audit/audit.service';
-import { CADENCES, readPeriodConfig } from './period-cadence';
-import { readSchedule } from './step-schedule';
+import { CADENCES, readPeriodConfig } from './logic/period-cadence';
+import { readSchedule } from './logic/step-schedule';
 
 /**
  * Form Apps — a data-entry surface over one subject type.

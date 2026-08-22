@@ -18,7 +18,7 @@ import {
   ChoiceListsService,
   type ChoiceItemInput,
 } from './choice-lists.service';
-import { applyMapping, parseCsv, type CsvMapping } from './csv';
+import { applyMapping, parseCsv, type CsvMapping } from './logic/csv';
 import { ImportCsvDto, PreviewCsvDto } from './dto/import-csv.dto';
 import { JwtAuthGuard } from '../../common/auth/jwt-auth.guard';
 import { OrgMemberGuard } from '../../common/auth/org-member.guard';

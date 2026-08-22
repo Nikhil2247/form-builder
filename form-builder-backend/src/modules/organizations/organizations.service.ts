@@ -23,7 +23,7 @@ import {
 import { resolveActiveOrganization } from '../../common/tenancy/active-organization';
 import { SessionCacheService } from '../../common/infra/session/session-cache.service';
 import { NotificationsService } from '../notifications/notifications.service';
-import { NOTIFICATION_TYPES } from '../notifications/notification-recipients';
+import { NOTIFICATION_TYPES } from '../notifications/logic/notification-recipients';
 
 @Injectable()
 export class OrganizationsService {

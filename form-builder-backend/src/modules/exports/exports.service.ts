@@ -23,15 +23,15 @@ import {
   hasRowFilters,
   rowSourceSupportsFilters,
   type FrozenExportFilters,
-} from './export-filters';
+} from './logic/export-filters';
 import {
   exportContentType,
   exportFilename,
   isRetentionExpired,
   resolveDownloadTtlSeconds,
   resolveRetentionDays,
-} from './export-policy';
-import { presignExportDownload } from './export-uploader';
+} from './logic/export-policy';
+import { presignExportDownload } from './logic/export-uploader';
 import { ExportProducer } from './queues/export.producer';
 
 /**

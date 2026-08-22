@@ -32,7 +32,7 @@ import {
   normalizeFormStructure,
   normalizeNotifyEmails,
   normalizeTheme,
-} from './form-structure';
+} from './logic/form-structure';
 
 /**
  * Generate a public form slug.

@@ -10,7 +10,7 @@ import { SubmissionStatus } from '@prisma/client';
 import {
   MAX_BULK_SUBMISSION_IDS,
   REVIEWABLE_STATUSES,
-} from '../submission-review.policy';
+} from '../logic/submission-review.policy';
 
 /** The two things a bulk call can do. */
 export type BulkSubmissionAction = 'SET_STATUS' | 'DELETE';

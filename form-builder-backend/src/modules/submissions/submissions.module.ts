@@ -4,7 +4,7 @@ import { SubmissionsController } from './submissions.controller';
 import { SubmissionsService } from './submissions.service';
 import { SubmissionProducer } from './queues/submission.producer';
 import { SubmissionProcessor } from './queues/submission.processor';
-import { AnswerValidatorService } from './answer-validator.service';
+import { AnswerValidatorService } from './services/answer-validator.service';
 import { QUEUE_NAMES } from '../../config/bullmq.config';
 import { isWorkerMode } from '../../config/runtime.config';
 import { ChoiceListsModule } from '../choice-lists/choice-lists.module';

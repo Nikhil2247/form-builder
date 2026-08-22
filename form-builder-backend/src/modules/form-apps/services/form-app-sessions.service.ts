@@ -8,16 +8,16 @@ import {
 } from '@nestjs/common';
 import { createHash, randomUUID } from 'node:crypto';
 
-import { PrismaService } from '../../common/infra/prisma/prisma.service';
-import { AuditService } from '../audit/audit.service';
-import { SubmissionsService } from '../submissions/submissions.service';
-import { SubmissionProducer } from '../submissions/queues/submission.producer';
+import { PrismaService } from '../../../common/infra/prisma/prisma.service';
+import { AuditService } from '../../audit/audit.service';
+import { SubmissionsService } from '../../submissions/submissions.service';
+import { SubmissionProducer } from '../../submissions/queues/submission.producer';
 import {
   evaluateSafe,
   truthy,
   type EvalContext,
   type ExprNode,
-} from '../../common/rules';
+} from '../../../common/rules';
 import {
   SubjectHistory,
   effectiveMax,
@@ -27,13 +27,13 @@ import {
   occurrenceLabelFor,
   uniqueByKeys,
   type StepScope,
-} from './step-scope';
-import { fileableWindows, readPeriodConfig } from './period-cadence';
+} from '../logic/step-scope';
+import { fileableWindows, readPeriodConfig } from '../logic/period-cadence';
 import {
   dueStateFor,
   scheduleAnchorKey,
   type StepDueState,
-} from './step-schedule';
+} from '../logic/step-schedule';
 
 /**
  * Form-app sessions — one sitting, many submissions, one act.

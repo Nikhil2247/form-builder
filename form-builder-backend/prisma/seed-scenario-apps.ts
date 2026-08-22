@@ -66,14 +66,14 @@ import {
   type FormRule,
   type RuleValue,
 } from '../src/common/rules';
-import { normalizeFormStructure, normalizeTheme } from '../src/modules/forms/form-structure';
+import { normalizeFormStructure, normalizeTheme } from '../src/modules/forms/logic/form-structure';
 // The real helpers, not a copy. Seeded submissions have to carry exactly the
 // occurrence keys and dates the submit path would have written, or the demo
 // data disagrees with the code that reads it.
 import {
   occurredAtFor,
   occurrenceKeyFor,
-} from '../src/modules/form-apps/step-scope';
+} from '../src/modules/form-apps/logic/step-scope';
 
 const CHECK_ONLY = process.argv.includes('--check');
 

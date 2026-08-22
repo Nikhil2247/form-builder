@@ -11,12 +11,12 @@ import {
 } from '@nestjs/common';
 import type { Request } from 'express';
 
-import { FormAppsService, type AppLayoutMode } from './form-apps.service';
-import { JwtAuthGuard } from '../../common/auth/jwt-auth.guard';
-import { OrgMemberGuard } from '../../common/auth/org-member.guard';
-import { RoleGuard } from '../../common/auth/role.guard';
-import { RequiredRole } from '../../common/auth/roles.decorator';
-import { OrgId } from '../../common/auth/org-id.decorator';
+import { FormAppsService, type AppLayoutMode } from '../form-apps.service';
+import { JwtAuthGuard } from '../../../common/auth/jwt-auth.guard';
+import { OrgMemberGuard } from '../../../common/auth/org-member.guard';
+import { RoleGuard } from '../../../common/auth/role.guard';
+import { RequiredRole } from '../../../common/auth/roles.decorator';
+import { OrgId } from '../../../common/auth/org-id.decorator';
 
 /**
  * Configuring an app: its steps, its reporting periods, and its settings.

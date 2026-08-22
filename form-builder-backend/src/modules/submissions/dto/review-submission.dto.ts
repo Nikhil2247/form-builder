@@ -1,7 +1,7 @@
 import { Transform } from 'class-transformer';
 import { IsIn, IsOptional, IsString, MaxLength } from 'class-validator';
 import { SubmissionStatus } from '@prisma/client';
-import { REVIEWABLE_STATUSES } from '../submission-review.policy';
+import { REVIEWABLE_STATUSES } from '../logic/submission-review.policy';
 
 /**
  * PATCH /organizations/:orgId/submissions/:id

@@ -8,8 +8,8 @@ import {
 } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 
-import { ChoiceListsService } from './choice-lists.service';
-import { PrismaService } from '../../common/infra/prisma/prisma.service';
+import { ChoiceListsService } from '../choice-lists.service';
+import { PrismaService } from '../../../common/infra/prisma/prisma.service';
 
 /**
  * Options for a question on a PUBLIC form.

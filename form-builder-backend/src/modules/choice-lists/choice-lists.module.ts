@@ -2,8 +2,8 @@ import { Module } from '@nestjs/common';
 
 import { ChoiceListsService } from './choice-lists.service';
 import { ChoiceListsController } from './choice-lists.controller';
-import { PlatformChoiceListsController } from './platform-choice-lists.controller';
-import { PublicChoiceItemsController } from './public-choice-items.controller';
+import { PlatformChoiceListsController } from './controllers/platform-choice-lists.controller';
+import { PublicChoiceItemsController } from './controllers/public-choice-items.controller';
 
 /**
  * Exported because two other modules depend on it and neither should reach

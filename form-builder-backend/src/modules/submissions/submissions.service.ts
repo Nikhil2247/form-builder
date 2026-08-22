@@ -15,7 +15,7 @@ import {
   SubmissionPayload,
 } from './queues/submission.producer';
 import { SubmitFormDto } from './dto/submit-form.dto';
-import { AnswerValidatorService } from './answer-validator.service';
+import { AnswerValidatorService } from './services/answer-validator.service';
 import { PrismaService } from '../../common/infra/prisma/prisma.service';
 import { RedisService } from '../../common/infra/redis/redis.service';
 import { AuditService } from '../audit/audit.service';
@@ -36,7 +36,7 @@ import {
   assertAllBulkIdsAuthorized,
   assertStatusTransition,
   normaliseBulkIds,
-} from './submission-review.policy';
+} from './logic/submission-review.policy';
 import { SubmissionStatus } from '@prisma/client';
 import {
   readPlan,
@@ -51,7 +51,7 @@ import { ChoiceListsService } from '../choice-lists/choice-lists.service';
 import type {
   ResolvedChoiceItem,
   ValidationIssue,
-} from './answer-validator.service';
+} from './services/answer-validator.service';
 import {
   hiddenByLegacyLogic,
   type LegacyLogicRule,

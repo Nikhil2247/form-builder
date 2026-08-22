@@ -14,7 +14,7 @@ import {
   selectRecipients,
   type NotificationType,
   type OrgMemberRef,
-} from './notification-recipients';
+} from './logic/notification-recipients';
 
 /**
  * Everything a notification read returns.

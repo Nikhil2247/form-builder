@@ -13,8 +13,8 @@ import {
 } from '@nestjs/common';
 import type { Request } from 'express';
 import { AdminService } from './admin.service';
-import { SystemService } from './system.service';
-import { AdminUsersService } from './admin-users.service';
+import { SystemService } from './services/system.service';
+import { AdminUsersService } from './services/admin-users.service';
 import { JwtAuthGuard } from '../../common/auth/jwt-auth.guard';
 import { SuperAdminGuard } from '../../common/auth/super-admin.guard';
 import { PaginationQueryDto } from '../../common/http/pagination/pagination-query.dto';

@@ -7,7 +7,7 @@ import {
   MinLength,
 } from 'class-validator';
 
-import { CSV_LIMITS } from '../csv';
+import { CSV_LIMITS } from '../logic/csv';
 
 /**
  * Body for the two CSV endpoints.

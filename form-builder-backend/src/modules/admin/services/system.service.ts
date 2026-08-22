@@ -1,10 +1,10 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
-import { PrismaService } from '../../common/infra/prisma/prisma.service';
-import { RedisService } from '../../common/infra/redis/redis.service';
-import { QUEUE_NAMES } from '../../config/bullmq.config';
-import { createStorageClient } from '../../config/storage.config';
+import { PrismaService } from '../../../common/infra/prisma/prisma.service';
+import { RedisService } from '../../../common/infra/redis/redis.service';
+import { QUEUE_NAMES } from '../../../config/bullmq.config';
+import { createStorageClient } from '../../../config/storage.config';
 
 /**
  * Platform health and infrastructure statistics.

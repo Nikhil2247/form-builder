@@ -8,7 +8,7 @@ import { MetricsService } from '../../../common/observability/metrics/metrics.se
 import { QUEUE_NAMES } from '../../../config/bullmq.config';
 import { assertSafeOutboundUrl } from '../../../common/infra/net/url-guard';
 import { NotificationsService } from '../../notifications/notifications.service';
-import { NOTIFICATION_TYPES } from '../../notifications/notification-recipients';
+import { NOTIFICATION_TYPES } from '../../notifications/logic/notification-recipients';
 
 export interface WebhookJobPayload {
   webhookId: string;

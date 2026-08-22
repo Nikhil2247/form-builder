@@ -56,7 +56,7 @@ import {
   runFormRules,
   type FormRule,
 } from '../src/common/rules';
-import { normalizeFormStructure, normalizeTheme } from '../src/modules/forms/form-structure';
+import { normalizeFormStructure, normalizeTheme } from '../src/modules/forms/logic/form-structure';
 
 const DATABASE_URL = process.env.DATABASE_URL;
 if (!DATABASE_URL) throw new Error('DATABASE_URL is not set. Copy .env.example to .env first.');

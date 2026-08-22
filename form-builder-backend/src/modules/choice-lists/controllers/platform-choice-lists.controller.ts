@@ -16,12 +16,12 @@ import type { Request, Response } from 'express';
 import {
   ChoiceListsService,
   type ChoiceItemInput,
-} from './choice-lists.service';
-import { applyMapping } from './csv';
-import { parseUpload, readMapping, sendCsv } from './choice-lists.controller';
-import { ImportCsvDto, PreviewCsvDto } from './dto/import-csv.dto';
-import { JwtAuthGuard } from '../../common/auth/jwt-auth.guard';
-import { SuperAdminGuard } from '../../common/auth/super-admin.guard';
+} from '../choice-lists.service';
+import { applyMapping } from '../logic/csv';
+import { parseUpload, readMapping, sendCsv } from '../choice-lists.controller';
+import { ImportCsvDto, PreviewCsvDto } from '../dto/import-csv.dto';
+import { JwtAuthGuard } from '../../../common/auth/jwt-auth.guard';
+import { SuperAdminGuard } from '../../../common/auth/super-admin.guard';
 
 /**
  * The PLATFORM dictionary — global choice lists, curated by a super admin.

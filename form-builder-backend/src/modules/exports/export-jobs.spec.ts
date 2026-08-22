@@ -9,7 +9,7 @@ import {
   freezeExportFilters,
   hasRowFilters,
   rowSourceSupportsFilters,
-} from './export-filters';
+} from './logic/export-filters';
 import {
   DEFAULT_RETENTION_DAYS,
   MAX_RETENTION_DAYS,
@@ -20,8 +20,8 @@ import {
   resolveDownloadTtlSeconds,
   resolveRetentionDays,
   retentionExpiryFrom,
-} from './export-policy';
-import { ExportProgressMeter } from './export-progress';
+} from './logic/export-policy';
+import { ExportProgressMeter } from './logic/export-progress';
 import { ExportsService } from './exports.service';
 
 /**

@@ -5,15 +5,15 @@ import { Readable } from 'node:stream';
 import type { ExportJob } from '@prisma/client';
 import { PrismaService } from '../../../common/infra/prisma/prisma.service';
 import { FormsService } from '../../forms/forms.service';
-import { ExportProgressMeter } from '../export-progress';
-import type { FrozenExportFilters } from '../export-filters';
+import { ExportProgressMeter } from '../logic/export-progress';
+import type { FrozenExportFilters } from '../logic/export-filters';
 import {
   exportContentType,
   exportObjectKey,
   retentionExpiryFrom,
   resolveRetentionDays,
-} from '../export-policy';
-import { deleteExportObject, uploadExportStream } from '../export-uploader';
+} from '../logic/export-policy';
+import { deleteExportObject, uploadExportStream } from '../logic/export-uploader';
 import { ExportSweeper } from './export-sweeper.service';
 import {
   EXPORTS_QUEUE,

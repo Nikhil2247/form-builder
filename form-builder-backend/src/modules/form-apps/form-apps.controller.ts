@@ -14,7 +14,7 @@ import {
 import type { Request } from 'express';
 
 import { FormAppsService, type FormAppConfig } from './form-apps.service';
-import { FormAppSessionsService } from './form-app-sessions.service';
+import { FormAppSessionsService } from './services/form-app-sessions.service';
 import { JwtAuthGuard } from '../../common/auth/jwt-auth.guard';
 import { OrgMemberGuard } from '../../common/auth/org-member.guard';
 import { RoleGuard } from '../../common/auth/role.guard';

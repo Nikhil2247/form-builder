@@ -21,7 +21,7 @@ import { CryptoService } from '../../common/infra/crypto/crypto.service';
 import {
   decideRefreshAction,
   interpretRotationClaim,
-} from './refresh-token-family';
+} from './logic/refresh-token-family';
 import * as qrcode from 'qrcode';
 
 /**

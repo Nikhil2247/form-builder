@@ -10,7 +10,7 @@ import {
   MaxLength,
   ValidateNested,
 } from 'class-validator';
-import { EXPORTABLE_SUBMISSION_STATUSES } from '../export-filters';
+import { EXPORTABLE_SUBMISSION_STATUSES } from '../logic/export-filters';
 
 /**
  * Row-narrowing filters. Validated here for *shape*; normalised, range-checked
