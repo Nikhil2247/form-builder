@@ -3,8 +3,8 @@ import { Test, type TestingModule } from '@nestjs/testing';
 import request from 'supertest';
 import type { App } from 'supertest/types';
 
-import { AppModule } from './../src/app.module';
-import { PrismaService } from './../src/common/prisma/prisma.service';
+import { AppModule } from '../src/app.module';
+import { PrismaService } from '../src/common/infra/prisma/prisma.service';
 
 /**
  * The form-app session lifecycle, over HTTP.
