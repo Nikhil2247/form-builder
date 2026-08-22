@@ -1,5 +1,5 @@
 import { FaqCacheService } from './faq-cache.service';
-import type { RedisService } from '../../common/infra/redis/redis.service';
+import type { RedisService } from '../../../common/infra/redis/redis.service';
 
 /**
  * No live Redis in this environment (see other Phase notes) — this is a real

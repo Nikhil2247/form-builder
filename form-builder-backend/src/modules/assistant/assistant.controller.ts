@@ -17,9 +17,9 @@ import { RequiredRole } from '../../common/auth/roles.decorator';
 import { OrgId } from '../../common/auth/org-id.decorator';
 import { PaginationQueryDto } from '../../common/http/pagination/pagination-query.dto';
 import { parsePagination } from '../../common/http/pagination/pagination';
-import { AssistantChatService } from './assistant-chat.service';
-import { SessionService } from './session.service';
-import { UsageService } from './usage.service';
+import { AssistantChatService } from './chat/assistant-chat.service';
+import { SessionService } from './chat/session.service';
+import { UsageService } from './quota/usage.service';
 import { AskAssistantDto } from './dto/ask-assistant.dto';
 import type { OrgRole } from './tools/org-tools';
 

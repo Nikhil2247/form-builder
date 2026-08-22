@@ -14,9 +14,9 @@ import { JwtAuthGuard } from '../../common/auth/jwt-auth.guard';
 import { SuperAdminGuard } from '../../common/auth/super-admin.guard';
 import { PaginationQueryDto } from '../../common/http/pagination/pagination-query.dto';
 import { parsePagination } from '../../common/http/pagination/pagination';
-import { PlatformInsightsService } from './platform-insights.service';
-import { SessionService } from './session.service';
-import { UsageService } from './usage.service';
+import { PlatformInsightsService } from './insights/platform-insights.service';
+import { SessionService } from './chat/session.service';
+import { UsageService } from './quota/usage.service';
 import { AskAssistantDto } from './dto/ask-assistant.dto';
 
 /**

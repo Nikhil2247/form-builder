@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { createHash } from 'crypto';
-import { RedisService } from '../../common/infra/redis/redis.service';
-import { ORG_SYSTEM_PROMPT } from './system-prompts';
+import { RedisService } from '../../../common/infra/redis/redis.service';
+import { ORG_SYSTEM_PROMPT } from '../prompts/system-prompts';
 
 const TTL_SECONDS = 60 * 60 * 24 * 7; // 7 days
 /** Changes whenever the inlined help corpus (or anything else in the system prompt) changes, so every cached entry invalidates itself without a manual version bump. */

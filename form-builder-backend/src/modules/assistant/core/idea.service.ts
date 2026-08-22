@@ -5,16 +5,16 @@ import {
 } from '@nestjs/common';
 // Must be zod's v4 API (see claude-client.service.ts) for zodOutputFormat().
 import { z } from 'zod/v4';
-import { PrismaService } from '../../common/infra/prisma/prisma.service';
-import { AuditService } from '../audit/audit.service';
+import { PrismaService } from '../../../common/infra/prisma/prisma.service';
+import { AuditService } from '../../audit/audit.service';
 import {
   ClaudeClientService,
   MODEL_SONNET,
   type UsageInfo,
 } from './claude-client.service';
-import { publicSlug } from '../forms/forms.service';
-import { SubjectsService } from '../subjects/subjects.service';
-import { FormAppsService } from '../form-apps/form-apps.service';
+import { publicSlug } from '../../forms/forms.service';
+import { SubjectsService } from '../../subjects/subjects.service';
+import { FormAppsService } from '../../form-apps/form-apps.service';
 
 /**
  * Same subset of QuestionType the previous Gemini prompt generated from —

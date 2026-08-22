@@ -13,7 +13,7 @@ import {
   Logger,
 } from '@nestjs/common';
 import { FormsService } from './forms.service';
-import { IdeaService } from '../assistant/idea.service';
+import { IdeaService } from '../assistant/core/idea.service';
 import { CreateFormDto } from './dto/create-form.dto';
 import { UpdateFormDto } from './dto/update-form.dto';
 import { ApiKeyOrJwtGuard } from '../../common/auth/api-key-or-jwt.guard';

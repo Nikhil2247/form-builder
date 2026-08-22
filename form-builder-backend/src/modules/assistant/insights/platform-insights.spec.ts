@@ -14,13 +14,13 @@ import { join } from 'path';
  * the same reasoning tenant-isolation.spec.ts uses for its file-scan checks.
  */
 describe('platform insights — cross-org tool isolation', () => {
-  const ASSISTANT_DIR = __dirname;
+  const ASSISTANT_DIR = join(__dirname, '..');
 
   const ORG_SCOPED_SERVICES = [
-    'idea.service.ts',
-    'assistant-chat.service.ts',
-    'org-chat.ts',
-    'agent-loop.service.ts',
+    'core/idea.service.ts',
+    'chat/assistant-chat.service.ts',
+    'chat/org-chat.ts',
+    'core/agent-loop.service.ts',
   ];
 
   function read(file: string): string {
@@ -44,7 +44,7 @@ describe('platform insights — cross-org tool isolation', () => {
   });
 
   it('the cross-org query tool is wired only into platform-insights.service.ts', () => {
-    const source = read('platform-insights.service.ts');
+    const source = read('insights/platform-insights.service.ts');
     expect(source).toContain('CROSS_ORG_QUERY_TOOL');
     expect(source).toMatch(/cross-org-query\.tool/);
   });

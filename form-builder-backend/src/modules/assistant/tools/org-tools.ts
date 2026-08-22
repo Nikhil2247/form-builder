@@ -1,7 +1,7 @@
 import type Anthropic from '@anthropic-ai/sdk';
 import type { PrismaService } from '../../../common/infra/prisma/prisma.service';
-import type { ClaudeClientService } from '../claude-client.service';
-import type { IdeaService } from '../idea.service';
+import type { ClaudeClientService } from '../core/claude-client.service';
+import type { IdeaService } from '../core/idea.service';
 import type { AnalyticsService } from '../../analytics/analytics.service';
 import { EXPLAIN_RULE_TOOL, explainRule } from './explain-rule.tool';
 import { PROPOSE_RULE_TOOL, proposeRule } from './propose-rule.tool';

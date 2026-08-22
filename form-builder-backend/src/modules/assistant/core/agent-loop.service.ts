@@ -1,12 +1,12 @@
 import { Injectable, Logger } from '@nestjs/common';
 import type Anthropic from '@anthropic-ai/sdk';
 import { AssistantMode, AssistantMessageRole } from '@prisma/client';
-import { AuditService } from '../audit/audit.service';
+import { AuditService } from '../../audit/audit.service';
 import {
   ASK_CLARIFYING_QUESTION_TOOL,
   parseClarifyingQuestion,
   type ClarifyingQuestion,
-} from './tools/ask-clarifying-question.tool';
+} from '../tools/ask-clarifying-question.tool';
 import {
   ClaudeClientService,
   MODEL_HAIKU,
@@ -14,7 +14,7 @@ import {
   type ClaudeModel,
   type UsageInfo,
 } from './claude-client.service';
-import { SessionService } from './session.service';
+import { SessionService } from '../chat/session.service';
 import { FaqCacheService } from './faq-cache.service';
 
 const MAX_TOOL_ITERATIONS = 4;

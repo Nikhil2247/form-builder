@@ -1,6 +1,6 @@
 import { readFileSync, readdirSync } from 'fs';
 import { join } from 'path';
-import { ORG_TOOLS } from './tools/org-tools';
+import { ORG_TOOLS } from '../tools/org-tools';
 import { ORG_SYSTEM_PROMPT } from './system-prompts';
 
 /**
@@ -12,7 +12,7 @@ import { ORG_SYSTEM_PROMPT } from './system-prompts';
  * caching silently goes back to never activating, with no error raised.
  */
 describe('assistant prefix caching invariants', () => {
-  const ASSISTANT_DIR = __dirname;
+  const ASSISTANT_DIR = join(__dirname, '..');
 
   function read(file: string): string {
     return readFileSync(join(ASSISTANT_DIR, file), 'utf8');
@@ -53,7 +53,7 @@ describe('assistant prefix caching invariants', () => {
   });
 
   it('org-chat.ts (the single place that builds the request) passes ORG_SYSTEM_PROMPT and ORG_TOOLS verbatim — no per-call fork', () => {
-    const source = read('org-chat.ts');
+    const source = read('chat/org-chat.ts');
     expect(source).toMatch(/system:\s*ORG_SYSTEM_PROMPT\b/);
     expect(source).toMatch(/tools:\s*ORG_TOOLS\b/);
     // Guards against a future per-user/per-org filter creeping in, e.g.
@@ -61,7 +61,7 @@ describe('assistant prefix caching invariants', () => {
     expect(source).not.toMatch(/ORG_TOOLS\s*\.\s*(filter|map|slice)/);
   });
 
-  const ORG_SCOPED_SERVICES = ['assistant-chat.service.ts'];
+  const ORG_SCOPED_SERVICES = ['chat/assistant-chat.service.ts'];
 
   it.each(ORG_SCOPED_SERVICES)(
     '%s delegates to the shared runOrgChat rather than building its own request',
@@ -78,7 +78,7 @@ describe('assistant prefix caching invariants', () => {
   });
 
   it('the platform-wide FAQ cache is only ever written for a turn that called no tool — §6 decision 4', () => {
-    const source = read('agent-loop.service.ts');
+    const source = read('core/agent-loop.service.ts');
     const setCallIndex = source.indexOf('this.faqCache.set(');
     const guardIndex = source.indexOf('toolCallLog.length === 0');
     expect(setCallIndex).toBeGreaterThan(-1);
@@ -87,7 +87,7 @@ describe('assistant prefix caching invariants', () => {
   });
 
   it('the FAQ cache key formula folds in the mode hint, so Help and Insights never share a cached answer', () => {
-    const source = read('faq-cache.service.ts');
+    const source = read('core/faq-cache.service.ts');
     expect(source).toMatch(/modeHint/);
   });
 });

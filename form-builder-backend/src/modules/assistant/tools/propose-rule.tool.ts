@@ -9,7 +9,7 @@ import {
   type RuleKind,
   type AdapterQuestion,
 } from '../../../common/rules';
-import { ClaudeClientService, MODEL_SONNET } from '../claude-client.service';
+import { ClaudeClientService, MODEL_SONNET } from '../core/claude-client.service';
 import { describeRule } from './explain-rule.tool';
 
 export const PROPOSE_RULE_TOOL: Anthropic.Tool = {

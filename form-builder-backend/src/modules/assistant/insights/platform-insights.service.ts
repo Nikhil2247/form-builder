@@ -1,14 +1,14 @@
 import { Injectable, Logger } from '@nestjs/common';
 import type Anthropic from '@anthropic-ai/sdk';
 import { AssistantMode } from '@prisma/client';
-import { PrismaService } from '../../common/infra/prisma/prisma.service';
-import { AdminService } from '../admin/admin.service';
-import { AgentLoopService } from './agent-loop.service';
-import { QuotaService } from './quota.service';
+import { PrismaService } from '../../../common/infra/prisma/prisma.service';
+import { AdminService } from '../../admin/admin.service';
+import { AgentLoopService } from '../core/agent-loop.service';
+import { QuotaService } from '../quota/quota.service';
 import {
   CROSS_ORG_QUERY_TOOL,
   crossOrgQuery,
-} from './tools/cross-org-query.tool';
+} from '../tools/cross-org-query.tool';
 
 const SYSTEM_PROMPT = `You are the platform insights assistant for Vibha's form-builder platform, used only by platform superadmins. You answer cross-organization questions — comparing PMUs, adoption trends, quota utilization, org health — using aggregated numbers only, across the tenant boundary that every other part of this platform enforces.
 

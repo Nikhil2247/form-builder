@@ -1,7 +1,7 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma, AssistantMode, AssistantMessageRole } from '@prisma/client';
-import { PrismaService } from '../../common/infra/prisma/prisma.service';
-import { paginated, type Pagination } from '../../common/http/pagination/pagination';
+import { PrismaService } from '../../../common/infra/prisma/prisma.service';
+import { paginated, type Pagination } from '../../../common/http/pagination/pagination';
 
 export interface AppendMessageMeta {
   modelUsed?: string;

@@ -1,18 +1,18 @@
 import { Logger } from '@nestjs/common';
 import { AssistantMode } from '@prisma/client';
-import { PrismaService } from '../../common/infra/prisma/prisma.service';
-import { AnalyticsService } from '../analytics/analytics.service';
-import { ClaudeClientService } from './claude-client.service';
-import { IdeaService } from './idea.service';
-import type { FormPlanOutline, FormAppPlanOutline } from './idea.service';
-import { AgentLoopService, type AgentLoopResult } from './agent-loop.service';
-import { FaqCacheService } from './faq-cache.service';
-import { ORG_TOOLS, runOrgTool, type OrgRole } from './tools/org-tools';
-import { GET_FORM_ANALYTICS_TOOL } from './tools/get-form-analytics.tool';
-import { PLAN_FORM_TOOL, PLAN_FORM_APP_TOOL } from './tools/plan-form.tool';
-import { CREATE_FROM_PLAN_TOOL } from './tools/create-from-plan.tool';
-import type { GeneratedFormAppResult } from './idea.service';
-import { ORG_SYSTEM_PROMPT } from './system-prompts';
+import { PrismaService } from '../../../common/infra/prisma/prisma.service';
+import { AnalyticsService } from '../../analytics/analytics.service';
+import { ClaudeClientService } from '../core/claude-client.service';
+import { IdeaService } from '../core/idea.service';
+import type { FormPlanOutline, FormAppPlanOutline } from '../core/idea.service';
+import { AgentLoopService, type AgentLoopResult } from '../core/agent-loop.service';
+import { FaqCacheService } from '../core/faq-cache.service';
+import { ORG_TOOLS, runOrgTool, type OrgRole } from '../tools/org-tools';
+import { GET_FORM_ANALYTICS_TOOL } from '../tools/get-form-analytics.tool';
+import { PLAN_FORM_TOOL, PLAN_FORM_APP_TOOL } from '../tools/plan-form.tool';
+import { CREATE_FROM_PLAN_TOOL } from '../tools/create-from-plan.tool';
+import type { GeneratedFormAppResult } from '../core/idea.service';
+import { ORG_SYSTEM_PROMPT } from '../prompts/system-prompts';
 
 export interface TimeseriesPoint {
   date: string;

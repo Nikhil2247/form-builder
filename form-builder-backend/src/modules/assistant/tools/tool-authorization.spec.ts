@@ -1,12 +1,12 @@
 import { readFileSync } from 'fs';
 import { join } from 'path';
-import { ORG_TOOLS, TOOL_MIN_ROLE } from './tools/org-tools';
-import { ASK_CLARIFYING_QUESTION_TOOL } from './tools/ask-clarifying-question.tool';
-import { PLAN_FORM_TOOL, PLAN_FORM_APP_TOOL } from './tools/plan-form.tool';
-import { CREATE_FROM_PLAN_TOOL } from './tools/create-from-plan.tool';
-import { PROPOSE_RULE_TOOL } from './tools/propose-rule.tool';
-import { REVIEW_FORM_TOOL } from './tools/review-form.tool';
-import { SUGGEST_TEMPLATES_TOOL } from './tools/suggest-templates.tool';
+import { ORG_TOOLS, TOOL_MIN_ROLE } from './org-tools';
+import { ASK_CLARIFYING_QUESTION_TOOL } from './ask-clarifying-question.tool';
+import { PLAN_FORM_TOOL, PLAN_FORM_APP_TOOL } from './plan-form.tool';
+import { CREATE_FROM_PLAN_TOOL } from './create-from-plan.tool';
+import { PROPOSE_RULE_TOOL } from './propose-rule.tool';
+import { REVIEW_FORM_TOOL } from './review-form.tool';
+import { SUGGEST_TEMPLATES_TOOL } from './suggest-templates.tool';
 
 /**
  * Guards the security-model change from AI_ASSISTANT_IMPROVEMENT_PLAN.md
@@ -18,7 +18,7 @@ import { SUGGEST_TEMPLATES_TOOL } from './tools/suggest-templates.tool';
  * catches it — there is no other backstop.
  */
 describe('assistant tool authorization', () => {
-  const ASSISTANT_DIR = __dirname;
+  const ASSISTANT_DIR = join(__dirname, '..');
 
   function read(file: string): string {
     return readFileSync(join(ASSISTANT_DIR, file), 'utf8');

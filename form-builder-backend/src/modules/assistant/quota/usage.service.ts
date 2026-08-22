@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { AssistantMessageRole } from '@prisma/client';
-import { PrismaService } from '../../common/infra/prisma/prisma.service';
+import { PrismaService } from '../../../common/infra/prisma/prisma.service';
 
 const PLATFORM_BUCKET_KEY = '__platform__';
 const DEFAULT_WINDOW_DAYS = 30;

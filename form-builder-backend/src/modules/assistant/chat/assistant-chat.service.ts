@@ -1,14 +1,14 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { AssistantMode } from '@prisma/client';
-import { PrismaService } from '../../common/infra/prisma/prisma.service';
-import { AnalyticsService } from '../analytics/analytics.service';
-import { ClaudeClientService } from './claude-client.service';
-import { IdeaService } from './idea.service';
-import { AgentLoopService } from './agent-loop.service';
-import { QuotaService } from './quota.service';
-import { FaqCacheService } from './faq-cache.service';
+import { PrismaService } from '../../../common/infra/prisma/prisma.service';
+import { AnalyticsService } from '../../analytics/analytics.service';
+import { ClaudeClientService } from '../core/claude-client.service';
+import { IdeaService } from '../core/idea.service';
+import { AgentLoopService } from '../core/agent-loop.service';
+import { QuotaService } from '../quota/quota.service';
+import { FaqCacheService } from '../core/faq-cache.service';
 import { runOrgChat, type OrgChatResult } from './org-chat';
-import type { OrgRole } from './tools/org-tools';
+import type { OrgRole } from '../tools/org-tools';
 
 export interface AskAssistantParams {
   orgId: string;

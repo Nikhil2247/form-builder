@@ -1,6 +1,6 @@
 import { Injectable, ForbiddenException } from '@nestjs/common';
-import { RedisService } from '../../common/infra/redis/redis.service';
-import { PrismaService } from '../../common/infra/prisma/prisma.service';
+import { RedisService } from '../../../common/infra/redis/redis.service';
+import { PrismaService } from '../../../common/infra/prisma/prisma.service';
 
 function monthKey(): string {
   return new Date().toISOString().slice(0, 7);
